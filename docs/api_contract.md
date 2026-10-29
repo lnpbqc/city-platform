@@ -48,10 +48,10 @@
 ### 错误
 
 ```json
-{"code":"ASSET_IN_USE","message":"资产被场景或运行引用","detail":{"references":[],"reference_count":0},"trace_id":"示例诊断ID"}
+{"code":"ASSET_IN_USE","message":"资产被场景引用","detail":{"references":[{"type":"scene","id":"scene-example","name":"示例场景","version":1,"asset_version":"1.0.0"}],"reference_count":1},"trace_id":"示例诊断ID"}
 ```
 
-上例展示结构，实际引用列表与数量随资源返回。`detail` 保留字符串、数组或对象的原有形状。
+`detail` 保留字符串、数组或对象的原有形状。
 
 | HTTP | 常见 code | 处理依据 |
 | --- | --- | --- |
@@ -73,7 +73,7 @@
 
 上传字段与限制以实时 Schema 和[数据与模型说明](数据与模型说明.md)为准。`POST /api/assets/register` 的 `location` 接受 HTTP(S) 或已有 `/data-files/` 入口；原始磁盘路径不开放。外部资源只记录元信息，`ready` 表示登记可用，实际渲染取决于浏览器和远端服务。
 
-资产列表支持 `type/status/q/from/to/sort`；关键词按字面匹配 ID、名称、原文件名及来源，日期须带时区并包含端点。`sort=byte_size|-byte_size` 按体积排序，未知外部体积置末。分页列表和统计读取目录快照，详情检查实际文件；显式对账刷新磁盘变化。旧数组模式保留逐项文件检查。
+资产列表支持 `type/status/q/from/to/sort`；关键词按字面匹配 ID、名称、原文件名及来源，日期须带时区并包含端点。`sort=byte_size|-byte_size` 按体积排序，未知外部体积置末。分页列表和统计读取目录快照，详情检查实际文件；显式对账刷新磁盘变化。旧数组模式在未提供筛选或排序时逐项检查文件。
 
 | 来源 | 状态与删除行为 |
 | --- | --- |
@@ -101,7 +101,7 @@ GeoJSON 对象 ID 由资产 ID、版本和原始 Feature 序号生成 UUID5；�
 {"geometry":{"type":"Polygon","coordinates":[[[113,23],[114,23],[114,24],[113,23]]]},"asset_id":"实际资产ID","page":1,"page_size":20}
 ```
 
-同时给 bbox 时取交集。多边形包含空洞与边界计算，未闭合、自交或坐标非法返回 422。裁剪后的代表点用于定位；详情返回完整原始几何。统计在同一范围内计算对象数、WGS84 椭球面积及已有高度范围，列表与统计使用一致读快照；裁剪到线或点的原面面积为 0。
+同时给 bbox 时取交集。多边形包含空洞与边界计算，未闭合、自交或坐标非法返回 422。裁剪后的代表点用于定位；详情返回完整原始几何。统计计算对象数、WGS84 椭球面积及已有高度范围；列表与统计使用相同筛选和裁剪规则，各次请求分别使用一致读快照。裁剪到线或点的原面面积为 0。
 
 普通 3D Tiles 返回一个 `type=model, semantic_source=geometry_model` 的模型资源对象，`feature_index/geometry` 为空。缺少可查询几何的资源不参与范围筛选；外部对象索引不可用返回 409 `OBJECT_INDEX_UNAVAILABLE`，本地资产异常返回 `ASSET_UNAVAILABLE`。
 
