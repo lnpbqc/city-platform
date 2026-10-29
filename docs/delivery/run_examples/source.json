@@ -1,9 +1,0 @@
-{
-  "captured_at": "2026-10-27T06:14:21.374346+00:00",
-  "api_base_url": "http://127.0.0.1:18001",
-  "storage": "temporary isolated SQLite migrated to final head; deleted after export",
-  "synthetic": true,
-  "network": "net-001@1.0.0",
-  "model_version": "dijkstra-undirected-v1",
-  "source_database": "data_manifest.json separately records existing read-only catalog; samples never mutate source data"
-}
