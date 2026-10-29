@@ -1,0 +1,19 @@
+.pnpm-store/
+.uv-cache/
+.uv-python/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local configuration, generated outputs and source models.
+/.agents/
+/.codex/
+/.aws/
+/*.max
+/*.fbx
+/*.rar
+/*.exe
+/*.zip
+/.verification/
+/.playwright-cli/
+/待办/

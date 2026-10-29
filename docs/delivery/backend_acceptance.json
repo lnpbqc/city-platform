@@ -1,0 +1,252 @@
+{
+  "measured_at": "2026-10-27T06:14:21.374346+00:00",
+  "python": "3.13.7",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "base_url": "http://127.0.0.1:18001",
+  "source_database": {
+    "database": "map_back/storage/catalog.db",
+    "access": "SQLite mode=ro; no migrations or API startup",
+    "revision": "0007_object_index",
+    "sha256": "e76b99bb264270920b66c5563766522aae176b36c4c7a08c2024c95c74237eaf"
+  },
+  "api": {
+    "service": {
+      "service_version": "0.2.0",
+      "model_version": "dijkstra-undirected-v1",
+      "data_version": "net-001@1.0.0",
+      "api_version": "1.0"
+    },
+    "openapi_paths": 38,
+    "openapi_version": "3.1.0"
+  },
+  "concurrent_runs": [
+    {
+      "case": "normal",
+      "run_id": "2a88d1a0-0083-4d6e-b3f4-832a7b75f361",
+      "inputs_sha256": "5cbdfe82c91cca8bab1a1c4a60530a13ef8c3014068e569b19f7ea3de21f87a7",
+      "trace_id": "4e96f66ec5334f44a8a7bed3cacd49d2",
+      "blocked_length_m": 660.0,
+      "status": "succeeded"
+    },
+    {
+      "case": "rerouted",
+      "run_id": "90fab631-c5c7-42c0-9246-098a9150f30c",
+      "inputs_sha256": "2fb945fc5a26d093a88caf3161151c20e46e16cf6729f43796f8bd0a6e183636",
+      "trace_id": "29e5aabbd1e64e3098936bbe6ab0ebad",
+      "blocked_length_m": 960.0,
+      "status": "succeeded"
+    },
+    {
+      "case": "unreachable",
+      "run_id": "80b890a5-cc01-495c-ba0a-86114884283b",
+      "inputs_sha256": "c50d7914871c862ea23f5fcffd59b62e838c7319565d41da448911506d57eb9e",
+      "trace_id": "01827851ecf547bbb4afb00bbe315df8",
+      "blocked_length_m": null,
+      "status": "succeeded"
+    },
+    {
+      "case": "same_node",
+      "run_id": "de3c8513-1a54-42ff-979a-084ab8d068dc",
+      "inputs_sha256": "9b98921ae8468dc6ee752164365ddd45294af9a4d6ef7e71888f3f416f11efec",
+      "trace_id": "07716b6a2230448a80635af33fd7e1f9",
+      "blocked_length_m": 0.0,
+      "status": "succeeded"
+    },
+    {
+      "case": "other_origin",
+      "run_id": "52a9af38-2910-4d3b-b281-afadc541c50a",
+      "inputs_sha256": "772018703d690535d24b486d34ba27e7c54acc7dd9a676a408c7d016d175c8ca",
+      "trace_id": "e84b3dec3aeb49d1a8a0a3a9cf372c38",
+      "blocked_length_m": 460.0,
+      "status": "succeeded"
+    }
+  ],
+  "objects": {
+    "transport": "TCP loopback HTTP/1.1; persistent httpx.Client",
+    "objects": 10000,
+    "geometry_types": [
+      "Point",
+      "LineString",
+      "Polygon"
+    ],
+    "upload_bytes": 1625231,
+    "ingestion_ms": 1329.14,
+    "measurements": [
+      {
+        "case": "regional",
+        "bbox": "113.02,23.02,113.029,23.029",
+        "requests": 100,
+        "total": 100,
+        "page_size": 100,
+        "clipped_geometries_in_first_page": 13,
+        "median_ms": 10.23,
+        "p95_ms": 11.64,
+        "threshold_ms": 200,
+        "passed": true
+      },
+      {
+        "case": "whole_dataset",
+        "bbox": "-180,-90,180,90",
+        "requests": 100,
+        "total": 10000,
+        "page_size": 100,
+        "clipped_geometries_in_first_page": 0,
+        "median_ms": 31.62,
+        "p95_ms": 44.68,
+        "threshold_ms": 200,
+        "passed": true
+      }
+    ]
+  },
+  "path_safety": [
+    {
+      "surface": "zip_member",
+      "path_kind": "../outside-canary.txt",
+      "status": 422,
+      "outside_unchanged": true
+    },
+    {
+      "surface": "zip_member",
+      "path_kind": "..\\outside-canary.txt",
+      "status": 422,
+      "outside_unchanged": true
+    },
+    {
+      "surface": "zip_member",
+      "path_kind": "/outside-canary.txt",
+      "status": 422,
+      "outside_unchanged": true
+    },
+    {
+      "surface": "zip_member",
+      "path_kind": "D:/city/.verification/step24-backend-54825m_h/outside-canary.txt",
+      "status": 422,
+      "outside_unchanged": true
+    },
+    {
+      "surface": "zip_member",
+      "path_kind": "..%2foutside-canary.txt",
+      "status": 201,
+      "outside_unchanged": true
+    },
+    {
+      "surface": "multipart_filename",
+      "path_kind": "..%2foutside.geojson",
+      "status": 201,
+      "generated_asset_directory": true
+    },
+    {
+      "surface": "multipart_filename",
+      "path_kind": "..\\outside.geojson",
+      "status": 201,
+      "generated_asset_directory": true
+    },
+    {
+      "surface": "multipart_filename",
+      "path_kind": "D:/outside.geojson",
+      "status": 201,
+      "generated_asset_directory": true
+    },
+    {
+      "surface": "download",
+      "path_kind": "/data-files/4ed7ffa8-c66c-489e-a153-fab73eae3c3f/..%2f..%2foutside-canary.txt",
+      "status": 404,
+      "outside_not_served": true
+    },
+    {
+      "surface": "download",
+      "path_kind": "/data-files/4ed7ffa8-c66c-489e-a153-fab73eae3c3f/..%5c..%5coutside-canary.txt",
+      "status": 404,
+      "outside_not_served": true
+    },
+    {
+      "surface": "download",
+      "path_kind": "/data-files/4ed7ffa8-c66c-489e-a153-fab73eae3c3f/%2foutside-canary.txt",
+      "status": 404,
+      "outside_not_served": true
+    },
+    {
+      "surface": "download",
+      "path_kind": "/data-files/4ed7ffa8-c66c-489e-a153-fab73eae3c3f/D:%5coutside-canary.txt",
+      "status": 404,
+      "outside_not_served": true
+    },
+    {
+      "surface": "download",
+      "path_kind": "/api/assets/..%2f..%2foutside-canary.txt/download",
+      "status": 404,
+      "outside_not_served": true
+    },
+    {
+      "surface": "download",
+      "path_kind": "/api/assets/..%5c..%5coutside-canary.txt/download",
+      "status": 404,
+      "outside_not_served": true
+    }
+  ],
+  "restart": {
+    "fault": "actual service process kill while one job running and another queued",
+    "slow_model": "temporary acceptance-only wrapper delays computation; production source unchanged",
+    "killed_service_pid": 55252,
+    "child_pid": 56168,
+    "child_exited": true,
+    "running_after_restart": {
+      "run_id": "6460b8f7-69d7-4263-88a0-a4430c861793",
+      "status": "failed",
+      "inputs_sha256": "ea0dd7b0e3baaca48d7d3f240049723da4489f6e9117489ff1ea8bdab01d45c0",
+      "model_version": "dijkstra-undirected-v1",
+      "data_version": "net-001@1.0.0",
+      "scene_id": "7d16f1cb-fce8-4da5-9beb-41c3595ea3d5",
+      "scene_version": 1,
+      "submitted_at": "2026-10-27T06:14:35.358412Z",
+      "started_at": "2026-10-27T06:14:35.367003Z",
+      "finished_at": "2026-10-27T06:14:36.558223Z",
+      "elapsed_ms": 1191.22,
+      "error": {
+        "code": "RUN_INTERRUPTED",
+        "message": "服务重启，原运行已中断",
+        "detail": null,
+        "trace_id": "8efb98c513d0415b93102638b0f9b0da"
+      },
+      "trace_id": "8efb98c513d0415b93102638b0f9b0da"
+    },
+    "queued_after_restart": {
+      "run_id": "87d8df2b-864e-46d4-9f38-42cd5aa414b1",
+      "status": "succeeded",
+      "inputs_sha256": "9db705bc1d63f6c40d2b2fb5f850c88e9e962830f4c8844c137ef0d58b40f626",
+      "model_version": "dijkstra-undirected-v1",
+      "data_version": "net-001@1.0.0",
+      "scene_id": "7d16f1cb-fce8-4da5-9beb-41c3595ea3d5",
+      "scene_version": 1,
+      "submitted_at": "2026-10-27T06:14:35.476745Z",
+      "started_at": "2026-10-27T06:14:36.575233Z",
+      "finished_at": "2026-10-27T06:14:37.231332Z",
+      "elapsed_ms": 656.0989999999999,
+      "error": null,
+      "trace_id": "ac04d946a1584e8a8c3bd2d5fb0483e5"
+    },
+    "queued_blocked_length_m": 960
+  },
+  "isolated_storage_removed": true,
+  "source_preservation": {
+    "database_sha256_unchanged": true,
+    "schema_unchanged": true,
+    "published_files": 4,
+    "sample_files": 22,
+    "all_file_sha256_unchanged": true
+  },
+  "secret_scan": {
+    "scope": "Git-tracked UTF-8 source/config/docs; excludes dependencies, binaries and converter distribution",
+    "files_scanned": 254,
+    "patterns": [
+      "private_key",
+      "aws_access_key",
+      "github_token",
+      "openai_key",
+      "credential_literal"
+    ],
+    "findings": [],
+    "output_contains_secret_values": false
+  },
+  "source_commit": "62295c35156c33fb42ca018c7bd96257ad027d00"
+}

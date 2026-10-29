@@ -1,0 +1,7 @@
+© OpenStreetMap contributors
+ODbL 1.0: https://opendatacommons.org/licenses/odbl/1-0/
+Attribution: https://www.openstreetmap.org/copyright
+Campus boundary: https://www.openstreetmap.org/way/1191052293
+Retrieved 2026-10-22. Derived building footprint database; WGS84.
+Heights: OSM height where valid; otherwise levels * 3 m; otherwise illustrative 9 m.
+This is not a surveyed or complete campus model. No facade textures.

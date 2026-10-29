@@ -1,0 +1,22 @@
+{
+  "campus": "huangpu",
+  "boundary_rings": 1,
+  "buildings": 28,
+  "named": 11,
+  "height": 0,
+  "levels": 6,
+  "incomplete_geometry": [],
+  "names": [
+    "博信楼",
+    "博算楼",
+    "博智楼",
+    "博创楼",
+    "荔苑",
+    "桃苑",
+    "牌坊",
+    "综合楼",
+    "桂苑",
+    "体育馆",
+    "博学楼"
+  ]
+}

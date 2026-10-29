@@ -1,0 +1,64 @@
+{
+  "status": "completed",
+  "pid": 21964,
+  "process_image": "D:\\Python\\Python313\\python.exe",
+  "base_url": "http://127.0.0.1:18000",
+  "started_at": "2026-10-27T06:05:55.078159+00:00",
+  "duration_target_s": 3600,
+  "sample_interval_s": 600,
+  "samples": [
+    {
+      "utc": "2026-10-27T06:05:55.245724+00:00",
+      "elapsed_s": 0.167,
+      "rss_bytes": 22269952,
+      "private_bytes": 464211968,
+      "peak_rss_bytes": 115269632
+    },
+    {
+      "utc": "2026-10-27T06:15:55.032731+00:00",
+      "elapsed_s": 600.001,
+      "rss_bytes": 80322560,
+      "private_bytes": 459149312,
+      "peak_rss_bytes": 115269632
+    },
+    {
+      "utc": "2026-10-27T06:25:54.985649+00:00",
+      "elapsed_s": 1200.0,
+      "rss_bytes": 77918208,
+      "private_bytes": 456310784,
+      "peak_rss_bytes": 115269632
+    },
+    {
+      "utc": "2026-10-27T06:35:54.942800+00:00",
+      "elapsed_s": 1800.0,
+      "rss_bytes": 39620608,
+      "private_bytes": 456310784,
+      "peak_rss_bytes": 115269632
+    },
+    {
+      "utc": "2026-10-27T06:45:54.937390+00:00",
+      "elapsed_s": 2400.0,
+      "rss_bytes": 29179904,
+      "private_bytes": 456310784,
+      "peak_rss_bytes": 115269632
+    },
+    {
+      "utc": "2026-10-27T06:55:54.931500+00:00",
+      "elapsed_s": 3000.0,
+      "rss_bytes": 29478912,
+      "private_bytes": 456310784,
+      "peak_rss_bytes": 115269632
+    },
+    {
+      "utc": "2026-10-27T07:05:54.926492+00:00",
+      "elapsed_s": 3600.001,
+      "rss_bytes": 29454336,
+      "private_bytes": 456310784,
+      "peak_rss_bytes": 115269632
+    }
+  ],
+  "requests": 1800,
+  "errors": [],
+  "elapsed_s": 3600.002,
+  "finished_at": "2026-10-27T07:05:54.927957+00:00"
+}

@@ -1,0 +1,24 @@
+{
+  "asset_id": "net-001",
+  "version": "1.0.0",
+  "name": "校区合成演示路网",
+  "directed": false,
+  "crs": "EPSG:4326",
+  "synthetic": true,
+  "nodes": [
+    {"id": "S", "coordinates": [113.363, 23.044]},
+    {"id": "A", "coordinates": [113.365, 23.044]},
+    {"id": "B", "coordinates": [113.367, 23.044]},
+    {"id": "C", "coordinates": [113.365, 23.042]},
+    {"id": "D", "coordinates": [113.367, 23.042]},
+    {"id": "T", "coordinates": [113.369, 23.044]}
+  ],
+  "edges": [
+    {"id": "S-A", "source": "S", "target": "A", "length_m": 200, "speed_mps": 10},
+    {"id": "A-B", "source": "A", "target": "B", "length_m": 200, "speed_mps": 10},
+    {"id": "B-T", "source": "B", "target": "T", "length_m": 260, "speed_mps": 10},
+    {"id": "A-C", "source": "A", "target": "C", "length_m": 250, "speed_mps": 10},
+    {"id": "C-D", "source": "C", "target": "D", "length_m": 260, "speed_mps": 10},
+    {"id": "D-T", "source": "D", "target": "T", "length_m": 250, "speed_mps": 10}
+  ]
+}

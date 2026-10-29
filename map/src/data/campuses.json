@@ -1,0 +1,30 @@
+[
+  {
+    "key": "university-town",
+    "name": "广州大学大学城校区",
+    "shortName": "大学城校区",
+    "address": "广州市番禺区大学城外环西路230号",
+    "longitude": 113.366746,
+    "latitude": 23.043612,
+    "altitude": 16,
+    "range": 2300,
+    "scale": 1,
+    "coordinateNote": "高德校区参考点 GCJ-02 [113.372248,23.041063] 经 coordtransform 2.1.2 近似转换为 WGS84；仅用于浏览与合成小样定位。",
+    "source": "https://amap.com/place/B00140AM0Y",
+    "addressSource": "https://www.gzhu.edu.cn/info/1325/12665.htm"
+  },
+  {
+    "key": "huangpu",
+    "name": "广州大学黄埔校区",
+    "shortName": "黄埔校区",
+    "address": "广州市黄埔区新龙镇知明路72号",
+    "longitude": 113.570902,
+    "latitude": 23.310314,
+    "altitude": 55,
+    "range": 1600,
+    "scale": 0.5,
+    "coordinateNote": "OpenStreetMap way 1191052293 的WGS84范围 [113.5686653,23.30819,113.5731382,23.3124378] 的中心；校区名称与地址按校方2026级服务指南核对。仅用于浏览与合成小样定位。",
+    "source": "https://www.openstreetmap.org/way/1191052293",
+    "addressSource": "https://hp.gzhu.edu.cn/info/1169/4055.htm"
+  }
+]

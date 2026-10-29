@@ -1,0 +1,15 @@
+{
+  "run_id": "2a88d1a0-0083-4d6e-b3f4-832a7b75f361",
+  "status": "succeeded",
+  "inputs_sha256": "5cbdfe82c91cca8bab1a1c4a60530a13ef8c3014068e569b19f7ea3de21f87a7",
+  "model_version": "dijkstra-undirected-v1",
+  "data_version": "net-001@1.0.0",
+  "scene_id": "7d16f1cb-fce8-4da5-9beb-41c3595ea3d5",
+  "scene_version": 1,
+  "submitted_at": "2026-10-27T06:14:23.923305Z",
+  "started_at": "2026-10-27T06:14:23.942376Z",
+  "finished_at": "2026-10-27T06:14:24.793085Z",
+  "elapsed_ms": 850.7090000000001,
+  "error": null,
+  "trace_id": "4e96f66ec5334f44a8a7bed3cacd49d2"
+}
