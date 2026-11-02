@@ -98,6 +98,8 @@ const drawingScope = computed(() => {
 const inspectedSelection = computed<Selection | null>(() => {
   if (!selectedId.value && !selection.value) return null
   const raw = selection.value && (!selectedId.value || selection.value.objectId === selectedId.value) ? selection.value : null
+  const layer = queryLayers.value.find(layer => layer.id === (raw?.layerId || activeLayerId.value))
+  if (!layer || raw?.asset && (raw.asset.asset_id !== layer.asset_id || raw.asset.version !== layer.asset_version)) return null
   const object = objectDetail.value
   return {
     title: object?.name ?? raw?.title ?? '对象详情',
@@ -151,7 +153,14 @@ function beginDraw(mode: 'box' | 'polygon') {
     if (drawingScope.value === scope) void selectArea(geometry)
   }, () => { drawing.value = null })
 }
-watch(drawingScope, () => { if (drawing.value) cancelDraw() })
+watch(drawingScope, () => {
+  if (drawing.value) cancelDraw()
+  const raw = selection.value
+  if (!raw) return
+  const layer = queryLayers.value.find(layer => layer.id === raw.layerId)
+  if (!layer || layer.id !== activeLayerId.value
+    || raw.asset && (raw.asset.asset_id !== layer.asset_id || raw.asset.version !== layer.asset_version)) selection.value = null
+})
 function applyObjectFilters() { selection.value = null; void applyFilters() }
 function clearObjectArea() { cancelDraw(); selection.value = null; void clearArea() }
 function zoomMap(direction: number) { cancelDraw(); controller?.zoom(direction) }
@@ -487,6 +496,9 @@ defineExpose({ home, clearScene, restoreWorkspace, captureWorkspace, cancelResto
 .state-errors > div { display: flex; align-items: center; gap: 12px; }
 .state-errors button { flex-shrink: 0; color: var(--blue); }
 @media (max-width: 600px) {
+  .primary-map.split { right: 0; bottom: 50%; }
+  .comparison-heading { display: none; }
+  .comparison-time-left { left: 12px; right: 64px; bottom: calc(50% + 52px); max-height: max(110px, calc(50svh - 140px)); }
   .map-workspace:has(> .time-axis) :deep(.layer-panel) {
     max-height: max(100px, calc(100svh - var(--time-axis-height) - 130px));
   }

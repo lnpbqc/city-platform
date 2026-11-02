@@ -243,6 +243,33 @@ test('detail request races expose only the latest original object and keep expli
   app.unmount()
 })
 
+test('returning from pending details keeps the area query and ignores the late object', async t => {
+  const pending = deferred()
+  detailRequest = () => pending.promise
+  areaRequest = async query => pageOf(Array.from({ length: 25 }, (_, i) => object(`a${i}`)), query)
+  const { app, objects } = setup()
+  t.after(() => app.unmount())
+  await flush()
+  objects.q.value = '教学'; objects.type.value = 'building'
+  await objects.selectArea(polygon)
+  await objects.setPage(2)
+  const ids = [...objects.areaIds.value]
+  const rows = objects.items.value
+  const loading = objects.select('a20')
+  objects.clearSelection()
+  assert.equal(detailCalls.at(-1).signal.aborted, true)
+  pending.resolve(object('a20'))
+  await loading
+  assert.equal(objects.selected.value, null)
+  assert.equal(objects.selectedId.value, '')
+  assert.equal(objects.items.value, rows)
+  assert.deepEqual(objects.areaIds.value, ids)
+  assert.equal(objects.page.value, 2)
+  assert.equal(objects.q.value, '教学')
+  assert.equal(objects.type.value, 'building')
+  assert.ok(objects.areaGeometry.value)
+})
+
 test('unmount aborts both requests and ignores their late successes or errors', async () => {
   const list = deferred(), detail = deferred()
   listRequest = () => list.promise; detailRequest = () => detail.promise

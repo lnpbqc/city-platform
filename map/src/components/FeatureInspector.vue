@@ -19,7 +19,7 @@ function valueText(value: unknown) {
 
 <template>
   <aside v-if="selection" class="inspector panel" :class="{ embedded }" aria-label="对象详情">
-    <header>
+    <header v-if="!embedded">
       <span class="eyebrow">FEATURE INSPECTOR</span
       ><button
         class="icon-button"
@@ -29,7 +29,7 @@ function valueText(value: unknown) {
         <X :size="17" />
       </button>
     </header>
-    <span class="inspector-type">对象属性</span>
+    <span v-if="!embedded" class="inspector-type">对象属性</span>
     <h2>{{ object?.name ?? selection.title }}</h2>
     <p class="inspector-source">{{ selection.layerName }}</p>
     <p v-if="selection.detailLoading" role="status">正在读取原始对象详情…</p>
@@ -64,8 +64,8 @@ function valueText(value: unknown) {
 </template>
 
 <style scoped>
-.inspector.embedded { position: static; width: auto; padding: 12px 0 0; box-shadow: none; background: transparent; animation: none; }
-.embedded dl { max-height: none; }
+.inspector.embedded { position: static; width: auto; padding: 0; box-shadow: none; background: transparent; animation: none; }
+.inspector.embedded dl { max-height: none; overflow: visible; }
 .detail-error { color: #a55145; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .temporal-value { display: grid; gap: 8px; padding: 12px; margin-top: 14px; background: #f2f7ff; border-radius: 5px; }
 .temporal-value span { font-size: 9px; color: #73859a; }

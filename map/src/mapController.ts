@@ -1,6 +1,5 @@
 import {
   Viewer,
-  Ion,
   Math as CesiumMath,
   Cartesian2,
   Cartesian3,
@@ -18,10 +17,6 @@ import {
   ScreenSpaceEventType,
   Entity,
   SceneMode,
-  createWorldImageryAsync,
-  createWorldTerrainAsync,
-  TileMapServiceImageryProvider,
-  buildModuleUrl,
   HeadingPitchRange,
   BoundingSphere,
   ClassificationType,
@@ -32,6 +27,7 @@ import type { MapLayer, Selection, GeometryDocument, ObjectRecord } from './type
 import type { PolygonGraphics } from 'cesium'
 import type { RegionTarget } from './regions'
 import { fetchRegionBoundary, type BoundaryState } from './regionBoundary.ts'
+import { initializeBasemap } from './basemap.ts'
 import { sampleBuildingTerrain } from './buildingTerrain.ts'
 import { ApiError, getAssetVersion } from './api.ts'
 import { fetchMapGeoJSON, mapLoadError, planarGeoJSON } from './mapResource.ts'
@@ -538,45 +534,11 @@ export function createMapController(
     )
   }
 
-  async function setBasemap() {
-    const token = import.meta.env?.VITE_CESIUM_ION_TOKEN
-    if (token) Ion.defaultAccessToken = token
-    try {
-      const imagery = token
-        ? await createWorldImageryAsync()
-        : await TileMapServiceImageryProvider.fromUrl(
-            buildModuleUrl('Assets/Textures/NaturalEarthII'),
-          )
-      if (!alive) return
-      imagery.errorEvent.addEventListener(() =>
-        onNotice('影像瓦片加载失败，请检查网络或 ion 权限；专题图层仍可操作。'),
-      )
-      viewer.imageryLayers.addImageryProvider(imagery)
-      viewer.scene.requestRender()
-      if (!token)
-        onNotice('尚未配置 ion Token，当前使用内置低分辨率地球影像与椭球地表。')
-    } catch {
-      if (alive)
-        onNotice(
-          'ion 影像不可用，请检查 Token、网络和资源权限；当前保留椭球地表。',
-        )
-    }
-    if (token && alive) {
-      try {
-        const terrain = await createWorldTerrainAsync()
-        if (!alive) return
-        terrain.errorEvent.addEventListener(() =>
-          onNotice('地形瓦片加载失败，请检查网络和 ion 权限。'),
-        )
-        viewer.terrainProvider = terrain
-        viewer.scene.requestRender()
-      } catch {
-        if (alive)
-          onNotice('ion 地形不可用，当前使用椭球地表；请检查网络和资源权限。')
-      }
-    }
-  }
-  const basemapReady = setBasemap()
+  const basemapReady = initializeBasemap(viewer, {
+    VITE_BASEMAP_PROVIDER: import.meta.env?.VITE_BASEMAP_PROVIDER,
+    VITE_TIANDITU_KEY: import.meta.env?.VITE_TIANDITU_KEY,
+    VITE_CESIUM_ION_TOKEN: import.meta.env?.VITE_CESIUM_ION_TOKEN,
+  }, () => alive, onNotice)
 
   function disposeResource(resource: Resource) {
     if (resource instanceof GeoJsonDataSource)

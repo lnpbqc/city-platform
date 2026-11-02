@@ -266,7 +266,7 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
     </aside>
     <div class="simulation-tools panel"><button :aria-expanded="historyOpen" @click="historyOpen = !historyOpen"><History :size="16" />运行历史</button><button @click="frameNetwork"><Crosshair :size="16" />定位路网</button><button v-if="result && !historical" :aria-pressed="preview" @click="preview ? preview = false : editConfiguration()">{{ preview ? '查看结果图层' : '编辑配置' }}</button><span>{{ preview ? '配置预览' : '固定运行结果' }}</span></div>
     <div class="route-legend panel" aria-label="路线图例"><span class="blue">━ 基准路径</span><span class="orange">━ 阻断后路径</span><span class="red">× 阻断边</span></div>
-    <TimeAxis v-if="initializationFinished && temporal.dynamicLayers.value.length" class="simulation-time" :class="{ 'with-result': result }" label="仿真专题时间轴" :time="time" v-model:resolution="resolution" v-model:rate="rate" :playing="playing"
+    <TimeAxis v-if="initializationFinished && temporal.dynamicLayers.value.length" class="simulation-time" :class="{ 'with-result': result }" label="专题数据时间" :time="time" v-model:resolution="resolution" v-model:rate="rate" :playing="playing"
       :maximum="maximum" :position="position" :times="times" :loading="timeLoading" :metadata-loading="metadataLoading" :counts="counts" :errors="timeErrors" :all-missing="allMissing"
       @select="temporal.setTime" @seek="temporal.seek" @step="temporal.step" @play="temporal.play" @pause="temporal.pause" @refresh="temporal.refreshAvailability(); temporal.refresh()" />
     <section v-if="result" class="simulation-result panel" aria-label="运行结果对比">
@@ -319,9 +319,9 @@ input[type=checkbox] { accent-color: var(--blue); }
 .simulation-tools > span { color: #73859a; }
 .route-legend { position: absolute; right: 24px; top: 143px; padding: 10px 14px; display: flex; gap: 18px; font-size: 12px; }
 .blue { color: #2563eb; } .orange { color: #c77c00; } .red { color: #dc2626; }
-.simulation-result { position: absolute; left: 380px; right: 24px; bottom: 28px; padding: 20px 24px; max-height: 48%; overflow-y: auto; }
+.simulation-result { position: absolute; left: 380px; right: 24px; bottom: 28px; padding: 20px 24px; max-height: min(48%, max(120px, calc(100svh - 370px))); overflow-y: auto; }
 .simulation-time { left: 380px; right: 24px; bottom: 28px; }
-.simulation-time.with-result { bottom: auto; top: 192px; }
+.simulation-time.with-result { bottom: auto; top: 192px; max-height: max(140px, calc(52svh - 232px)); }
 .simulation-result header { flex-wrap: wrap; font-size: 11px; color: #73859a; }
 .simulation-result header strong { color: #29405a; font-weight: 500; }
 .result-columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 18px; }

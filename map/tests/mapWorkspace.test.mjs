@@ -11,7 +11,7 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
-  return { onMapReady, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight }
+  return { onMapSelection, inspectedSelection, onMapReady, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
@@ -179,4 +179,20 @@ test('failed or superseded scene preflight cannot replace the current map', asyn
   assert.equal(ctx.panel.viewLayers.value, ctx.props.layers)
   assert.deepEqual(ctx.controller.removed, [])
   ctx.cleanup()
+})
+
+test('raw picked properties disappear when the pinned resource changes or is removed', async t => {
+  const ctx = setup()
+  t.after(ctx.cleanup)
+  await ctx.panel.onMapSelection({ title: '原始模型', layerId: 'a', layerName: '模型', asset: { asset_id: 'asset-a', version: '1.0.0' }, properties: { name: '原始属性' } })
+  assert.equal(ctx.panel.inspectedSelection.value.title, '原始模型')
+  ctx.props.layers[0].asset_version = '2.0.0'
+  assert.equal(ctx.panel.inspectedSelection.value, null)
+  await vue.nextTick()
+  ctx.props.layers[0].asset_version = '1.0.0'
+  await vue.nextTick()
+  assert.equal(ctx.panel.inspectedSelection.value, null)
+  await ctx.panel.onMapSelection({ title: '原始模型', layerId: 'a', layerName: '模型', properties: {} })
+  ctx.props.layers[0].attached = false
+  assert.equal(ctx.panel.inspectedSelection.value, null)
 })

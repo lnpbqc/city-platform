@@ -75,5 +75,8 @@ onBeforeUnmount(() => { alive = false; ++version; document.removeEventListener('
 .comparison-time { left: 12px; right: 24px; }
 .comparison-errors { position: absolute; top: 135px; left: 12px; right: 24px; padding: 12px; font-size: 11px; color: #b94e46; }
 .comparison-errors p { margin: 0 0 8px; overflow-wrap: anywhere; }
-@media (max-width: 600px) { .comparison-time { right: 12px; padding: 10px; } }
+@media (max-width: 600px) {
+  .comparison-view { left: 0; top: 50%; border-left: 0; border-top: 2px solid white; }
+  .comparison-time { right: 12px; max-height: max(110px, calc(50svh - 140px)); }
+}
 </style>

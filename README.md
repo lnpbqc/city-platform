@@ -23,7 +23,8 @@ pnpm install --store-dir ..\.pnpm-store
 if (-not (Test-Path -LiteralPath .env.local)) {
     Copy-Item -LiteralPath .env.example -Destination .env.local
 }
-# 编辑 .env.local，填写 VITE_CESIUM_ION_TOKEN；使用本地低分辨率底图时留空。
+# 编辑 .env.local：天地图设置 VITE_BASEMAP_PROVIDER=tianditu 并填写 VITE_TIANDITU_KEY。
+# 默认使用 Cesium，填写 VITE_CESIUM_ION_TOKEN；使用本地低分辨率底图时留空。
 pnpm dev --port 5173 --strictPort
 ```
 

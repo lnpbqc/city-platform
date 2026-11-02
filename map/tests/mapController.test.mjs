@@ -214,12 +214,34 @@ mock.module('cesium', {
     TileMapServiceImageryProvider: {
       fromUrl: async () => ({ errorEvent: { addEventListener() {} } }),
     },
+    WebMapTileServiceImageryProvider: Noop,
+    WebMercatorTilingScheme: Noop,
     buildModuleUrl: (path) => path,
     HeadingPitchRange,
     BoundingSphere,
   },
 })
 const { createMapController } = await import('../src/mapController.ts')
+
+test('basemap imagery and labels share visibility, opacity, removal and reattachment', async () => {
+  const { controller } = setup()
+  const layer = { id: 'basemap', attached: true, visible: true, opacity: 1 }
+  await controller.load(layer)
+  const imagery = [{ show: true, alpha: 1 }, { show: true, alpha: 1 }]
+  Object.assign(viewer.imageryLayers, { length: 2, get: index => imagery[index] })
+  layer.opacity = 0.35
+  layer.visible = false
+  controller.appearance(layer)
+  assert.ok(imagery.every(value => !value.show && value.alpha === 0.35))
+  layer.visible = true
+  controller.appearance(layer)
+  assert.ok(imagery.every(value => value.show))
+  controller.remove(layer)
+  assert.ok(imagery.every(value => !value.show))
+  await controller.load(layer)
+  assert.ok(imagery.every(value => value.show && value.alpha === 0.35))
+  controller.destroy()
+})
 
 for (const sample of [
   { name: 'local planar polygons', kind: 'upload', geometry: { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }, expected: true },
