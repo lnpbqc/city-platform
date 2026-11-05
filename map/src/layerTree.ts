@@ -1,6 +1,6 @@
 import type { MapLayer } from './types'
 
-const categories = ['底图', '建筑', '道路', '水体', '专题', '仿真结果']
+const categories = ['底图', '建筑', '道路', 'POI', '水体', '专题', '仿真结果']
 export function orderedLayers(layers: MapLayer[]) {
   return [...layers].sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.id.localeCompare(right.id))
 }

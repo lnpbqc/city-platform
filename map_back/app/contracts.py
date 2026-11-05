@@ -129,7 +129,7 @@ class LegendItem(BaseModel):
 class LayerCatalogOutput(BaseModel):
     id: str
     name: str
-    category: Literal["底图", "建筑", "道路", "水体", "专题", "仿真结果"]
+    category: Literal["底图", "建筑", "道路", "POI", "水体", "专题", "仿真结果"]
     type: str
     asset: AssetVersionRef | None
     url: str | None

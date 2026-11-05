@@ -18,9 +18,10 @@ import RequestDiagnostics from './components/RequestDiagnostics.vue'
 import { useConnection } from './composables/useConnection'
 import { getScene, saveScene } from './api'
 import type { SceneRecord } from './simulationTypes'
-import { readWorkspaceAddress, workspaceError, workspaceParams, workspaceURL, type WorkspaceAddress, type WorkspaceCapture, type WorkspaceState } from './workspaceState'
+import { mapViewURL, readWorkspaceAddress, workspaceError, workspaceParams, workspaceURL, type WorkspaceAddress, type WorkspaceCapture, type WorkspaceState } from './workspaceState'
 import { useLayerCatalog } from './composables/useLayerCatalog'
 import { readWorkspacePage, type WorkspacePage } from './workspaceRoute'
+import type { MapView } from './mapNavigation'
 import type { MapController } from './mapController'
 import type { AssetRecord, LayerInput, LayerRecord, MapLayer } from './types'
 import { defaultCampus, type CampusKey } from './campuses'
@@ -39,7 +40,7 @@ interface WorkspaceView {
   canCapture?: () => boolean
   cancelRestore: () => void
 }
-const mapView = ref<WorkspaceView & { home: () => void; clearScene: () => void }>()
+const mapView = ref<WorkspaceView & { home: () => void; clearScene: () => void; captureView: () => MapView }>()
 const simulationView = ref<WorkspaceView>()
 const readyRevision = ref(0)
 const recovery = ref(0)
@@ -47,11 +48,9 @@ const statsRevision = ref(0)
 const mapSceneActive = ref(false)
 const restoring = ref(false)
 const restoreError = ref('')
-let addressBlocked = false
 const sharedState = ref<WorkspaceState | null>(null)
 let restoreVersion = 0
 let restoreAbort: AbortController | undefined
-let addressTimer: ReturnType<typeof setTimeout> | undefined
 let capturePromise: Promise<WorkspaceState> | undefined
 let snapshotSignature = ''
 const showDialog = ref(false)
@@ -112,7 +111,6 @@ function synchronizePage() {
 }
 function navigate(value: WorkspacePage) {
   cancelAddressRestore()
-  addressBlocked = false
   restoreError.value = ''
   sharedState.value = null
   snapshotSignature = ''
@@ -121,10 +119,10 @@ function navigate(value: WorkspacePage) {
   url.hash = `/${value}`
   window.history.pushState(null, '', url)
   synchronizePage()
+  if (value === 'map' && mapSceneActive.value) void leaveMapScene()
 }
 function addressChanged() {
   cancelAddressRestore()
-  addressBlocked = false
   try {
     const address = readWorkspaceAddress(new URL(window.location.href))
     if (address) void restoreAddress(address)
@@ -133,7 +131,7 @@ function addressChanged() {
       synchronizePage()
       if (page.value === 'map' && mapSceneActive.value) void leaveMapScene()
     }
-  } catch (cause) { addressBlocked = true; restoreError.value = cause instanceof Error ? cause.message : '复现链接读取失败' }
+  } catch (cause) { restoreError.value = cause instanceof Error ? cause.message : '复现链接读取失败' }
 }
 window.addEventListener('hashchange', addressChanged)
 window.addEventListener('popstate', addressChanged)
@@ -163,6 +161,11 @@ function onSaved(record: LayerRecord) {
   showDialog.value = false
   saved(record)
   void refreshCatalog()
+}
+async function onPoiSaved(record: LayerRecord, reveal: boolean) {
+  await refreshCatalog()
+  const layer = layers.value.find(item => item.id === record.id)
+  if (reveal && layer && (!layer.attached || !layer.visible)) await joinLayer(layer)
 }
 function changeCampus(key: CampusKey) {
   sampleCampus.value = key
@@ -204,7 +207,6 @@ function cancelAddressRestore() {
   mapView.value?.cancelRestore()
   simulationView.value?.cancelRestore()
   restoring.value = false
-  clearTimeout(addressTimer)
 }
 function activeView() { return page.value === 'map' ? mapView.value : page.value === 'simulation' ? simulationView.value : undefined }
 const canCapture = computed(() => {
@@ -232,7 +234,6 @@ async function restoreAddress(address: WorkspaceAddress) {
   restoreAbort = new AbortController()
   const signal = restoreAbort.signal
   restoring.value = true
-  addressBlocked = false
   restoreError.value = ''
   page.value = address.page
   if (address.page === 'map') mapVisited.value = true
@@ -253,10 +254,9 @@ async function restoreAddress(address: WorkspaceAddress) {
       const { scene: input, ...state } = capture
       sharedState.value = { ...state, scene_id: scene.id, scene_version: scene.version }
       snapshotSignature = signature(input)
-      window.history.replaceState(null, '', workspaceURL(sharedState.value))
     }
   } catch (cause) {
-    if (version === restoreVersion && !(cause instanceof Error && cause.name === 'AbortError')) { addressBlocked = true; restoreError.value = cause instanceof Error ? cause.message : '完整画面恢复失败' }
+    if (version === restoreVersion && !(cause instanceof Error && cause.name === 'AbortError')) { restoreError.value = cause instanceof Error ? cause.message : '完整画面恢复失败' }
   } finally { if (version === restoreVersion) restoring.value = false }
 }
 function signature(scene: WorkspaceCapture['scene']) {
@@ -280,18 +280,21 @@ async function createSnapshot(): Promise<WorkspaceState> {
     if (version === restoreVersion && page.value === requestedPage) {
       sharedState.value = complete
       snapshotSignature = key
-      addressBlocked = false
       restoreError.value = ''
-      window.history.replaceState(null, '', workspaceURL(complete))
     }
     return complete
   })()
   try { return await capturePromise } finally { capturePromise = undefined }
 }
-function viewChanged() {
-  if (restoring.value || addressBlocked || !canCapture.value || page.value === 'data') return
-  clearTimeout(addressTimer)
-  addressTimer = setTimeout(() => { void createSnapshot().catch(cause => { restoreError.value = cause instanceof Error ? cause.message : '复现链接更新失败' }) }, 350)
+async function copyWorkspaceLink() {
+  if (page.value === 'map' && mapView.value?.isReady() && !restoring.value)
+    return mapViewURL(mapView.value.captureView())
+  return workspaceURL(await createSnapshot())
+}
+function openManagedScene(scene: SceneRecord) {
+  void openBookmark({ page: scene.network || scene.run_id ? 'simulation' : 'map', scene_id: scene.id,
+    scene_version: scene.version, run_id: scene.run_id, camera: scene.camera, time: scene.current_time,
+    resolution: 'hour', comparison: null })
 }
 async function openBookmark(state: WorkspaceState) {
   window.history.pushState(null, '', workspaceURL(state))
@@ -300,7 +303,6 @@ async function openBookmark(state: WorkspaceState) {
 async function leaveMapScene() {
   cancelAddressRestore()
   mapView.value?.clearScene()
-  addressBlocked = false
   restoreError.value = ''
   sharedState.value = null
   snapshotSignature = ''
@@ -345,9 +347,10 @@ addressChanged()
       @campus="changeCampus"
       @scene-mode="mapSceneActive = $event"
       @exit-scene="leaveMapScene"
-      @changed="viewChanged"
+      @poi-saved="onPoiSaved"
     />
     <DataManagerView
+      @open-scene="openManagedScene"
       v-show="page === 'data'"
       :layers="layers"
       :backend="backend"
@@ -364,14 +367,14 @@ addressChanged()
       @refresh="refreshCatalog"
     />
     <SimulationWorkspace v-if="simulationVisited" v-show="page === 'simulation'" ref="simulationView"
-      :active="page === 'simulation'" :layers="layers" :backend="backend" :recovery="recovery" @ready="readyRevision++" @changed="viewChanged" @run-changed="statsRevision++" />
+      :active="page === 'simulation'" :layers="layers" :backend="backend" :recovery="recovery" @ready="readyRevision++" @run-changed="statsRevision++" />
     <WorkspaceHeader
       :page="page"
       :count="registeredCount"
       @navigate="navigate"
       @home="brandHome"
       @help="showHelp = !showHelp"
-    ><template #tools><WorkspaceBookmarks :enabled="canCapture" :capture="createSnapshot" @open="openBookmark" /><RequestDiagnostics :error="requestError" /></template></WorkspaceHeader>
+    ><template #tools><WorkspaceBookmarks :enabled="canCapture" :capture="createSnapshot" :copy-link="copyWorkspaceLink" :map="page === 'map'" @open="openBookmark" /><RequestDiagnostics :error="requestError" /></template></WorkspaceHeader>
     <div v-if="connectionStatus === 'retrying'" class="connection-banner panel" role="status" aria-label="服务连接状态"><span>连接中断，正在重试<span v-if="retryIn"> · {{ retryIn }} 秒后再次检查</span></span><button @click="retryConnection">立即重连</button></div>
     <div v-if="restoring || restoreError" class="restore-feedback panel" :role="restoreError ? 'alert' : 'status'"><span>{{ restoring ? '正在恢复完整画面…' : restoreError }}</span><button v-if="restoreError" @click="restoreError = ''">关闭</button></div>
     <div v-if="restoring" class="restore-shield" aria-hidden="true" />

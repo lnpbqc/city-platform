@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .assets import local_parts, lock_catalog, published_files, reconcile
-from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_asset_id, ensure_builtin_assets
+from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, RETIRED_LAYER_IDS, builtin_asset_id, ensure_builtin_assets
 from .contracts import LayerCatalogOutput
 from .database import get_session
 from .errors import ApiProblem
@@ -19,8 +19,8 @@ SessionDep = Annotated[Session, Depends(get_session)]
 Campus = Literal["university-town", "huangpu"]
 BASEMAP = {"id": "basemap", "name": "底图", "type": "basemap", "category": "底图", "unit": None,
            "color": "#c9dbe8", "orderable": False, "map_attached": True}
-DEFAULTS = [BASEMAP, *BUILTIN_LAYERS]
-GROUPS = {"底图", "建筑", "道路", "水体", "专题", "仿真结果"}
+DEFAULTS = [BASEMAP, *(spec for spec in BUILTIN_LAYERS if spec["id"] not in RETIRED_LAYER_IDS)]
+GROUPS = {"底图", "建筑", "道路", "POI", "水体", "专题", "仿真结果"}
 
 
 def initialize_catalog(session: Session):
@@ -131,7 +131,9 @@ def update_catalog_state(layer_id: str, body: LayerCatalogStateInput, session: S
     if state is None:
         raise ApiProblem(404, "LAYER_NOT_FOUND", "图层不存在")
     rows = catalog_rows(session, campus)
-    current = next(row for row in rows if row["id"] == layer_id)
+    current = next((row for row in rows if row["id"] == layer_id), None)
+    if current is None:
+        raise ApiProblem(404, "LAYER_NOT_FOUND", "图层不存在")
     if "order" in body.model_fields_set:
         if not current["orderable"]:
             raise ApiProblem(422, "ORDER_UNSUPPORTED", "顺序调整适用于已核对的二维图层，三维对象按深度遮挡")

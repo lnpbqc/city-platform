@@ -3,9 +3,9 @@ import { onBeforeUnmount, ref } from 'vue'
 import { Bookmark as BookmarkIcon, X } from '@lucide/vue'
 import { createBookmark, deleteBookmark, getBookmarks, renameBookmark } from '../api'
 import type { Bookmark } from '../types'
-import { workspaceURL, type WorkspaceState } from '../workspaceState'
+import { type WorkspaceState } from '../workspaceState'
 
-const props = defineProps<{ enabled: boolean; capture: () => Promise<WorkspaceState> }>()
+const props = defineProps<{ enabled: boolean; map: boolean; copyLink: () => Promise<string>; capture: () => Promise<WorkspaceState> }>()
 const emit = defineEmits<{ open: [state: WorkspaceState] }>()
 const open = ref(false), busy = ref(false), name = ref('工作台画面'), error = ref(''), link = ref(''), message = ref('')
 const bookmarks = ref<Bookmark[]>([])
@@ -32,8 +32,8 @@ async function copy() {
   if (busy.value) return
   busy.value = true; error.value = ''; message.value = ''
   try {
-    link.value = workspaceURL(await props.capture())
-    try { await navigator.clipboard.writeText(link.value); if (alive) message.value = '复现链接已复制' }
+    link.value = await props.copyLink()
+    try { await navigator.clipboard.writeText(link.value); if (alive) message.value = props.map ? '视图链接已复制' : '复现链接已复制' }
     catch { if (alive) message.value = '链接已生成，可在下方选中复制' }
   } catch (cause) { if (alive) fail(cause) }
   finally { busy.value = false }
@@ -67,12 +67,12 @@ onBeforeUnmount(() => { alive = false })
     <button class="workspace-bookmarks-trigger" aria-label="完整画面收藏与链接" :aria-expanded="open" @click="toggle"><BookmarkIcon :size="16" /><span>收藏与链接</span></button>
     <section v-if="open" class="workspace-bookmarks-panel panel" aria-label="完整画面收藏">
       <header><h2>完整画面收藏</h2><button class="icon-button" aria-label="关闭完整画面收藏" @click="open = false"><X :size="16" /></button></header>
-      <p>保存固定版本图层、相机、时次和仿真运行。双视图同时保存右侧时间。</p>
+      <p>保存固定版本图层、相机、时次和仿真运行。双视图同时保存右侧时间。<template v-if="map">视图链接只分享地图位置和相机。</template></p>
       <form @submit.prevent="save"><label>画面名称<input v-model="name" aria-label="完整收藏名称" required maxlength="120" :disabled="busy" /></label>
-        <div class="actions"><button class="primary-button" :disabled="busy || !enabled">{{ busy ? '正在处理…' : '收藏当前画面' }}</button><button type="button" class="secondary-button" :disabled="busy || !enabled" @click="copy">复制复现链接</button></div></form>
+        <div class="actions"><button class="primary-button" :disabled="busy || !enabled">{{ busy ? '正在处理…' : '收藏当前画面' }}</button><button type="button" class="secondary-button" :disabled="busy || !enabled" @click="copy">{{ map ? '复制视图链接' : '复制复现链接' }}</button></div></form>
       <p v-if="!enabled">进入地图或仿真工作区，等待加载完成后保存。</p>
       <p v-if="message" role="status">{{ message }}</p>
-      <textarea v-if="link" :value="link" readonly aria-label="当前画面复现链接" @focus="($event.target as HTMLTextAreaElement).select()" />
+      <textarea v-if="link" :value="link" readonly :aria-label="map ? '当前地图视图链接' : '当前画面复现链接'" @focus="($event.target as HTMLTextAreaElement).select()" />
       <div class="list-heading"><strong>已保存画面 · {{ bookmarks.length }}</strong><button class="text-button" :disabled="busy" @click="load">刷新</button></div>
       <p v-if="!bookmarks.length">暂无完整画面收藏。</p>
       <ul><li v-for="record in bookmarks" :key="record.id">

@@ -185,7 +185,7 @@ export function useLayerCatalog(
           if (sourceChanged) {
             getController()?.remove(layer)
             // Campus changes rebind the shared default state; custom source edits require an explicit join.
-            if (!mapped.builtin) {
+            if (!mapped.builtin && !(mapped.category === 'POI' && record.map_attached)) {
               layer.visible = record.map_visible ?? layer.visible
               layer.opacity = record.map_opacity ?? layer.opacity
               persistState(layer, stateFor(layer, false))

@@ -120,11 +120,11 @@ export function createRegionIndex(regions: Region[]) {
 }
 export type RegionIndex = ReturnType<typeof createRegionIndex>
 
-export async function resolveRegionTarget(id: string): Promise<RegionTarget> {
+export async function resolveRegionTarget(id: string, signal?: AbortSignal): Promise<RegionTarget> {
   if (id === chinaRegion.id) return chinaRegion
   const campus = [...campusRegions, ...demonstrationRegions].find((region) => region.id === id)
   if (campus) return campus
-  const response = await fetch('/data/regions.json')
+  const response = await fetch('/data/regions.json', { signal })
   if (!response.ok) throw new Error(`地区目录加载失败：HTTP ${response.status}`)
   const catalog: RegionCatalog = await response.json()
   if (!catalog || !Array.isArray(catalog.regions))

@@ -6,15 +6,17 @@ import RegionPicker from './RegionPicker.vue'
 import BookmarkPanel from './BookmarkPanel.vue'
 import MapToolbar from './MapToolbar.vue'
 import ObjectPanel from './ObjectPanel.vue'
+import PoiEditor from './PoiEditor.vue'
 import MapLegend from './MapLegend.vue'
 import MapStatus from './MapStatus.vue'
 import TimeAxis from './TimeAxis.vue'
 import ComparisonView from './ComparisonView.vue'
 import WorkspaceFeedback from './WorkspaceFeedback.vue'
-import { demoRegion, type RegionTarget } from '../regions'
+import { demoRegion, resolveRegionTarget, type RegionTarget } from '../regions'
 import type { MapController, MapPoint } from '../mapController'
 import type { BoundaryState } from '../regionBoundary'
-import type { MapLayer, Selection, ObjectRecord } from '../types'
+import type { LayerRecord, MapLayer, Selection, ObjectRecord } from '../types'
+import { editablePoi } from '../poi'
 import type { SceneRecord } from '../simulationTypes'
 import type { CameraState } from '../mapNavigation'
 import type { WorkspaceAddress, WorkspaceCapture } from '../workspaceState'
@@ -50,7 +52,7 @@ const emit = defineEmits<{
   move: [layer: MapLayer, direction: number]
   sceneMode: [active: boolean]
   exitScene: []
-  changed: []
+  poiSaved: [record: LayerRecord, reveal: boolean]
 }>()
 const sidebar = ref(true)
 const timeAxis = ref<InstanceType<typeof TimeAxis> | null>(null)
@@ -114,6 +116,55 @@ const inspectedSelection = computed<Selection | null>(() => {
     detailError: detailError.value,
   }
 })
+const poiAllowed = computed(() => props.backend === 'online' && !sceneLayers.value && !comparisonOpen.value)
+const poiLayers = computed(() => viewLayers.value.filter(editablePoi))
+const poiSelectionLayer = computed(() => {
+  const selection = inspectedSelection.value
+  const object = selection?.object
+  if (!poiAllowed.value || object?.geometry?.type !== 'Point' || object.feature_index == null) return
+  return poiLayers.value.find(layer => layer.id === selection?.layerId &&
+    layer.asset_id === object.asset.asset_id && layer.asset_version === object.asset.version)
+})
+const poiDraft = ref<{ layer?: MapLayer; object?: ObjectRecord; coordinates?: number[] } | null>(null)
+const poiPicking = ref(false)
+const poiEditor = ref<InstanceType<typeof PoiEditor> | null>(null)
+
+function pickPoiPosition() {
+  if (!controller || !poiDraft.value || poiEditor.value?.busy) return
+  cancelDraw()
+  poiPicking.value = true
+  const draft = poiDraft.value
+  controller.beginPointPicking(point => {
+    if (poiDraft.value !== draft) return
+    draft.coordinates = [point.longitude, point.latitude]
+    poiPicking.value = false
+  })
+}
+function startPoi(edit = false) {
+  if (!controller || !poiAllowed.value || poiDraft.value) return
+  if (edit) {
+    if (!poiSelectionLayer.value || !inspectedSelection.value?.object) return
+    poiDraft.value = { layer: poiSelectionLayer.value, object: inspectedSelection.value.object }
+  } else {
+    poiDraft.value = {}
+    pickPoiPosition()
+  }
+}
+function cancelPoi(force = false) {
+  if (!poiDraft.value || (!force && poiEditor.value?.busy)) return
+  controller?.cancelPointPicking()
+  poiPicking.value = false
+  poiDraft.value = null
+}
+function savePoi(record: LayerRecord) {
+  const reveal = !poiDraft.value?.object
+  cancelPoi(true)
+  clearObjectSelection()
+  emit('poiSaved', record, reveal)
+}
+watch([poiAllowed, () => props.active], ([allowed, active]) => {
+  if (!allowed || !active) cancelPoi()
+})
 const storedView = (() => { try { return readMapView(window.localStorage) } catch { return null } })()
 const selectedRegion = ref<RegionTarget>(storedView?.region ?? demoRegion)
 const boundaryEnabled = ref(true)
@@ -145,7 +196,7 @@ async function onListSelection(item: ObjectRecord) {
 }
 function changeObjectLayer(id: string) { cancelDraw(); selection.value = null; void setObjectLayer(id) }
 function beginDraw(mode: 'box' | 'polygon') {
-  if (!controller || !drawingScope.value) return
+  if (!controller || !drawingScope.value || poiDraft.value) return
   const scope = drawingScope.value
   clearObjectSelection()
   drawing.value = mode
@@ -166,7 +217,11 @@ function clearObjectArea() { cancelDraw(); selection.value = null; void clearAre
 function zoomMap(direction: number) { cancelDraw(); controller?.zoom(direction) }
 function northMap() { cancelDraw(); controller?.north() }
 function tiltMap() { cancelDraw(); controller?.tilt() }
-function onEscape(event: KeyboardEvent) { if (event.key === 'Escape' && drawing.value) cancelDraw() }
+function onEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  if (poiDraft.value) cancelPoi()
+  else if (drawing.value) cancelDraw()
+}
 function onVisibility() { if (document.hidden) temporal.pause() }
 onMounted(() => { window.addEventListener('keydown', onEscape); document.addEventListener('visibilitychange', onVisibility) })
 onBeforeUnmount(() => { ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
@@ -193,7 +248,6 @@ function onNavigation(value: NavigationReading, settled: boolean) {
   if (comparisonOpen.value) synchronizeCamera('left', value.camera)
   if (settled) {
     try { saveMapView(window.localStorage, { camera: value.camera, region: selectedRegion.value }) } catch { /* Browser storage may be disabled. */ }
-    emit('changed')
   }
 }
 function comparisonReady(value: MapController) { comparisonController = value; if (controller) synchronizeCamera('left', controller.getCamera()) }
@@ -305,6 +359,11 @@ async function restoreWorkspace(scene: SceneRecord | null, address: WorkspaceAdd
   const version = ++restoreVersion
   restoreAbort?.abort()
   restoreAbort = new AbortController()
+  let region: RegionTarget | undefined
+  if (address.region_id) {
+    try { region = await resolveRegionTarget(address.region_id, restoreAbort.signal) }
+    catch { if (version === restoreVersion) notice.value = '链接中的地区无法读取，已按相机定位。' }
+  }
   const prepared = scene ? await prepareSceneLayers(scene.layers, props.layers, restoreAbort.signal) : null
   if (version !== restoreVersion || !controller) return
   closeObjects()
@@ -332,8 +391,14 @@ async function restoreWorkspace(scene: SceneRecord | null, address: WorkspaceAdd
   await nextTick()
   const instant = address.time ?? scene?.current_time
   if (instant) temporal.setTime(instant)
+  else if (address.region_id) temporal.seek(0)
   const camera = address.camera ?? scene?.camera
-  if (camera) controller.setCamera(camera)
+  if (region && camera) {
+    selectedRegion.value = region
+    if (region.sampleKey) emit('campus', region.sampleKey)
+    controller.initialize(region, camera)
+    updateBoundary()
+  } else if (camera) controller.setCamera(camera)
   temporal.paint()
   if (address.comparison) {
     comparisonTime.value = { ...address.comparison }
@@ -352,7 +417,6 @@ function captureWorkspace(): WorkspaceCapture {
       layers: captureLayers(viewLayers.value.filter(layer => layer.map_attached ?? layer.attached)), network: null, origin: null, destination: null,
       blocked_edges: [], params: { mode: 'car' }, seed: 0 } }
 }
-watch([time, resolution, comparisonOpen, () => JSON.stringify(comparisonTime.value), () => JSON.stringify(captureLayers(viewLayers.value.filter(layer => layer.map_attached ?? layer.attached)))], () => emit('changed'))
 watch(() => props.recovery, async () => {
   await Promise.all(viewLayers.value.filter(layer => layer.attached && layer.status === 'error').map(async layer => {
     const visible = layer.visible
@@ -368,7 +432,11 @@ watch(() => props.recovery, async () => {
   }
 })
 function cancelRestore() { ++restoreVersion; restoreAbort?.abort() }
-defineExpose({ home, clearScene, restoreWorkspace, captureWorkspace, cancelRestore, isReady: () => !!controller })
+function captureView() {
+  if (!controller) throw new Error('地图尚未就绪')
+  return { camera: controller.getCamera(), region: selectedRegion.value }
+}
+defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace, cancelRestore, isReady: () => !!controller })
 </script>
 
 <template>
@@ -422,6 +490,8 @@ defineExpose({ home, clearScene, restoreWorkspace, captureWorkspace, cancelResto
     <MapToolbar v-if="!comparisonOpen"
       :is2-d="is2D"
       :heading="navigation?.camera.heading ?? 0"
+      :add-poi="poiAllowed"
+      @poi="startPoi()"
       @zoom="zoomMap"
       @home="home"
       @mode="toggleMode"
@@ -436,10 +506,19 @@ defineExpose({ home, clearScene, restoreWorkspace, captureWorkspace, cancelResto
       :layers="queryLayers" :layer-id="activeLayerId" :items="objectItems" :total="objectTotal" :page="objectPage" :page-size="objectPageSize"
       :loading="objectsLoading" :error="objectsError" v-model:q="objectQuery" v-model:type="objectType"
       :selected-id="selectedId" :selection="inspectedSelection" :area="Boolean(areaGeometry)" :drawing="drawing" :progress="selectionProgress"
+      :edit-poi="!!poiSelectionLayer && !poiDraft"
+      @edit-poi="startPoi(true)"
       @close="closeObjects" @layer="changeObjectLayer" @page="setObjectPage" @select="onListSelection" @apply="applyObjectFilters"
       @draw="beginDraw" @finish="controller?.finishAreaSelection()" @cancel="cancelDraw" @clear-area="clearObjectArea"
       @clear-selection="clearObjectSelection" @retry="refreshObjects"
     />
+    <div v-if="poiPicking" class="poi-prompt panel" role="status">
+      点击地面选择 POI 位置
+      <button @click="cancelPoi()">取消</button>
+    </div>
+    <PoiEditor v-if="poiDraft" v-show="!poiPicking" ref="poiEditor"
+      :layers="poiLayers" :layer="poiDraft.layer" :object="poiDraft.object" :coordinates="poiDraft.coordinates"
+      @pick="pickPoiPosition" @cancel="cancelPoi()" @saved="savePoi" @refresh="cancelPoi(); emit('refresh')" />
     <MapLegend v-if="!objectsOpen && !comparisonOpen" :layers="viewLayers" :class="{ 'temporal-legend': dynamicLayers.length }" />
     <TimeAxis v-if="dynamicLayers.length || metadataLoading" :time="time" v-model:resolution="resolution" v-model:rate="rate"
       ref="timeAxis"
@@ -466,6 +545,8 @@ defineExpose({ home, clearScene, restoreWorkspace, captureWorkspace, cancelResto
 </template>
 
 <style scoped>
+.poi-prompt { position: absolute; z-index: 6; bottom: 60px; left: 50%; transform: translateX(-50%); padding: 12px 16px; font-size: 12px; }
+.poi-prompt button { color: var(--blue); margin-left: 8px; }
 .object-trigger { position: absolute; z-index: 3; right: 78px; top: 84px; padding: 11px 15px; font-size: 11px; color: var(--blue); }
 .scene-banner { position: absolute; z-index: 4; top: 190px; right: 24px; padding: 10px 14px; display: flex; gap: 12px; font-size: 11px; }
 .scene-banner button { color: var(--blue); }

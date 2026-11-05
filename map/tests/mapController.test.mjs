@@ -195,6 +195,8 @@ mock.module('cesium', {
     Cesium3DTileStyle: Noop,
     ColorMaterialProperty,
     ConstantProperty,
+    DistanceDisplayCondition: class { constructor(near, far) { Object.assign(this, { near, far }) } },
+    LabelGraphics: class { constructor(options) { Object.assign(this, options) } },
     ConstantPositionProperty,
     Credit: Noop,
     VerticalOrigin: { BOTTOM: 1 },

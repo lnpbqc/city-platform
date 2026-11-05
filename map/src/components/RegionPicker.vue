@@ -299,7 +299,7 @@ onBeforeUnmount(() => abort?.abort())
           目录：DataV GeoAtlas ·
           {{ catalog.retrievedAt.slice(0, 10) }}
           快照<br />边界：DataV GeoAtlas · 联网按需加载，近似转换至
-          WGS84，仅用于定位参考。校区快捷入口切换公开轮廓白模及合成点线面，不显示行政边界；用户数据保持原位置。
+          WGS84，仅用于定位参考。校区快捷入口切换公开轮廓白模，不显示行政边界；用户数据保持原位置。
         </footer>
       </template>
     </section>

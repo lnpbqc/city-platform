@@ -1,6 +1,6 @@
 import { ApiError } from './api.ts'
 import { publishApiEvent } from './apiEvents.ts'
-import { validCamera, type CameraState } from './mapNavigation.ts'
+import { validCamera, type CameraState, type MapView } from './mapNavigation.ts'
 import { localTime } from './temporal.ts'
 import type { SceneInput } from './simulationTypes'
 import type { TemporalContext, TimeResolution } from './temporalTypes'
@@ -23,10 +23,11 @@ export interface WorkspaceAddress {
   run_id?: string
   time?: string
   resolution: TimeResolution
+  region_id?: string
   camera?: CameraState
   comparison: TemporalContext | null
 }
-export const workspaceParams = ['scene', 'v', 'run', 't', 'resolution', 'camera', 'compare_t', 'compare_resolution']
+export const workspaceParams = ['scene', 'v', 'run', 't', 'resolution', 'camera', 'compare_t', 'compare_resolution', 'region']
 export const workspaceError = (message: string) => {
   const error = new ApiError(message, 400, null, 'INVALID_WORKSPACE_LINK', `client-${crypto.randomUUID()}`)
   publishApiEvent({ error })
@@ -67,11 +68,14 @@ export function readWorkspaceAddress(url: URL): WorkspaceAddress | null {
     if (!validCamera(camera)) throw workspaceError('链接相机参数无效')
   }
   const page = run_id || url.hash === '#/simulation' ? 'simulation' : 'map'
+  const region_id = identity('region')
+  if (region_id && (!camera || page !== 'map' || workspaceParams.some(key => key !== 'camera' && key !== 'region' && params.has(key))))
+    throw workspaceError('地图视图链接只能包含相机和地区')
   if (params.has('compare_resolution') && !params.has('compare_t')) throw workspaceError('右侧分辨率需要同时提供右侧时间')
   const comparison = params.has('compare_t') ? { time: parseTime(params.get('compare_t')!), resolution: resolution('compare_resolution') } : null
   if (comparison && page !== 'map') throw workspaceError('双视图时间仅用于地图工作台')
   return { page, scene_id, scene_version: version ? Number(version) : undefined, run_id,
-    time: params.has('t') ? parseTime(params.get('t')!) : undefined, resolution: resolution('resolution'), camera, comparison }
+    time: params.has('t') ? parseTime(params.get('t')!) : undefined, resolution: resolution('resolution'), camera, comparison, ...(region_id ? { region_id } : {}) }
 }
 export function workspaceURL(state: WorkspaceState, base = window.location.href) {
   const url = new URL(base)
@@ -87,5 +91,14 @@ export function workspaceURL(state: WorkspaceState, base = window.location.href)
     url.searchParams.set('compare_resolution', state.comparison.resolution)
   }
   url.hash = `/${state.page}`
+  return url.href
+}
+
+export function mapViewURL(view: MapView, base = window.location.href) {
+  const url = new URL(base)
+  for (const key of workspaceParams) url.searchParams.delete(key)
+  url.searchParams.set('camera', JSON.stringify(view.camera))
+  url.searchParams.set('region', view.region.id)
+  url.hash = '/map'
   return url.href
 }

@@ -11,9 +11,13 @@ import {
   LoaderCircle,
   ArrowUpRight,
   Files,
+  Layers,
 } from '@lucide/vue'
 import type { AssetRecord, LayerRecord, MapLayer } from '../types'
+import { getScenes } from '../api'
 import { useAssets } from '../composables/useAssets'
+import SceneManager from './SceneManager.vue'
+import type { SceneRecord } from '../simulationTypes'
 import AssetDetails from './AssetDetails.vue'
 import AssetReferences from './AssetReferences.vue'
 import { canRegisterAsset } from '../assetReferences'
@@ -35,8 +39,13 @@ const emit = defineEmits<{
   join: [layer: MapLayer]
   deleteRecord: [layer: MapLayer]
   refresh: []
+  openScene: [scene: SceneRecord]
 }>()
-const tab = ref<'records' | 'assets'>('records')
+const tabs = ['records', 'assets', 'scenes'] as const
+const tab = ref<typeof tabs[number]>('records')
+const sceneCount = ref<number | null>(null)
+const sceneQuery = ref('')
+const sceneJump = ref(0)
 const query = ref('')
 const kind = ref('all')
 const source = ref('all')
@@ -112,7 +121,21 @@ watch([query, kind, status, sort, from, to], () => {
   clearTimeout(filterTimer)
   if (tab.value === 'assets') filterTimer = setTimeout(applyAssetFilters, 250)
 })
-onBeforeUnmount(() => clearTimeout(filterTimer))
+let sceneCountRequest: AbortController | undefined
+async function refreshSceneCount() {
+  sceneCountRequest?.abort()
+  const request = new AbortController()
+  sceneCountRequest = request
+  try {
+    const result = await getScenes({ page_size: 1 }, request.signal)
+    if (!request.signal.aborted) sceneCount.value = result.total
+  } catch { if (!request.signal.aborted) sceneCount.value = null }
+}
+function sceneRemoved() {
+  void refresh()
+  void refreshSceneCount()
+}
+onBeforeUnmount(() => { clearTimeout(filterTimer); sceneCountRequest?.abort() })
 const statusText: Record<AssetRecord['status'], string> = {
   active: '可用',
   deleting: '删除中',
@@ -149,7 +172,7 @@ function refreshAll() {
   emit('refresh')
   void refresh()
 }
-function changeTab(value: 'records' | 'assets') {
+function changeTab(value: typeof tabs[number]) {
   tab.value = value
   if (value === 'records' && ['unknown', 'network'].includes(kind.value))
     kind.value = 'all'
@@ -158,25 +181,27 @@ function changeTab(value: 'records' | 'assets') {
 function navigateTabs(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  const next =
-    event.key === 'Home'
-      ? 'records'
-      : event.key === 'End'
-        ? 'assets'
-        : tab.value === 'records'
-          ? 'assets'
-          : 'records'
-  changeTab(next)
-  const buttons = (
-    event.currentTarget as HTMLElement
-  ).querySelectorAll<HTMLButtonElement>('[role="tab"]')
-  buttons[next === 'records' ? 0 : 1]?.focus()
+  const index = tabs.indexOf(tab.value)
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+    : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+  changeTab(tabs[next]!)
+  const buttons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]')
+  buttons[next]?.focus()
 }
+function showScene(id: string) {
+  closeDetail()
+  cancelDelete()
+  sceneQuery.value = id
+  sceneJump.value++
+  changeTab('scenes')
+}
+
 watch(
   [() => props.active, () => props.recovery, () => props.revision],
   ([active]) => {
     if (!active) return
     void refresh()
+    void refreshSceneCount()
     if (detailId.value) void openDetail(detailId.value)
   },
   { immediate: true },
@@ -254,8 +279,12 @@ watch(
               stats?.asset_count ?? total
             }}</span>
           </button>
+          <button id="scene-tab" role="tab" :aria-selected="tab === 'scenes'" :tabindex="tab === 'scenes' ? 0 : -1"
+            aria-controls="scene-panel" :class="{ active: tab === 'scenes' }" @click="changeTab('scenes')">
+            <Layers :size="16" />场景<span>{{ sceneCount ?? '—' }}</span>
+          </button>
         </div>
-        <div class="table-tools">
+        <div v-if="tab !== 'scenes'" class="table-tools">
           <label class="search-field"
             ><Search :size="15" /><input
               v-model="query"
@@ -337,10 +366,10 @@ watch(
           {{ catalogError || '图层服务未连接，请启动后端后刷新。'
           }}<button @click="emit('refresh')">重试连接</button>
         </div>
-        <div v-if="error" class="notice error" role="alert">
+        <div v-if="tab !== 'scenes' && error" class="notice error" role="alert">
           {{ error }}<button @click="refresh">重试文件列表</button>
         </div>
-        <p v-if="message" class="notice success" role="status">{{ message }}</p>
+        <p v-if="tab !== 'scenes' && message" class="notice success" role="status">{{ message }}</p>
 
         <section
           v-if="tab === 'records'"
@@ -467,7 +496,7 @@ watch(
         </section>
 
         <section
-          v-else
+          v-else-if="tab === 'assets'"
           id="asset-panel"
           role="tabpanel"
           aria-labelledby="asset-tab"
@@ -626,6 +655,8 @@ watch(
             </button>
           </nav>
         </section>
+        <SceneManager v-else :key="sceneJump" :initial-query="sceneQuery" :active="active" :revision="recovery"
+          @open="emit('openScene', $event)" @removed="sceneRemoved" />
       </section>
       <footer class="manager-note">
         <i :class="{ online: backend === 'online' }"></i
@@ -648,6 +679,7 @@ watch(
       :error="detailError"
       @close="closeDetail"
       @retry="retryDetail"
+      @scene="showScene"
     />
     <ConfirmDialog
       v-if="pendingDelete"
@@ -683,7 +715,7 @@ watch(
       <template #error
         ><div v-if="conflicts.length" class="conflict-records">
           <p>当前引用：</p>
-          <AssetReferences :references="conflicts" />
+          <AssetReferences :references="conflicts" scene-links @scene="showScene" />
         </div></template
       >
     </ConfirmDialog>
@@ -717,7 +749,7 @@ watch(
   color: inherit;
   background: white;
 }
-.pagination {
+.pagination, :deep(.scene-manager .pagination) {
   display: flex;
   gap: 16px;
   align-items: center;
@@ -727,7 +759,7 @@ watch(
   font-size: 12px;
   color: #65788e;
 }
-.pagination button {
+.pagination button, :deep(.scene-manager .pagination button) {
   color: var(--blue);
 }
 .data-manager {
@@ -798,14 +830,14 @@ h1 {
   font-size: 10px;
   color: #8b9aaf;
 }
-.table-tools {
+.table-tools, :deep(.scene-manager .table-tools) {
   padding: 22px 24px 15px;
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
 }
-.search-field {
+.search-field, :deep(.scene-manager .search-field) {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -816,10 +848,10 @@ h1 {
   height: 36px;
   color: #91a0b4;
 }
-.search-field:focus-within {
+.search-field:focus-within, :deep(.scene-manager .search-field:focus-within) {
   border-color: var(--blue);
 }
-.search-field input {
+.search-field input, :deep(.scene-manager .search-field input) {
   border: 0;
   outline: 0;
   min-width: 0;
@@ -828,7 +860,7 @@ h1 {
   background: transparent;
   color: #41556d;
 }
-.search-field input::placeholder {
+.search-field input::placeholder, :deep(.scene-manager .search-field input::placeholder) {
   color: #9da9b8;
 }
 .table-tools select {
@@ -840,7 +872,7 @@ h1 {
   color: #65778f;
   font-size: 12px;
 }
-.secondary-button {
+.secondary-button, :deep(.scene-manager .secondary-button) {
   gap: 7px;
   font-size: 12px;
   border: 1px solid #dce4ee;
@@ -853,7 +885,7 @@ h1 {
 .scan-button {
   margin-left: auto;
 }
-.refresh-button {
+.refresh-button, :deep(.scene-manager .refresh-button) {
   margin-left: auto;
 }
 .scan-button + .refresh-button {
@@ -878,7 +910,7 @@ h1 {
   margin-left: 12px;
   text-decoration: underline;
 }
-.table-description {
+.table-description, :deep(.scene-manager .table-description) {
   display: flex;
   gap: 20px;
   justify-content: space-between;
@@ -887,10 +919,10 @@ h1 {
   font-size: 11px;
   color: #8b9aad;
 }
-.table-description > span {
+.table-description > span, :deep(.scene-manager .table-description > span) {
   color: #65788e;
 }
-.table-description > p {
+.table-description > p, :deep(.scene-manager .table-description > p) {
   text-align: right;
   line-height: 1.7;
 }
@@ -1067,7 +1099,7 @@ td small {
   margin-bottom: 7px;
   white-space: nowrap;
 }
-.empty-state {
+.empty-state, :deep(.scene-manager .empty-state) {
   min-height: 300px;
   padding: 45px 20px;
   display: flex;
@@ -1077,12 +1109,12 @@ td small {
   gap: 15px;
   color: #9aabc1;
 }
-.empty-state strong {
+.empty-state strong, :deep(.scene-manager .empty-state strong) {
   color: #627790;
   font-size: 14px;
   font-weight: 500;
 }
-.empty-state p {
+.empty-state p, :deep(.scene-manager .empty-state p) {
   font-size: 12px;
   color: #9aa7b7;
   line-height: 1.8;
@@ -1132,10 +1164,10 @@ td small {
   .manager-header p {
     max-width: 360px;
   }
-  .search-field {
+  .search-field, :deep(.scene-manager .search-field) {
     width: 240px;
   }
-  .table-tools {
+  .table-tools, :deep(.scene-manager .table-tools) {
     gap: 8px;
   }
   .manager-note > span {
@@ -1161,10 +1193,10 @@ td small {
     padding: 0 16px;
     gap: 25px;
   }
-  .table-tools {
+  .table-tools, :deep(.scene-manager .table-tools) {
     padding: 16px;
   }
-  .search-field {
+  .search-field, :deep(.scene-manager .search-field) {
     width: 100%;
   }
   .table-tools select {
@@ -1174,12 +1206,12 @@ td small {
   .scan-button {
     margin-left: 0;
   }
-  .table-description {
+  .table-description, :deep(.scene-manager .table-description) {
     padding: 0 16px 13px;
     flex-direction: column;
     gap: 6px;
   }
-  .table-description > p {
+  .table-description > p, :deep(.scene-manager .table-description > p) {
     text-align: left;
   }
   .notice {

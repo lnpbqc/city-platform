@@ -10,6 +10,7 @@ import {
 } from '@lucide/vue'
 import { ApiError, registerAsset, saveLayer, uploadLayer } from '../api'
 import type { LayerInput, LayerKind, LayerRecord } from '../types'
+import { poiFile } from '../poi'
 
 const props = defineProps<{ editing?: LayerRecord; initial?: LayerInput }>()
 const emit = defineEmits<{ close: []; saved: [record: LayerRecord] }>()
@@ -22,6 +23,8 @@ const url = ref(initial?.url ?? '')
 const source = ref(initial?.source ?? '')
 const coordinateDescription = ref('')
 const file = ref<File | null>(null)
+const emptyPoi = ref(false)
+const createEmptyPoi = computed(() => mode.value === 'upload' && kind.value === 'geojson' && category.value === 'POI' && emptyPoi.value)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -49,7 +52,7 @@ async function submit() {
   notice.value = ''
   if (
     mode.value === 'upload' &&
-    (!file.value || file.value.size > limit.value * 1024 * 1024)
+    !createEmptyPoi.value && (!file.value || file.value.size > limit.value * 1024 * 1024)
   ) {
     error.value = !file.value
       ? '请选择数据文件'
@@ -62,7 +65,7 @@ async function submit() {
     let record: LayerRecord
     if (mode.value === 'upload') {
       const data = new FormData()
-      data.set('file', file.value!)
+      data.set('file', createEmptyPoi.value ? poiFile() : file.value!)
       data.set('name', name.value.trim())
       data.set('category', category.value.trim())
       data.set('type', kind.value)
@@ -220,7 +223,10 @@ onBeforeUnmount(() => {
               </select></label
             >
           </div>
-          <label v-if="mode === 'upload'" class="upload-area"
+          <label v-if="mode === 'upload' && kind === 'geojson' && category === 'POI'">
+            <span><input v-model="emptyPoi" type="checkbox" /> 创建空 POI 图层</span>
+          </label>
+          <label v-if="mode === 'upload' && !createEmptyPoi" class="upload-area"
             ><component
               :is="kind === 'geojson' ? FileJson : FileArchive"
               :size="30"
@@ -239,7 +245,7 @@ onBeforeUnmount(() => {
               aria-label="选择数据文件"
               @change="selectFile"
           /></label>
-          <label v-else
+          <label v-else-if="mode === 'url'"
             >数据地址<input
               v-model="url"
               required
@@ -251,7 +257,9 @@ onBeforeUnmount(() => {
           >
           <div class="form-row">
             <label
-              >分类<input v-model="category" required maxlength="80" /></label
+              >分类<input v-model.trim="category" list="layer-categories" required maxlength="80" />
+              <datalist id="layer-categories"><option value="POI" /><option value="道路" /></datalist>
+            </label
             ><label
               >来源说明<input
                 v-model="source"
@@ -287,7 +295,7 @@ onBeforeUnmount(() => {
           <button type="button" @click="controller?.abort()">取消上传</button>
         </div>
         <p v-if="mode === 'upload' && kind === '3dtiles'" class="form-hint">
-          支持已地理配准的 3D Tiles。ZIP 解压后不超过 2 GiB、10,000 个文件。
+          支持已地理配准的 3D Tiles。ZIP 解压总量不超过 2 GiB，归档条目不超过 1,000,000 项（含目录）。
         </p>
         <footer class="dialog-footer">
           <span>{{

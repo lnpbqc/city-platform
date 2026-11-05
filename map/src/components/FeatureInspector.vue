@@ -3,11 +3,17 @@ import { computed } from 'vue'
 import { X, Info } from '@lucide/vue'
 import type { Selection } from '../types'
 import { timeLabel } from '../temporal'
-const props = defineProps<{ selection: Selection | null; embedded?: boolean }>()
+import { poiAddress, poiCategory, propertyText, roadLevel } from '../poi'
+const props = defineProps<{ selection: Selection | null; embedded?: boolean; category?: string; source?: string }>()
 const emit = defineEmits<{ close: [] }>()
 const object = computed(() => props.selection?.object)
 const sourceLabels: Record<string, string> = { geometry_model: '几何模型', OSM: 'OpenStreetMap', manual: '人工', synthetic: '合成演示', dataset: '数据集' }
 const properties = computed(() => object.value?.properties && Object.keys(object.value.properties).length ? object.value.properties : props.selection?.properties ?? {})
+const isPoi = computed(() => props.category === 'POI')
+const isRoad = computed(() => !isPoi.value && (props.category === '道路' || object.value?.type === 'road' || !!propertyText(properties.value, 'highway')))
+const featureSource = computed(() => propertyText(properties.value, 'source', '来源', '資料來源', '数据来源') ||
+  (object.value?.semantic_source === 'manual' ? '人工' : props.source) ||
+  (object.value && sourceLabels[object.value.semantic_source]))
 function valueText(value: unknown) {
   return value === null
     ? '未提供'
@@ -30,7 +36,7 @@ function valueText(value: unknown) {
       </button>
     </header>
     <span v-if="!embedded" class="inspector-type">对象属性</span>
-    <h2>{{ object?.name ?? selection.title }}</h2>
+    <h2>{{ isPoi || isRoad ? object?.name || propertyText(properties, 'name', '名称', '名稱', 'name:zh') || selection.title : object?.name ?? selection.title }}</h2>
     <p class="inspector-source">{{ selection.layerName }}</p>
     <p v-if="selection.detailLoading" role="status">正在读取原始对象详情…</p>
     <p v-if="selection.detailError" class="detail-error" role="alert">{{ selection.detailError }}</p>
@@ -38,6 +44,12 @@ function valueText(value: unknown) {
       <span>{{ timeLabel(object.temporal.time, object.temporal.resolution) }} · {{ object.temporal.resolution === 'day' ? '日均' : '小时' }} · 北京时间</span>
       <strong>{{ object.temporal.missing ? '该时次缺测 / 未覆盖' : `${object.temporal.value?.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} ${object.temporal.unit}` }}</strong>
     </section>
+    <dl v-if="isPoi || isRoad" class="object-fields">
+      <div v-if="isPoi"><dt>类别</dt><dd>{{ poiCategory(properties) }}</dd></div>
+      <div v-if="isPoi"><dt>地址</dt><dd>{{ poiAddress(properties) || '未提供' }}</dd></div>
+      <div v-if="isRoad"><dt>道路等级</dt><dd>{{ roadLevel(properties) || object?.level || '未提供' }}</dd></div>
+      <div><dt>来源</dt><dd>{{ featureSource || '未提供' }}</dd></div>
+    </dl>
     <dl v-if="object" class="object-fields">
       <div><dt>object_id</dt><dd>{{ object.object_id }}</dd></div>
       <div><dt>类型</dt><dd>{{ object.type }}</dd></div>

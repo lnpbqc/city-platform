@@ -36,6 +36,11 @@ def builtin_asset_id(campus: str, layer_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"city:sample:{campus}:{layer_id}"))
 
 
+# Retain pinned versions for existing scenes without advertising the samples.
+RETIRED_LAYER_IDS = frozenset({"demo-points", "demo-roads", "demo-areas"})
+RETIRED_ASSET_IDS = tuple(builtin_asset_id(campus, layer) for campus in CAMPUS_KEYS for layer in sorted(RETIRED_LAYER_IDS))
+
+
 def builtin_asset_for_url(url: str) -> str | None:
     try:
         parsed = urlsplit(url)

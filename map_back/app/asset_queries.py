@@ -7,6 +7,7 @@ from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from .assets import asset_record
+from .builtin_assets import RETIRED_ASSET_IDS
 from .contracts import Page, StatsOverview
 from .database import get_session
 from .errors import ApiProblem
@@ -16,6 +17,7 @@ from .schemas import AssetOutput
 router = APIRouter(prefix="/api")
 SessionDep = Annotated[Session, Depends(get_session)]
 created_at = func.coalesce(Asset.uploaded_at, Asset.discovered_at)
+in_catalog = Asset.id.not_in(RETIRED_ASSET_IDS)
 
 
 @router.get("/assets", response_model=list[AssetOutput] | Page[AssetOutput])
@@ -50,12 +52,12 @@ def list_assets(
     if sort:
         known_size = case((Asset.source_kind == "external", None), else_=Asset.byte_size)
         ordering = [known_size.is_(None), known_size.desc() if sort.startswith("-") else known_size.asc(), Asset.id.asc()]
-    statement = select(Asset).where(*filters).order_by(*ordering)
+    statement = select(Asset).where(in_catalog, *filters).order_by(*ordering)
     if page is None and page_size is None:
         return [asset_record(session, asset, inspect_files=not filters and sort is None)
                 for asset in session.scalars(statement)]
     page, page_size = page or 1, page_size or 20
-    total = session.scalar(select(func.count()).select_from(Asset).where(*filters))
+    total = session.scalar(select(func.count()).select_from(Asset).where(in_catalog, *filters))
     offset = (page - 1) * page_size
     if offset >= total:
         return {"items": [], "total": total, "page": page, "page_size": page_size}
@@ -69,10 +71,10 @@ def stats_overview(session: SessionDep):
     if session.bind.dialect.name == "sqlite" and not session.in_transaction():
         session.execute(text("BEGIN"))
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    counts = dict(session.execute(select(Asset.type, func.count()).group_by(Asset.type)).all())
-    capacity = session.scalar(select(func.coalesce(func.sum(Asset.byte_size), 0)).where(Asset.source_kind != "external"))
-    recent = session.scalar(select(func.count()).select_from(Asset).where(created_at >= now - timedelta(days=7), created_at <= now))
+    counts = dict(session.execute(select(Asset.type, func.count()).where(in_catalog).group_by(Asset.type)).all())
+    capacity = session.scalar(select(func.coalesce(func.sum(Asset.byte_size), 0)).where(in_catalog, Asset.source_kind != "external"))
+    recent = session.scalar(select(func.count()).select_from(Asset).where(in_catalog, created_at >= now - timedelta(days=7), created_at <= now))
     objects = session.scalar(select(func.count()).select_from(SpatialObject).join(Asset, Asset.id == SpatialObject.asset_id)
-                             .where(Asset.status == "active", Asset.current_version == SpatialObject.asset_version))
+                             .where(in_catalog, Asset.status == "active", Asset.current_version == SpatialObject.asset_version))
     return {"asset_count": sum(counts.values()), "object_count": objects, "run_count": session.scalar(select(func.count()).select_from(Run)), "total_byte_size": capacity,
             "assets_by_type": counts, "assets_added_last_7_days": recent}

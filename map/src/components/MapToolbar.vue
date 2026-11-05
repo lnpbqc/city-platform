@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { Plus, Minus, House, Mountain, Navigation2 } from '@lucide/vue'
-defineProps<{ is2D: boolean; heading: number }>()
+import { Plus, Minus, House, Mountain, Navigation2, MapPin } from '@lucide/vue'
+defineProps<{ is2D: boolean; heading: number; addPoi?: boolean }>()
 const emit = defineEmits<{
   zoom: [direction: number]
   home: []
   mode: []
   tilt: []
   north: []
+  poi: []
 }>()
 </script>
 
 <template>
   <div class="map-tools panel" role="toolbar" aria-label="地图浏览工具">
+    <button v-if="addPoi" class="icon-button" aria-label="添加 POI" title="添加 POI" @click="emit('poi')"><MapPin :size="18" /></button>
     <button
       class="icon-button"
       aria-label="指北"

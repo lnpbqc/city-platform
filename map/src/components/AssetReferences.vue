@@ -2,7 +2,8 @@
 import type { AssetReference } from '../types'
 import { referenceGuidance, referenceType, referenceVersion } from '../assetReferences'
 
-defineProps<{ references: AssetReference[] }>()
+defineProps<{ references: AssetReference[]; sceneLinks?: boolean }>()
+const emit = defineEmits<{ scene: [id: string] }>()
 </script>
 
 <template>
@@ -12,6 +13,7 @@ defineProps<{ references: AssetReference[] }>()
       <span>ID：{{ record.id }}</span>
       <span v-if="referenceVersion(record)">{{ referenceVersion(record) }}</span>
       <p>{{ referenceGuidance(record) }}</p>
+      <button v-if="sceneLinks && record.type === 'scene'" class="text-button" @click="emit('scene', record.id)">管理此场景</button>
     </li>
   </ul>
 </template>
@@ -29,6 +31,7 @@ defineProps<{ references: AssetReference[] }>()
   border-bottom: 1px solid #e2e8f0;
   overflow-wrap: anywhere;
 }
+button { justify-self: start; }
 strong {
   font-size: 13px;
   color: #29405a;

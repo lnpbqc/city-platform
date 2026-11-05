@@ -11,15 +11,23 @@ import { useTemporalLayers } from '../composables/useTemporalLayers'
 import type { MapLayer } from '../types'
 import { prepareSceneLayers } from '../sceneLayers'
 import type { MapController } from '../mapController'
-import type { CameraState } from '../mapNavigation'
+import { validCamera, type CameraState, type NavigationReading } from '../mapNavigation'
 import type { SceneLayerState, SceneRecord } from '../simulationTypes'
 import type { WorkspaceAddress, WorkspaceCapture } from '../workspaceState'
 import { workspaceError } from '../workspaceState'
 import { demoRegion } from '../regions'
 
 const props = defineProps<{ active: boolean; layers: MapLayer[]; backend: 'loading' | 'online' | 'offline'; recovery?: number }>()
-const emit = defineEmits<{ ready: []; changed: []; runChanged: [] }>()
-const initialCamera: CameraState = { longitude: 113.364, latitude: 23.043, height: 1400, heading: 0, pitch: -Math.PI / 2, roll: 0, scene_mode: '3d' }
+const emit = defineEmits<{ ready: []; runChanged: [] }>()
+const cameraStorageKey = 'city.simulation.camera.v1'
+function storedCamera(): CameraState | null {
+  try {
+    const camera: unknown = JSON.parse(window.localStorage.getItem(cameraStorageKey) ?? 'null')
+    return validCamera(camera) ? camera : null
+  } catch { return null }
+}
+const localCamera = storedCamera()
+const initialCamera: CameraState = localCamera ?? { longitude: 113.364, latitude: 23.043, height: 1400, heading: 0, pitch: -Math.PI / 2, roll: 0, scene_mode: '3d' }
 let controller: MapController | undefined
 const currentLayers = (): SceneLayerState[] => props.layers.filter(layer => layer.id === 'basemap' || layer.asset_id && layer.asset_version).map((layer, index) => ({
   layer_id: layer.id, asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
@@ -59,20 +67,25 @@ watch(() => props.backend, value => {
   if (value !== 'loading' && !initialized) {
     initialized = true
     void initialize().finally(() => {
+      if (localCamera && alive) controller?.setCamera(localCamera)
       initializationFinished.value = true
       if (!draft.value.current_time && time.value) draft.value.current_time = time.value
       announceReady(); void recoverWorkspace()
     })
   }
 }, { immediate: true })
-watch(() => props.active, async active => { if (active) { await nextTick(); controller?.resume() } else temporal.pause() })
+watch(() => props.active, async active => {
+  if (!active) { temporal.pause(); return }
+  await nextTick()
+  controller?.resume()
+  if (initializationFinished.value) void simulation.refreshCatalogs()
+})
 watch(() => draft.value.camera, camera => { controller?.setCamera(camera) })
 watch(() => draft.value.current_time, value => {
   if (value && value !== time.value) temporal.setTime(value)
   else if (!value) { if (times.value[0]) temporal.setTime(times.value[0]); else time.value = '' }
 })
 watch(time, value => { if (initializationFinished.value) draft.value.current_time = value || null })
-watch([time, resolution, sceneId, sceneVersion, loading, saving, submitting, submissionPending, () => run.value?.run_id, () => JSON.stringify(draft.value)], changed)
 watch(() => props.recovery, () => { recoveryPending = true; void recoverWorkspace() })
 watch([loading, saving, submitting, cancelling, submissionPending], () => { void recoverWorkspace() })
 watch(historyRevision, () => emit('runChanged'))
@@ -128,7 +141,7 @@ async function syncLayers(prepared: MapLayer[] = []) {
 watch(() => JSON.stringify(draft.value.layers), () => { if (!restoringWorkspace) void syncLayers() })
 function ready(value: MapController) {
   controller = value
-  controller.initialize(demoRegion, draft.value.camera)
+  controller.initialize(demoRegion, localCamera ?? draft.value.camera)
   void syncLayers()
   paint()
   controller.showReplay(replayPositions.value)
@@ -152,7 +165,10 @@ async function recoverWorkspace() {
 function isReady() { return !!controller && initializationFinished.value && alive }
 function canCapture() { return isReady() && !restoringWorkspace && !loading.value && !saving.value && !submitting.value && !submissionPending.value }
 function announceReady() { if (isReady()) emit('ready') }
-function changed() { if (isReady()) emit('changed') }
+function onNavigation(value: NavigationReading, settled: boolean) {
+  if (!settled || !props.active) return
+  try { window.localStorage.setItem(cameraStorageKey, JSON.stringify(value.camera)) } catch { /* Browser storage may be disabled. */ }
+}
 function captureWorkspace(): WorkspaceCapture {
   if (!canCapture()) throw workspaceError('仿真画面正在读取、保存或确认提交，请完成后保存画面')
   const camera = controller!.getCamera()
@@ -234,7 +250,7 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
 
 <template>
   <section class="simulation-workspace" aria-label="仿真推演工作区">
-    <MapCanvas @ready="ready" @navigation="(_value, settled) => { if (settled) changed() }" @notice="notice = $event" @fatal="mapError = $event" />
+    <MapCanvas @ready="ready" @navigation="onNavigation" @notice="notice = $event" @fatal="mapError = $event" />
     <aside class="simulation-config panel" aria-label="仿真配置">
       <header><div><span class="eyebrow">SIMULATION</span><h1>仿真推演</h1></div><button class="icon-button" aria-label="新建场景" :disabled="configurationLocked" @click="newScene(); preview = true"><Plus :size="18" /></button></header>
       <p class="synthetic">{{ network?.synthetic ? '合成演示 · 校区附近路网' : '版本化路网' }}</p>

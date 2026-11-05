@@ -19,7 +19,7 @@ from .database import FILES_DIR, STORAGE_DIR
 from .models import Asset, AssetVersion, Layer, Run, RunAssetReference, Scene, SceneAssetReference
 from .errors import ApiProblem
 from .asset_metadata import build_metadata
-from .builtin_assets import builtin_asset_files, builtin_asset_for_url
+from .builtin_assets import RETIRED_ASSET_IDS, builtin_asset_files, builtin_asset_for_url
 
 _deletion_lock = Lock()
 
@@ -329,7 +329,8 @@ def reconcile(session: Session):
             elif parts and session.get(Asset, parts[0]):
                 bind_asset_version(session, layer, parts[0])
     session.commit()
-    return {"assets": [asset_record(session, item) for item in session.scalars(select(Asset).order_by(Asset.discovered_at.desc()))], "discovered": discovered}
+    return {"assets": [asset_record(session, item) for item in session.scalars(
+        select(Asset).where(Asset.id.not_in(RETIRED_ASSET_IDS)).order_by(Asset.discovered_at.desc()))], "discovered": discovered}
 
 
 def delete_asset(session: Session, identity: str):

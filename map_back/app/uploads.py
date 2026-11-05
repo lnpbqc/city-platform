@@ -11,7 +11,7 @@ from .spatial import parse_geometry
 GEOJSON_LIMIT = 10 * 1024 * 1024
 ZIP_LIMIT = 512 * 1024 * 1024
 EXPANDED_LIMIT = 2 * 1024 * 1024 * 1024
-FILE_LIMIT = 10_000
+FILE_LIMIT = 1_000_000
 
 
 def invalid(message: str):
@@ -39,7 +39,7 @@ def read_json(path: Path):
         invalid(f"{path.name} 不是有效的 UTF-8 JSON")
 
 
-def validate_geojson(path: Path):
+def validate_geojson(path: Path, *, point_only: bool = False):
     data = read_json(path)
     if not isinstance(data, dict) or data.get("type") != "FeatureCollection" or not isinstance(data.get("features"), list):
         invalid("GeoJSON 必须为 FeatureCollection")
@@ -71,6 +71,8 @@ def validate_geojson(path: Path):
         if feature.get("properties") is not None and not isinstance(feature["properties"], dict):
             invalid("Feature properties 必须为对象或 null")
         geometry = feature.get("geometry")
+        if point_only and (not isinstance(geometry, dict) or geometry.get("type") != "Point"):
+            invalid("POI 图层只接受 WGS84 Point 要素")
         if geometry is None:
             continue
         if not isinstance(geometry, dict) or geometry.get("type") not in depths:
@@ -97,7 +99,7 @@ def extract_tiles(archive: Path, destination: Path):
         with ZipFile(archive) as bundle:
             entries = bundle.infolist()
             if len(entries) > FILE_LIMIT:
-                invalid("ZIP 文件数超过 10,000 上限")
+                invalid(f"ZIP 文件数超过 {FILE_LIMIT:,} 上限")
             if sum(item.file_size for item in entries) > EXPANDED_LIMIT:
                 raise HTTPException(413, f"ZIP 解压总量超过 {EXPANDED_LIMIT // 1024 // 1024} MiB")
             seen = set()

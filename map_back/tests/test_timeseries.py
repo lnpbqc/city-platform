@@ -206,17 +206,16 @@ def test_old_series_stays_pinned_when_current_version_has_no_observations(tempor
     latest = client.get("/api/timeseries", params={"layer_id": "demo-points", "time": TIMES[0], "version": "2.0.0"})
     assert latest.status_code == 409 and latest.json()["code"] == "TIMESERIES_UNAVAILABLE"
     catalog = {item["id"]: item for item in client.get("/api/layers/catalog").json()}
-    assert catalog["demo-points"]["static"] is True
+    assert "demo-points" not in catalog
 
 
 def test_catalog_marks_only_observed_versions_dynamic_and_exposes_matching_legends(temporal_client):
+    layer = custom_snapshot(temporal_client)
     rows = {item["id"]: item for item in temporal_client.get("/api/layers/catalog").json()}
-    assert {identity for identity, item in rows.items() if not item["static"]} == {"demo-points", "demo-roads", "demo-areas"}
+    assert {identity for identity, item in rows.items() if not item["static"]} == {layer["id"]}
     colors = ["#dbeafe", "#93c5fd", "#3b82f6", "#1d4ed8", "#94a3b8"]
-    assert [item["color"] for item in rows["demo-points"]["legend"]] == colors
-    assert [item["label"] for item in rows["demo-roads"]["legend"]] == ["0 辆/小时", "0–100 辆/小时", "100–300 辆/小时", ">300 辆/小时", "缺测"]
-    assert rows["demo-points"]["legend"][3]["value"] == "32–32"
-    assert rows["demo-roads"]["unit"] == "辆/小时"
+    assert [item["color"] for item in rows[layer["id"]]["legend"]] == colors
+    assert rows[layer["id"]]["unit"] == "cm"
 
 
 def test_startup_is_idempotent_preserves_original_ids_urls_fingerprints_and_published_files(temporal_client):

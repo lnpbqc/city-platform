@@ -5,7 +5,7 @@ import type { AssetDetail } from '../types'
 import AssetReferences from './AssetReferences.vue'
 
 defineProps<{ asset: AssetDetail | null; busy: boolean; error: string }>()
-const emit = defineEmits<{ close: []; retry: [] }>()
+const emit = defineEmits<{ close: []; retry: []; scene: [id: string] }>()
 const dialog = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
 function bytes(value: number | null) {
@@ -146,7 +146,7 @@ onBeforeUnmount(() => {
                   : '没有引用，可重新登记或删除文件。'
             }}
           </p>
-          <AssetReferences v-else :references="asset.references" />
+          <AssetReferences v-else :references="asset.references" scene-links @scene="emit('scene', $event)" />
         </section>
         <section class="detail-section">
           <h3>

@@ -91,6 +91,13 @@ export const saveLayer = (body: LayerInput, id?: string) =>
   })
 export const deleteLayer = (id: string) =>
   request<void>(`/api/layers/${id}`, { method: 'DELETE' })
+export function savePoiData(id: string, assetId: string, version: string, file: File) {
+  const body = new FormData()
+  body.set('file', file)
+  body.set('asset_id', assetId)
+  body.set('version', version)
+  return request<LayerRecord>(`/api/layers/${encodeURIComponent(id)}/poi-data`, { method: 'PUT', body })
+}
 export interface UploadOptions {
   signal?: AbortSignal
   onProgress?: (loaded: number, total: number) => void
@@ -185,8 +192,8 @@ export const selectObjects = (query: ObjectQuery, geometry: GeometryDocument, si
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...query, geometry }), signal,
   })
-export const getScenes = (query: { page?: number; page_size?: number } = {}, signal?: AbortSignal) =>
-  request<Page<SceneRecord>>(`/api/scenes?page=${encodeURIComponent(query.page ?? 1)}&page_size=${encodeURIComponent(query.page_size ?? 20)}`, { signal })
+export const getScenes = (query: { page?: number; page_size?: number; q?: string } = {}, signal?: AbortSignal) =>
+  request<Page<SceneRecord>>(`/api/scenes?page=${encodeURIComponent(query.page ?? 1)}&page_size=${encodeURIComponent(query.page_size ?? 20)}${query.q ? `&q=${encodeURIComponent(query.q)}` : ''}`, { signal })
 export const getScene = (id: string, signal?: AbortSignal, version?: number) =>
   request<SceneRecord>(`/api/scenes/${encodeURIComponent(id)}${version === undefined ? '' : `?version=${encodeURIComponent(version)}`}`, { signal })
 export const saveScene = (body: SceneInput, id?: string, version?: number, signal?: AbortSignal) =>

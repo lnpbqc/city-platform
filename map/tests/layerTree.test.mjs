@@ -9,11 +9,11 @@ const layers = [
   { id: 'roads', category: '道路', name: '路', attached: true, order: 3, orderable: true, object_count: 2 },
   { id: 'areas', category: '专题', name: '面', attached: true, order: 4, orderable: true, object_count: null },
 ]
-test('fixed six groups include empty categories and preserve directory order within groups', () => {
+test('fixed groups include empty categories and preserve directory order within groups', () => {
   const groups = layerGroups([...layers].reverse())
-  assert.deepEqual(groups.map(group => group.category), ['底图', '建筑', '道路', '水体', '专题', '仿真结果'])
-  assert.deepEqual(groups[4].layers.map(layer => layer.id), ['points', 'areas'])
-  assert.deepEqual(groups[3].layers, [])
+  assert.deepEqual(groups.map(group => group.category), ['底图', '建筑', '道路', 'POI', '水体', '专题', '仿真结果'])
+  assert.deepEqual(groups.find(group => group.category === '专题').layers.map(layer => layer.id), ['points', 'areas'])
+  assert.deepEqual(groups.find(group => group.category === 'POI').layers, [])
 })
 test('order controls skip non-orderable and detached layers and use the complete directory index', () => {
   const source = [...layers, { id: 'detached', attached: false, order: 5, orderable: true }]

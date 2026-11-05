@@ -7,7 +7,8 @@ import json
 from uuid import uuid4
 
 from app.database import FILES_DIR, SessionLocal
-from app.models import Layer
+from app.models import BuiltinLayerState, Layer
+from app.builtin_assets import RETIRED_ASSET_IDS
 
 
 def catalog(client, campus="university-town"):
@@ -19,15 +20,10 @@ def catalog(client, campus="university-town"):
 def test_catalog_exposes_grouped_defaults_pinned_versions_legends_and_depth_rules(client):
     rows = catalog(client)
     by_id = {row["id"]: row for row in rows}
-    assert len(rows) == 6
+    assert set(by_id) == {"basemap", "campus-buildings", "demo-buildings"}
     assert by_id["basemap"]["category"] == "底图"
     assert by_id["campus-buildings"]["category"] == "建筑"
-    assert by_id["demo-roads"]["category"] == "道路"
-    assert by_id["demo-points"]["category"] == "专题"
-    assert by_id["demo-points"]["unit"] == by_id["demo-areas"]["unit"] == "cm"
-    assert by_id["demo-roads"]["unit"] == "辆/小时"
     assert not by_id["campus-buildings"]["orderable"] and not by_id["demo-buildings"]["orderable"]
-    assert by_id["demo-roads"]["orderable"]
     assert all(row["static"] and isinstance(row["object_count"], int) for row in rows)
     assert by_id["basemap"]["object_count"] == 0 and by_id["demo-buildings"]["object_count"] == 1
     for row in rows:
@@ -40,20 +36,33 @@ def test_catalog_exposes_grouped_defaults_pinned_versions_legends_and_depth_rule
     assert client.get("/api/layers").json() == []
 
 
+def test_retired_samples_are_hidden_in_both_catalogs_even_with_saved_map_state(client):
+    with SessionLocal() as session:
+        session.add(BuiltinLayerState(id="demo-roads", map_attached=True, map_visible=True, map_opacity=1, map_order=2))
+        session.commit()
+    for campus in ("university-town", "huangpu"):
+        assert {row["id"] for row in catalog(client, campus)} == {"basemap", "campus-buildings", "demo-buildings"}
+    assert client.patch("/api/layers/catalog/demo-roads/map-state", json={"map_visible": True}).status_code == 404
+    assert set(RETIRED_ASSET_IDS).isdisjoint(row["id"] for row in client.get("/api/assets").json())
+    assert client.get("/api/assets", params={"page_size": 20}).json()["total"] == 4
+    assert client.get("/api/stats/overview").json()["asset_count"] == 4
+    assert client.get(f"/api/assets/{RETIRED_ASSET_IDS[0]}/versions/1.0.0").status_code == 200
+
+
 def test_campus_switch_changes_only_default_asset_bindings_and_keeps_default_state(client):
     original = {row["id"]: row for row in catalog(client)}
-    response = client.patch("/api/layers/catalog/demo-roads/map-state", json={"map_attached": False, "map_visible": False, "map_opacity": 0.4})
+    response = client.patch("/api/layers/catalog/campus-buildings/map-state", json={"map_attached": False, "map_visible": False, "map_opacity": 0.4})
     assert response.status_code == 200, response.text
     alternate = {row["id"]: row for row in catalog(client, "huangpu")}
     assert alternate.keys() == original.keys()
-    assert alternate["demo-roads"]["asset"] != original["demo-roads"]["asset"]
-    assert alternate["demo-roads"]["url"].startswith("/samples/huangpu/")
-    assert not alternate["demo-roads"]["map_attached"] and not alternate["demo-roads"]["map_visible"]
-    assert alternate["demo-roads"]["map_opacity"] == 0.4
+    assert alternate["campus-buildings"]["asset"] != original["campus-buildings"]["asset"]
+    assert alternate["campus-buildings"]["url"].startswith("/samples/huangpu/")
+    assert not alternate["campus-buildings"]["map_attached"] and not alternate["campus-buildings"]["map_visible"]
+    assert alternate["campus-buildings"]["map_opacity"] == 0.4
     with TestClient(app) as restarted:
         restored = {row["id"]: row for row in catalog(restarted)}
-    assert not restored["demo-roads"]["map_attached"] and restored["demo-roads"]["map_opacity"] == 0.4
-    assert len(restored) == 6
+    assert not restored["campus-buildings"]["map_attached"] and restored["campus-buildings"]["map_opacity"] == 0.4
+    assert len(restored) == 3
 
 
 def test_custom_registration_joins_catalog_and_state_is_compatible_with_legacy_api(client):
@@ -72,7 +81,7 @@ def test_custom_registration_joins_catalog_and_state_is_compatible_with_legacy_a
     client.patch(f"/api/layers/{layer['id']}/map-state", json={"map_visible": True})
     assert next(row for row in catalog(client) if row["id"] == layer["id"])["map_visible"]
     assert client.delete(f"/api/layers/{layer['id']}").status_code == 204
-    assert len(catalog(client)) == 6
+    assert len(catalog(client)) == 3
 
 
 def test_catalog_rejects_unknown_ids_bad_campus_and_three_dimensional_reorder(client):
@@ -82,11 +91,11 @@ def test_catalog_rejects_unknown_ids_bad_campus_and_three_dimensional_reorder(cl
     response = client.patch("/api/layers/catalog/demo-buildings/map-state", json={"order": 0})
     assert response.status_code == 422 and response.json()["code"] == "ORDER_UNSUPPORTED"
     for payload in ({"map_opacity": 1.1}, {"order": -1}, {"order": None}, {"order": 100}, {"map_visible": None}):
-        assert client.patch("/api/layers/catalog/demo-roads/map-state", json=payload).status_code == 422
+        assert client.patch("/api/layers/catalog/campus-buildings/map-state", json=payload).status_code == 422
 
 
 def test_referencing_builtin_entry_protects_versions_and_removing_registration_keeps_library(client):
-    row = next(row for row in catalog(client) if row["id"] == "demo-points")
+    row = next(row for row in catalog(client) if row["id"] == "campus-buildings")
     response = client.post("/api/layers", json={"name": "复用默认样例", "type": "geojson", "url": row["url"]})
     assert response.status_code == 201, response.text
     layer = response.json()
@@ -96,7 +105,7 @@ def test_referencing_builtin_entry_protects_versions_and_removing_registration_k
     assert client.get(f"http://testserver{row['url']}").status_code == 200
     duplicate = client.post("/api/assets/register", json={"name": "默认入口重复登记", "type": "geojson", "location": "http://localhost:8000" + row["url"]})
     assert duplicate.status_code == 409 and duplicate.json()["detail"]["asset_id"] == layer["asset_id"]
-    assert next(row for row in catalog(client) if row["id"] == "demo-points")["asset"]["asset_id"] == layer["asset_id"]
+    assert next(row for row in catalog(client) if row["id"] == "campus-buildings")["asset"]["asset_id"] == layer["asset_id"]
     for location in ("/samples/../private.json", "/samples/unknown/data.geojson"):
         assert client.post("/api/layers", json={"name": "非法入口", "type": "geojson", "url": location}).status_code == 422
 

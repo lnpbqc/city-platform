@@ -20,6 +20,7 @@ beforeEach(() => {
 })
 mock.module('../src/api.ts', { exports: {
   ApiError: class extends Error {},
+  getScenes: async () => ({ items: [], total: 4 }),
   getAssetPage: query => { calls.pages.push({ ...query }); return list(query) },
   getStats: () => { calls.statistics++; return statistics() },
   getAsset: async id => { calls.detail.push(id); return { ...asset, id, files: [], file_checksums: [] } },
@@ -60,6 +61,18 @@ async function setup(t, props = {}) {
   app.mount(root); t.after(() => app.unmount()); await flush()
   return { state: app._instance.setupState, props: app._instance.props, text: () => text(root) }
 }
+
+test('scene references open the scene tab with the exact ID and show the scene count', async t => {
+  const ctx = await setup(t)
+  assert.match(ctx.text(), /场景\s*4/)
+  await ctx.state.openDetail(asset.id)
+  ctx.state.showScene('scene-from-asset')
+  await flush()
+  assert.equal(ctx.state.tab, 'scenes')
+  assert.equal(ctx.state.sceneQuery, 'scene-from-asset')
+  assert.equal(ctx.state.detailId, '')
+  assert.equal(calls.writes, 0)
+})
 
 test('entering and recovery refresh current filters, page and open detail without any writes', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })

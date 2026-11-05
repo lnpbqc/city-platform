@@ -198,7 +198,7 @@ test('switching campuses replaces only attached builtins and preserves user data
   const { samplesForCampus } = await import('../src/types.ts')
   const builtinRecords = (campus) => samplesForCampus(campus).map((item) => ({
     ...item, builtin: true, asset: { asset_id: `${campus}-${item.id}`, version: '1.0.0' },
-    map_attached: item.id !== 'demo-areas', map_visible: item.id !== 'demo-points', map_opacity: item.id === 'demo-points' ? 0.35 : 1,
+    map_attached: item.id !== 'demo-buildings', map_visible: item.id !== 'campus-buildings', map_opacity: item.id === 'campus-buildings' ? 0.35 : 1,
   }))
   records = [...builtinRecords('university-town'), record]
   getLayersResult = (campus) => structuredClone([...builtinRecords(campus), record])
@@ -207,10 +207,10 @@ test('switching campuses replaces only attached builtins and preserves user data
   const builtins = catalog.layers.value.filter((layer) => layer.builtin)
   for (const layer of builtins)
     Object.assign(layer, { attached: true, status: 'ready' })
-  const points = builtins.find((layer) => layer.id === 'demo-points')
-  points.visible = false
-  points.opacity = 0.35
-  const detached = builtins.find((layer) => layer.id === 'demo-areas')
+  const buildings = builtins.find((layer) => layer.id === 'campus-buildings')
+  buildings.visible = false
+  buildings.opacity = 0.35
+  const detached = builtins.find((layer) => layer.id === 'demo-buildings')
   detached.attached = false
   const user = catalog.layers.value.find((layer) => layer.id === record.id)
   Object.assign(user, { attached: true, status: 'ready', opacity: 0.6 })
@@ -221,17 +221,17 @@ test('switching campuses replaces only attached builtins and preserves user data
     builtins.every((layer) => layer.url.startsWith('/samples/huangpu/')),
   )
   assert.ok(builtins.every((layer) => layer.source.includes('黄埔校区')))
-  assert.equal(calls.load, beforeLoad + 4)
-  assert.equal(points.visible, false)
-  assert.equal(points.opacity, 0.35)
+  assert.equal(calls.load, beforeLoad + 1)
+  assert.equal(buildings.visible, false)
+  assert.equal(buildings.opacity, 0.35)
   assert.equal(detached.attached, false)
   assert.deepEqual({ ...user }, beforeUser)
   await catalog.switchCampus('huangpu')
-  assert.equal(calls.load, beforeLoad + 4)
+  assert.equal(calls.load, beforeLoad + 1)
   await catalog.switchCampus('university-town')
-  assert.equal(calls.load, beforeLoad + 8)
-  assert.equal(points.visible, false)
-  assert.equal(points.opacity, 0.35)
+  assert.equal(calls.load, beforeLoad + 2)
+  assert.equal(buildings.visible, false)
+  assert.equal(buildings.opacity, 0.35)
   assert.equal(detached.attached, false)
   assert.deepEqual({ ...user }, beforeUser)
   app.unmount()
@@ -500,7 +500,8 @@ test('initial offline sample fallback loads local samples without fabricating as
   await catalog.controllerReady()
   assert.equal(catalog.backend.value, 'offline')
   assert.match(catalog.catalogError.value, /服务离线/)
-  assert.equal(calls.load, 4)
+  assert.equal(calls.load, 1)
+  assert.deepEqual(catalog.layers.value.map(layer => layer.id), ['campus-buildings', 'demo-buildings'])
   assert.ok(catalog.layers.value.every((layer) => layer.builtin && !layer.asset_id))
   catalog.removeFromMap(catalog.layers.value[0])
   await flush()

@@ -22,6 +22,8 @@ import {
   ClassificationType,
   Credit,
   EllipsoidGeodesic,
+  DistanceDisplayCondition,
+  LabelGraphics,
 } from 'cesium'
 import type { MapLayer, Selection, GeometryDocument, ObjectRecord } from './types'
 import type { PolygonGraphics } from 'cesium'
@@ -37,6 +39,7 @@ import { simulationGeometry } from './simulationGeometry.ts'
 import type { NetworkRecord, RunResult } from './simulationTypes'
 import type { TimeSeriesRecord } from './temporalTypes'
 import { temporalColor } from './temporal.ts'
+import { poiCategory, poiGlyph, propertyText, roadLevel, roadWidth } from './poi.ts'
 
 type Resource = GeoJsonDataSource | Cesium3DTileset
 type Entry = { version: number; resource?: Resource; abort: AbortController; cleanup: (() => void)[]; objectIds?: string[]; temporal?: TimeSeriesRecord | null }
@@ -572,6 +575,10 @@ export function createMapController(
     else {
       const color = Color.fromCssColorString(layer.color)
       for (const entity of resource.entities.values) {
+        if (layer.category === 'POI' && entity.label) {
+          entity.label.fillColor = new ConstantProperty(Color.WHITE.withAlpha(layer.opacity))
+          entity.label.backgroundColor = new ConstantProperty(Color.fromCssColorString('#243648').withAlpha(layer.opacity * 0.85))
+        }
         if (entity.point) {
           entity.point.color = new ConstantProperty(
             color.withAlpha(layer.opacity),
@@ -697,17 +704,28 @@ export function createMapController(
         if (!current()) return
         const buildings: { polygon: PolygonGraphics; height: number }[] = []
         for (const entity of pending.entities.values) {
+          const properties = entity.properties?.getValue?.(viewer.clock.currentTime) ?? {}
           if (entity.billboard) {
+            const glyph = layer.category === 'POI' ? poiGlyph(poiCategory(properties)) : ''
             entity.billboard.image = new ConstantProperty(
-              `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="${layer.color}" stroke="white" stroke-width="3"/></svg>`)}`,
+              `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="${glyph ? 10 : 8}" fill="${layer.color}" stroke="white" stroke-width="${glyph ? 1.5 : 3}"/>${glyph ? `<text x="12" y="16" text-anchor="middle" fill="white" font-size="12">${glyph}</text>` : ''}</svg>`)}`,
             )
             entity.billboard.width = new ConstantProperty(20)
             entity.billboard.height = new ConstantProperty(20)
             entity.billboard.verticalOrigin = new ConstantProperty(VerticalOrigin.BOTTOM)
             entity.billboard.heightReference = new ConstantProperty(HeightReference.CLAMP_TO_TERRAIN)
             entity.billboard.disableDepthTestDistance = new ConstantProperty(0)
+            const name = glyph && propertyText(properties, 'name', '名称', '名稱', 'name:zh')
+            if (name) entity.label = new LabelGraphics({
+              text: name, font: '13px sans-serif', showBackground: true,
+              heightReference: HeightReference.CLAMP_TO_TERRAIN,
+              pixelOffset: new Cartesian2(0, -26), distanceDisplayCondition: new DistanceDisplayCondition(0, 1800),
+            })
           }
           if (entity.polyline) {
+            const level = roadLevel(properties)
+            if (layer.category === '道路' || layer.id === 'demo-roads' || propertyText(properties, 'highway'))
+              entity.polyline.width = new ConstantProperty(roadWidth(level))
             entity.polyline.clampToGround = new ConstantProperty(true)
             entity.polyline.classificationType = new ConstantProperty(
               ClassificationType.TERRAIN,

@@ -17,4 +17,4 @@ __pycache__/
 /.verification/
 /.playwright-cli/
 /待办/
-/outputs/
+/output/

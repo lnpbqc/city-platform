@@ -1,9 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readWorkspaceAddress, workspaceURL } from '../src/workspaceState.ts'
+import { mapViewURL, readWorkspaceAddress, workspaceURL } from '../src/workspaceState.ts'
 import { getScene } from '../src/api.ts'
 
 const camera = { longitude: 113.364, latitude: 23.043, height: 1400, heading: 0.4, pitch: -1.4, roll: 0.1, scene_mode: '3d' }
+test('map view links replace snapshot parameters with just camera and region', () => {
+  const url = new URL(mapViewURL({ camera, region: { id: 'demo-university-town' } },
+    'http://localhost:5173/?custom=keep&scene=old&v=2&run=old&t=old&resolution=day&compare_t=old&compare_resolution=day#/simulation'))
+  assert.deepEqual([...url.searchParams.keys()], ['custom', 'camera', 'region'])
+  assert.equal(url.hash, '#/map')
+  assert.deepEqual(readWorkspaceAddress(url), { page: 'map', region_id: 'demo-university-town', camera,
+    scene_id: undefined, scene_version: undefined, run_id: undefined, time: undefined, resolution: 'hour', comparison: null })
+  url.searchParams.set('scene', 'mixed')
+  assert.throws(() => readWorkspaceAddress(url), cause => cause.code === 'INVALID_WORKSPACE_LINK')
+})
 test('full map and simulation URLs round-trip fixed references, camera and independent times', () => {
   for (const page of ['map', 'simulation']) {
     const state = { page, scene_id: 'scene/id', scene_version: 3, run_id: page === 'simulation' ? 'run/id' : null,

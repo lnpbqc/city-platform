@@ -5,6 +5,7 @@ import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
 import * as temporal from '../src/temporal.ts'
+import * as poi from '../src/poi.ts'
 
 function component(name) {
   const { descriptor } = parse(readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8'))
@@ -14,6 +15,7 @@ function component(name) {
   new Function('require', 'exports', js)(path => {
     if (path === 'vue') return vue
     if (path === '../temporal') return temporal
+    if (path === '../poi') return poi
     if (path === './FeatureInspector.vue') return component('FeatureInspector')
     if (path === '@lucide/vue') return new Proxy({}, { get: () => () => null })
     throw new Error(path)

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
+import * as poi from '../src/poi.ts'
 
 const source = await readFile(new URL('../src/components/MapWorkspace.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
@@ -43,6 +44,7 @@ function setup(options = {}) {
     if (name === '../composables/useObjects') return { useObjects: () => objects }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
     if (name === '../linkedCameras') return { linkedCameras: () => () => {} }
+    if (name === '../poi') return poi
     if (name === '../sceneLayers') return {
       captureLayers: layers => layers.map(layer => ({ layer_id: layer.id, asset: { asset_id: layer.asset_id, version: layer.asset_version }, map_attached: layer.attached, map_visible: layer.visible, map_opacity: layer.opacity })),
       prepareSceneLayers: options.prepare ?? (async states => states.map(state => ({ id: state.layer_id, asset_id: state.asset.asset_id, asset_version: state.asset.version, map_attached: state.map_attached, visible: state.map_visible, opacity: state.map_opacity, order: state.order, attached: false }))),

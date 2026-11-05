@@ -130,7 +130,7 @@ def test_historical_run_may_reference_a_captured_scene_but_its_state_run_must_ma
     assert client.get(f"/api/runs/{run['run_id']}").json() == run
 
 
-def test_scene_version_reads_reject_stale_urls_and_dead_bookmarks_remain_listed(client):
+def test_scene_version_reads_reject_stale_urls_and_bookmarks_block_deletion(client):
     scene = client.post("/api/scenes", json=draft()).json()
     item = save_bookmark(client, workspace(scene)).json()
     endpoint = f"/api/scenes/{scene['id']}"
@@ -143,10 +143,12 @@ def test_scene_version_reads_reject_stale_urls_and_dead_bookmarks_remain_listed(
     assert client.get(endpoint).json() == updated
     assert client.get(endpoint, params={"version": 2}).headers["etag"] == '"2"'
     assert client.get("/api/bookmarks").json() == [item]
-    assert client.delete(endpoint, headers={"If-Match": '"2"'}).status_code == 204
-    assert client.get(endpoint, params={"version": 1}).json()["code"] == "SCENE_NOT_FOUND"
+    blocked = client.delete(endpoint, headers={"If-Match": '"2"'})
+    assert blocked.status_code == 409 and blocked.json()["code"] == "SCENE_BOOKMARKED"
     assert client.get("/api/bookmarks").json() == [item]
     assert client.delete(f"/api/bookmarks/{item['id']}").status_code == 204
+    assert client.delete(endpoint, headers={"If-Match": '"2"'}).status_code == 204
+    assert client.get(endpoint, params={"version": 1}).json()["code"] == "SCENE_NOT_FOUND"
 
 
 @pytest.mark.parametrize("version", [0, -1, "not-a-version", 1.5])

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { X, Scan, Pentagon, Search, ArrowLeft } from '@lucide/vue'
 import FeatureInspector from './FeatureInspector.vue'
 import type { MapLayer, ObjectRecord, Selection } from '../types'
@@ -8,15 +8,18 @@ const props = defineProps<{
   layers: MapLayer[]; layerId: string; items: ObjectRecord[]; total: number; page: number; pageSize: number
   loading: boolean; error: string; q: string; type: string; selectedId: string; selection: Selection | null
   area: boolean; drawing: 'box' | 'polygon' | null; progress: { loaded: number; total: number } | null
+  editPoi?: boolean
 }>()
 const emit = defineEmits<{
   close: []; layer: [id: string]; page: [page: number]; select: [item: ObjectRecord]; apply: []
   'update:q': [value: string]; 'update:type': [value: string]
   draw: [mode: 'box' | 'polygon']; finish: []; cancel: []; clearArea: []; clearSelection: []; retry: []
+  editPoi: []
 }>()
 const results = ref<HTMLElement>()
 const details = ref<HTMLElement>()
 const back = ref<HTMLButtonElement>()
+const selectionLayer = computed(() => props.layers.find(layer => layer.id === props.selection?.layerId))
 let lastObjectId = ''
 watch(() => props.selection ? `${props.selection.layerId}:${props.selection.objectId ?? props.selection.title}` : '', async (identity, previous) => {
   if (props.selectedId) lastObjectId = props.selectedId
@@ -73,7 +76,8 @@ watch(() => props.selection ? `${props.selection.layerId}:${props.selection.obje
     </div>
     <button v-if="selection" ref="back" class="object-back" @click="emit('clearSelection')"><ArrowLeft :size="15" />返回查询结果</button>
     <div v-if="selection" ref="details" class="object-details">
-      <FeatureInspector :selection="selection" embedded />
+      <FeatureInspector :selection="selection" :category="selectionLayer?.category" :source="selectionLayer?.source" embedded />
+      <button v-if="editPoi" class="object-back" @click="emit('editPoi')">编辑 POI</button>
     </div>
   </section>
 </template>

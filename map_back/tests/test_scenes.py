@@ -88,6 +88,10 @@ def test_scene_catalog_pagination_unknown_and_confirmed_delete(client):
     rows = client.get("/api/scenes?page_size=2").json()
     later = client.get("/api/scenes?page_size=2&page=2").json()
     assert rows["total"] == 3 and set(ids) == {item["id"] for item in rows["items"] + later["items"]}
+    for search in (ids[1], " 1 "):
+        found = client.get("/api/scenes", params={"q": search, "page_size": 1}).json()
+        assert found["total"] == 1 and found["items"][0]["id"] == ids[1]
+    assert client.get("/api/scenes", params={"q": "%"}).json()["total"] == 0
     assert client.get("/api/scenes?page=9999999999999999999999999").json()["items"] == []
     for query in ["page=0", "page_size=101"]:
         assert client.get("/api/scenes?" + query).status_code == 422

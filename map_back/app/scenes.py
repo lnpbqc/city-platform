@@ -5,14 +5,14 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Response
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_asset_id
 from .contracts import Page, SceneInput, SceneOutput
 from .database import get_session
 from .errors import ApiProblem
-from .models import Asset, AssetVersion, Run, Scene, SceneAssetReference
+from .models import Asset, AssetVersion, Bookmark, Run, Scene, SceneAssetReference
 from .networks import network_output, network_record
 
 router = APIRouter(prefix="/api/scenes", tags=["scenes"])
@@ -122,12 +122,18 @@ def create_scene(body: SceneInput, response: Response, session: SessionDep):
 
 @router.get("", response_model=Page[SceneOutput])
 def list_scenes(session: SessionDep, page: Annotated[int, Query(ge=1)] = 1,
-                page_size: Annotated[int, Query(ge=1, le=100)] = 20):
+                page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+                q: Annotated[str, Query(max_length=120)] = ""):
     if session.bind.dialect.name == "sqlite" and not session.in_transaction():
         session.execute(text("BEGIN"))
-    total = session.scalar(select(func.count()).select_from(Scene))
+    scenes = select(Scene)
+    search = q.strip()
+    if search:
+        scenes = scenes.where(or_(Scene.id == search, Scene.document["name"].as_string().icontains(search, autoescape=True)))
+        scenes = scenes.order_by((Scene.id == search).desc())
+    total = session.scalar(select(func.count()).select_from(scenes.order_by(None).subquery()))
     start = (page - 1) * page_size
-    records = [] if start >= total else session.scalars(select(Scene).order_by(Scene.updated_at.desc(), Scene.id)
+    records = [] if start >= total else session.scalars(scenes.order_by(Scene.updated_at.desc(), Scene.id)
                                                        .offset(start).limit(page_size))
     return {"items": [scene_output(record) for record in records], "total": total, "page": page, "page_size": page_size}
 
@@ -168,6 +174,10 @@ def delete_scene(identity: str, session: SessionDep, if_match: Annotated[str | N
     expected = expected_version(if_match)
     reserve_writer(session)
     check_version(scene_record(session, identity), expected)
+    bookmarked = session.scalar(select(Bookmark.id).where(
+        Bookmark.kind == "scene", Bookmark.state["scene_id"].as_string() == identity).limit(1))
+    if bookmarked is not None:
+        raise ApiProblem(409, "SCENE_BOOKMARKED", "场景仍被收藏，请先在「收藏与链接」中解除收藏")
     result = session.execute(delete(Scene).where(Scene.id == identity, Scene.version == expected))
     if result.rowcount != 1:
         raise ApiProblem(409, "SCENE_VERSION_CONFLICT", "场景已更新，请读取最新版本后再删除")

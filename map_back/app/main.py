@@ -114,11 +114,33 @@ async def upload_layer(
     source: Annotated[str, Form(max_length=500)] = "",
     coordinate_description: Annotated[str, Form(max_length=1000)] = "",
 ):
+    return await publish_layer_upload(session, request, file, name, type, category, source, coordinate_description)
+
+
+@app.put("/api/layers/{layer_id}/poi-data", response_model=LayerOutput)
+async def save_poi_snapshot(
+    layer_id: str,
+    session: SessionDep,
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    asset_id: Annotated[str, Form(min_length=1, max_length=36)],
+    version: Annotated[str, Form(min_length=1, max_length=32)],
+):
+    return await publish_layer_upload(session, request, file, "POI", "geojson", "POI", "", "",
+                                      poi_target=(layer_id, asset_id, version))
+
+
+async def publish_layer_upload(
+    session: Session, request: Request, file: UploadFile, name: str, type: str, category: str,
+    source: str, coordinate_description: str, *, poi_target: tuple[str, str, str] | None = None,
+):
     identity = str(uuid4())
     temporary = STORAGE_DIR / "tmp" / identity
     published = FILES_DIR / identity
     temporary.mkdir(parents=True)
     try:
+        if category.strip() == "POI" and type != "geojson":
+            raise HTTPException(422, "POI 图层需要 GeoJSON 点位文件")
         suffix = Path(file.filename or "").suffix.lower()
         if (type == "geojson" and suffix not in (".json", ".geojson")) or (type == "3dtiles" and suffix != ".zip"):
             raise HTTPException(422, "GeoJSON 请上传 .geojson/.json，3D Tiles 请上传 .zip")
@@ -127,7 +149,10 @@ async def upload_layer(
         if type == "geojson":
             target = content / "data.geojson"
             await receive(file, target, GEOJSON_LIMIT)
-            await run_in_threadpool(validate_geojson, target)
+            if category.strip() == "POI":
+                await run_in_threadpool(validate_geojson, target, point_only=True)
+            else:
+                await run_in_threadpool(validate_geojson, target)
         else:
             archive = temporary / "upload.zip"
             await receive(file, archive, ZIP_LIMIT)
@@ -142,6 +167,20 @@ async def upload_layer(
         await run_in_threadpool(shutil.move, str(content), str(published))
         try:
             lock_catalog(session)
+            layer = None
+            if poi_target:
+                layer_id, expected_asset, expected_version = poi_target
+                layer = session.get(Layer, layer_id)
+                if layer is None:
+                    raise HTTPException(404, "图层登记不存在")
+                if (layer.asset_id, layer.asset_version) != (expected_asset, expected_version):
+                    raise ApiProblem(409, "POI_SNAPSHOT_CONFLICT", "POI 图层已更新，请重新加载后编辑")
+                previous = session.get(Asset, expected_asset)
+                if (layer.category != "POI" or layer.type != "geojson" or not previous
+                        or previous.source_kind != "upload" or previous.protected or previous.status != "active"):
+                    raise HTTPException(422, "只能编辑本地上传的 POI 图层")
+                body.name, body.source = layer.name, layer.source
+                coordinate_description = previous.coordinate_description
             files = inventory(FILES_DIR, identity)
             original_name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1][:255] or None
             asset = Asset(id=identity, original_name=original_name, name=body.name, source=body.source,
@@ -153,6 +192,13 @@ async def upload_layer(
             ensure_initial_version(session, asset)
             if await request.is_disconnected():
                 raise HTTPException(400, "上传已取消")
+            if layer is not None:
+                index_asset(session, asset)
+                layer.asset_id, layer.asset_version, layer.url = asset.id, asset.current_version, body.url
+                layer.orderable = layer_orderable(session, layer)
+                session.commit()
+                session.refresh(layer)
+                return layer
             return create_layer(body, session)
         except Exception:
             session.rollback()

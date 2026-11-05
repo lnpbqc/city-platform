@@ -21,7 +21,7 @@ test('University Town is the default and both campus shortcuts use their own WGS
 for (const campus of campuses)
   test(`${campus.key} samples, tiles transform and labels agree with the camera reference`, async () => {
     const records = samplesForCampus(campus.key)
-    assert.equal(records.length, 5)
+    assert.deepEqual(records.map(record => record.id), ['campus-buildings', 'demo-buildings'])
     assert.deepEqual(
       records.map((record) => record.id),
       samples.map((record) => record.id),
