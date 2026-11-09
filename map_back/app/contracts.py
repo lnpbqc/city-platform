@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_serializer, field_validator, model_validator
 
 
 T = TypeVar("T")
@@ -129,7 +129,7 @@ class LegendItem(BaseModel):
 class LayerCatalogOutput(BaseModel):
     id: str
     name: str
-    category: Literal["底图", "建筑", "道路", "POI", "水体", "专题", "仿真结果"]
+    category: str
     type: str
     asset: AssetVersionRef | None
     url: str | None
@@ -160,11 +160,21 @@ class CameraState(BaseModel):
 class SceneLayerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
     layer_id: str = Field(min_length=1)
+    name: str | None = Field(default=None, max_length=120)
+    category: str | None = Field(default=None, max_length=80)
     asset: AssetVersionRef | None
     map_attached: bool
     map_visible: bool
     map_opacity: float = Field(ge=0, le=1, allow_inf_nan=False)
     order: int = Field(ge=0)
+
+    @model_serializer(mode='wrap')
+    def serialize_layer(self, handler):
+        result = handler(self)
+        for key in ('name', 'category'):
+            if result.get(key) is None:
+                result.pop(key, None)
+        return result
 
     @field_validator("layer_id")
     @classmethod

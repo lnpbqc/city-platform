@@ -25,6 +25,12 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
+@router.delete('/{identity}', status_code=204)
+def remove_run(identity: str, session: SessionDep):
+    from .run_artifacts import delete_run
+    delete_run(session, identity)
+
+
 def checked_key(value: str | None):
     key = value.strip() if value is not None else None
     if key is not None and not 1 <= len(key) <= 200:

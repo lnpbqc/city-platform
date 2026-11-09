@@ -7,6 +7,10 @@ import BookmarkPanel from './BookmarkPanel.vue'
 import MapToolbar from './MapToolbar.vue'
 import ObjectPanel from './ObjectPanel.vue'
 import PoiEditor from './PoiEditor.vue'
+import PoiDetails from './PoiDetails.vue'
+import NearbyPoiPanel from './NearbyPoiPanel.vue'
+import { getNearbyPois } from '../api'
+import type { NearbyPoi } from '../types'
 import MapLegend from './MapLegend.vue'
 import MapStatus from './MapStatus.vue'
 import TimeAxis from './TimeAxis.vue'
@@ -69,6 +73,14 @@ watch(timeAxis, (axis, _previous, onCleanup) => {
 const filter = ref<'all' | 'mine'>('all')
 const selection = ref<Selection | null>(null)
 const objectsOpen = ref(false)
+const nearbyOpen = ref(false)
+const nearbyItems = ref<NearbyPoi[]>([])
+const nearbyLoading = ref(false)
+const nearbyError = ref('')
+const nearbyUnavailable = ref<string[]>([])
+const nearbyPoint = ref<MapPoint | null>(null)
+let nearbyVersion = 0
+let nearbyAbort: AbortController | undefined
 const drawing = ref<'box' | 'polygon' | null>(null)
 let controller: MapController | undefined
 const sceneLayers = ref<MapLayer[] | null>(null)
@@ -118,6 +130,51 @@ const inspectedSelection = computed<Selection | null>(() => {
 })
 const poiAllowed = computed(() => props.backend === 'online' && !sceneLayers.value && !comparisonOpen.value)
 const poiLayers = computed(() => viewLayers.value.filter(editablePoi))
+const inspectedPoiLayer = computed(() => queryLayers.value.find(layer => layer.id === inspectedSelection.value?.layerId && layer.category === 'POI'))
+const inspectedPoiDistance = computed(() => nearbyItems.value.find(item => item.object_id === inspectedSelection.value?.objectId)?.distance_m)
+const nearbyScope = computed(() => JSON.stringify(viewLayers.value.filter(layer => layer.category === 'POI' && layer.attached && layer.visible)
+  .map(layer => [layer.id, layer.asset_id, layer.asset_version, layer.campus]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))))
+function closeNearby() {
+  nearbyVersion++
+  nearbyAbort?.abort()
+  nearbyOpen.value = false
+  nearbyLoading.value = false
+  nearbyItems.value = []
+  nearbyPoint.value = null
+}
+async function queryNearby(point: MapPoint) {
+  if (!props.active || comparisonOpen.value || poiDraft.value || drawing.value) return
+  const layers = viewLayers.value.filter(layer => layer.attached && layer.visible && layer.category === 'POI')
+  if (!layers.length) { closeNearby(); return }
+  closeNearby()
+  clearObjectSelection()
+  nearbyPoint.value = point
+  nearbyOpen.value = true
+  objectsOpen.value = true
+  nearbyLoading.value = true
+  nearbyError.value = ''
+  nearbyUnavailable.value = layers.filter(layer => !layer.asset_id || !layer.asset_version).map(layer => layer.id)
+  nearbyAbort = new AbortController()
+  const version = nearbyVersion
+  try {
+    const result = await getNearbyPois({ longitude: point.longitude, latitude: point.latitude, radius_m: 1000, limit: 20,
+      layers: layers.filter(layer => layer.asset_id && layer.asset_version).map(layer => ({ layer_id: layer.id,
+        asset_id: layer.asset_id!, version: layer.asset_version!, ...(layer.campus ? { campus: layer.campus } : {}) })) }, nearbyAbort.signal)
+    if (version !== nearbyVersion) return
+    nearbyItems.value = result.items
+    nearbyUnavailable.value = [...new Set([...nearbyUnavailable.value, ...result.unavailable_layers])]
+  } catch (cause) {
+    if (version === nearbyVersion) nearbyError.value = cause instanceof Error ? cause.message : '附近 POI 查询失败'
+  } finally { if (version === nearbyVersion) nearbyLoading.value = false }
+}
+async function selectNearby(item: NearbyPoi) {
+  const version = nearbyVersion
+  selection.value = null
+  await showPicked(item.object_id, item.layer_id!, 1)
+  if (version === nearbyVersion && objectDetail.value?.object_id === item.object_id)
+    await controller?.focusObject(item.layer_id!, objectDetail.value)
+}
+watch(nearbyScope, () => { if (nearbyOpen.value) { closeNearby(); clearObjectSelection(); objectsOpen.value = false } })
 const poiSelectionLayer = computed(() => {
   const selection = inspectedSelection.value
   const object = selection?.object
@@ -164,6 +221,7 @@ function savePoi(record: LayerRecord) {
 }
 watch([poiAllowed, () => props.active], ([allowed, active]) => {
   if (!allowed || !active) cancelPoi()
+  if (!active) closeNearby()
 })
 const storedView = (() => { try { return readMapView(window.localStorage) } catch { return null } })()
 const selectedRegion = ref<RegionTarget>(storedView?.region ?? demoRegion)
@@ -175,9 +233,10 @@ const is2D = ref(storedView?.camera.scene_mode === '2d')
 const navigation = ref<NavigationReading | null>(null)
 function cancelDraw() { controller?.cancelAreaSelection(); drawing.value = null }
 function clearObjectSelection() { selection.value = null; clearSelection() }
-function closeObjects() { cancelDraw(); clearObjectSelection(); objectsOpen.value = false }
+function closeObjects() { cancelDraw(); closeNearby(); clearObjectSelection(); objectsOpen.value = false }
 function toggleObjects() { if (objectsOpen.value) closeObjects(); else objectsOpen.value = true }
 async function onMapSelection(value: Selection | null) {
+  if (value) closeNearby()
   selection.value = value
   if (!value) { clearSelection(); return }
   objectsOpen.value = true
@@ -224,12 +283,16 @@ function onEscape(event: KeyboardEvent) {
 }
 function onVisibility() { if (document.hidden) temporal.pause() }
 onMounted(() => { window.addEventListener('keydown', onEscape); document.addEventListener('visibilitychange', onVisibility) })
-onBeforeUnmount(() => { ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
+onBeforeUnmount(() => { closeNearby(); ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
 watch([objectsOpen, activeLayerId, selectedId, areaIds, () => props.active], () => {
   if (selection.value && !selection.value.objectId && objectsOpen.value) return
   if (!objectsOpen.value || !props.active) { controller?.highlightObjects(null, []); return }
   const ids = areaGeometry.value ? areaIds.value : selectedId.value ? [selectedId.value] : []
   controller?.highlightObjects(activeLayerId.value || null, ids, selectedId.value || undefined)
+})
+watch([objectDetail, objectsOpen, () => props.active, () => inspectedPoiLayer.value?.visible], () => {
+  controller?.showSelectedPoi?.(objectsOpen.value && props.active && inspectedPoiLayer.value ? inspectedPoiLayer.value.id : null,
+    objectsOpen.value && props.active ? objectDetail.value : null)
 })
 function getController() {
   return controller
@@ -264,6 +327,7 @@ function toggleComparison() {
 }
 function selectRegion(region: RegionTarget) {
   cancelDraw()
+  closeNearby()
   if (region.sampleKey) emit('campus', region.sampleKey)
   selectedRegion.value = region
   clearObjectSelection()
@@ -273,6 +337,7 @@ function selectRegion(region: RegionTarget) {
 }
 function selectPoint(point: MapPoint) {
   cancelDraw()
+  closeNearby()
   clearObjectSelection()
   is2D.value = false
   controller?.goToPoint(point)
@@ -295,6 +360,7 @@ watch(
 )
 function home() {
   cancelDraw()
+  closeNearby()
   clearObjectSelection()
   is2D.value = false
   controller?.home()
@@ -448,6 +514,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @fatal="fatal = $event"
       @boundary="boundaryState = $event"
       @navigation="onNavigation"
+      @ground="queryNearby"
     /></div>
     <ComparisonView v-if="comparisonOpen && navigation" :active="active" :layers="viewLayers" :camera="navigation.camera" :initial-time="comparisonTime" :recovery="recovery"
       @ready="comparisonReady" @navigation="synchronizeCamera('right', $event.camera)" @time="comparisonTime = $event" />
@@ -501,7 +568,13 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
     <button v-if="!comparisonOpen" class="object-trigger panel" :aria-expanded="objectsOpen" aria-label="打开对象查询" @click="toggleObjects">对象查询</button>
     <button class="comparison-trigger panel" :class="{ comparing: comparisonOpen }" :disabled="!comparisonOpen && (!dynamicLayers.length || !navigation || is2D !== (navigation.camera.scene_mode === '2d'))" :aria-pressed="comparisonOpen" @click="toggleComparison">{{ comparisonOpen ? '退出时间对比' : '双视图时间对比' }}</button>
     <span v-if="comparisonOpen" class="comparison-heading panel">左 / 右 · 同视角，时间独立</span>
-    <ObjectPanel v-if="objectsOpen"
+    <PoiDetails v-if="objectsOpen && inspectedPoiLayer && !poiDraft"
+      :selection="inspectedSelection" :layer="inspectedPoiLayer" :distance="inspectedPoiDistance"
+      :edit-poi="!!poiSelectionLayer" @close="closeObjects" @back="clearObjectSelection" @edit-poi="startPoi(true)" />
+    <NearbyPoiPanel v-if="objectsOpen && nearbyOpen && !inspectedSelection && !poiDraft"
+      :items="nearbyItems" :layers="viewLayers" :loading="nearbyLoading" :error="nearbyError" :unavailable="nearbyUnavailable"
+      @select="selectNearby" @close="closeObjects" @retry="nearbyPoint && queryNearby(nearbyPoint)" />
+    <ObjectPanel v-if="objectsOpen && !inspectedPoiLayer && !nearbyOpen"
       :class="{ 'temporal-objects': dynamicLayers.length }"
       :layers="queryLayers" :layer-id="activeLayerId" :items="objectItems" :total="objectTotal" :page="objectPage" :page-size="objectPageSize"
       :loading="objectsLoading" :error="objectsError" v-model:q="objectQuery" v-model:type="objectType"

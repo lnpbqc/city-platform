@@ -3,6 +3,8 @@ import type { CameraState } from './mapNavigation'
 export interface AssetVersionRef { asset_id: string; version: string }
 export interface SceneLayerState {
   layer_id: string
+  name?: string
+  category?: string
   asset: AssetVersionRef | null
   map_attached: boolean
   map_visible: boolean

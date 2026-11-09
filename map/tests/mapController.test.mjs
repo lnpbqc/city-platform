@@ -11,21 +11,33 @@ const deferred = () => {
   return { promise, resolve, reject }
 }
 let geoRequest, tileRequest, viewer, addGate, click, move, down, up, geoSource, tileSource
-beforeEach(t => { t.mock.method(globalThis, 'fetch', async () => new Response('{"type":"FeatureCollection","features":[]}')) })
+beforeEach(t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response('{"type":"FeatureCollection","features":[]}'))
+  basemapTerrain = undefined
+  terrainSamples = []
+})
 const event = () => {
   const listeners = new Set()
   return { addEventListener(fn) { listeners.add(fn); return () => listeners.delete(fn) }, fire(...args) { for (const fn of listeners) fn(...args) } }
 }
-let terrainBounds, terrainGate, terrainStarted, terrainError
+let terrainBounds, terrainGate, terrainStarted, terrainError, terrainSamples
 mock.module('../src/buildingTerrain.ts', {
   exports: {
-    sampleBuildingTerrain: async (polygons) => {
+    sampleBuildingTerrain: async (polygons, terrain) => {
+      terrainSamples.push(terrain)
       terrainStarted.resolve()
       if (terrainGate) await terrainGate.promise
       if (terrainError) throw terrainError
-      return polygons.map(() => terrainBounds)
+      return polygons.map(() => terrain?.bounds ?? terrainBounds)
     },
   },
+})
+// The initial ellipsoid reports `terrainBounds`; world terrain carries its own sampled heights.
+const flatTerrain = { name: 'ellipsoid' }
+const worldTerrain = { name: 'world', bounds: { minimum: 2, maximum: 30 } }
+let basemapTerrain
+mock.module('../src/basemap.ts', {
+  exports: { initializeBasemap: async () => basemapTerrain },
 })
 class GeoJsonDataSource {
   static load(source) {
@@ -59,6 +71,7 @@ const color = {
 }
 class Viewer {
   clock = { currentTime: 0 }
+  terrainProvider = flatTerrain
   resources = new Set()
   scene = {
     mode: 3,
@@ -194,12 +207,15 @@ mock.module('cesium', {
     Cesium3DTileset,
     Cesium3DTileStyle: Noop,
     ColorMaterialProperty,
+    PolylineOutlineMaterialProperty: class { constructor(options) { Object.assign(this, options) } },
     ConstantProperty,
     DistanceDisplayCondition: class { constructor(near, far) { Object.assign(this, { near, far }) } },
-    LabelGraphics: class { constructor(options) { Object.assign(this, options) } },
+    LabelGraphics: class { constructor(options) { Object.assign(this, options); if (options.text) this.text = new ConstantProperty(options.text) } },
     ConstantPositionProperty,
     Credit: Noop,
     VerticalOrigin: { BOTTOM: 1 },
+    HorizontalOrigin: { LEFT: -1, CENTER: 0, RIGHT: 1 },
+    LabelStyle: { FILL_AND_OUTLINE: 2 },
     HeightReference: {
       NONE: 0,
       CLAMP_TO_TERRAIN: 3,
@@ -268,7 +284,7 @@ for (const sample of [
   controller.destroy()
 })
 
-function setup(type = 'geojson', onBoundaryState = () => {}, onNavigation = () => {}) {
+function setup(type = 'geojson', onBoundaryState = () => {}, onNavigation = () => {}, options) {
   geoRequest = deferred()
   tileRequest = deferred()
   addGate = undefined
@@ -285,6 +301,7 @@ function setup(type = 'geojson', onBoundaryState = () => {}, onNavigation = () =
     (message) => notices.push(message),
     onBoundaryState,
     onNavigation,
+    options,
   )
   const layer = {
     type,
@@ -298,6 +315,159 @@ function setup(type = 'geojson', onBoundaryState = () => {}, onNavigation = () =
   }
   return { controller, layer, notices, picks }
 }
+
+test('empty ground clicks query nearby POIs without changing existing object picking', () => {
+  const nearby = []
+  const { controller, picks } = setup('geojson', undefined, undefined, { onGroundClick: point => nearby.push(point) })
+  viewer.camera.pickEllipsoid = () => ({ longitude: 113.4, latitude: 23.1 })
+  click({ position: new Cartesian2(200, 200) })
+  assert.deepEqual(nearby, [{ longitude: 113.4, latitude: 23.1 }])
+  assert.equal(picks.at(-1), null)
+  controller.destroy()
+})
+
+test('indexed local GeoJSON loads the viewport and preserves server object IDs', async t => {
+  const { controller, layer } = setup()
+  Object.assign(layer, { id: 'local-poi', name: 'POI', category: 'POI', source: '', asset_id: 'asset', asset_version: '1', object_count: 500000,
+    asset_source_kind: 'upload', url: '/data-files/asset/data.geojson' })
+  const requests = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url, options })
+    if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+    return Response.json({ type: 'FeatureCollection', features: [{ type: 'Feature', id: 'original-object',
+      geometry: { type: 'Point', coordinates: [113, 23] }, properties: { name: '地点' },
+      __object: { object_id: 'original-object', feature_index: 45678, asset: { asset_id: 'asset', version: '1' }, weight: 20 } }], truncated: true })
+  })
+  geoRequest.resolve(new GeoJsonDataSource())
+  await controller.load(layer)
+  assert.ok(requests.some(request => request.url === '/api/map/viewport'))
+  assert.ok(requests.every(request => !request.url.startsWith('/data-files/')))
+  assert.equal(geoSource.features[0].id, 'original-object')
+  assert.match(layer.loadPhase, /放大/)
+  controller.destroy()
+})
+
+test('viewport refresh discards stale requests and selected POIs survive display filtering', async t => {
+  const { controller, layer } = setup()
+  Object.assign(layer, { id: 'poi', name: 'POI', category: 'POI', source: '', asset_id: 'asset', asset_version: '1',
+    object_count: 10000, builtin: true, url: '/data-files/asset/data.geojson' })
+  const stale = deferred()
+  let views = 0
+  const response = id => Response.json({ type: 'FeatureCollection', features: [{ type: 'Feature', id,
+    geometry: { type: 'Point', coordinates: [113, 23] }, properties: {},
+    __object: { object_id: id, feature_index: 40, asset: { asset_id: 'asset', version: '1' }, weight: 0 } }], truncated: false })
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+    views++
+    return views === 2 ? stale.promise : response(views === 1 ? 'initial' : 'latest')
+  })
+  t.mock.method(GeoJsonDataSource, 'load', async data => { geoSource = data; return new GeoJsonDataSource() })
+  await controller.load(layer)
+  const [initialResource] = viewer.resources
+  assert.ok(initialResource)
+  controller.showSelectedPoi(layer.id, { object_id: 'initial', coordinates: [113, 23], asset: { asset_id: 'asset', version: '1' }, properties: {} })
+  const bounds = { west: 112, south: 22, east: 114, north: 24 }
+  viewer.camera.computeViewRectangle = () => bounds
+  viewer.camera.moveEnd.fire()
+  viewer.scene.morphComplete.fire()
+  assert.equal(views, 2, 'a duplicate event must share the in-flight request')
+  assert.ok(viewer.resources.has(initialResource), 'keep the previous layer while the next viewport loads')
+  bounds.east = 115
+  viewer.camera.moveEnd.fire()
+  await flush()
+  stale.resolve(response('stale'))
+  await flush()
+  assert.equal(geoSource.features[0].id, 'latest')
+  assert.ok(!viewer.resources.has(initialResource), 'replace the previous layer once the new one is ready')
+  viewer.camera.moveEnd.fire()
+  assert.equal(views, 3, 'a completed viewport stays current')
+  assert.ok(viewer.entities.values.some(entity => entity.id === 'selected-poi-initial'))
+  controller.highlightObjects(null, [])
+  assert.ok(viewer.entities.values.every(entity => entity.id !== 'selected-poi-initial'))
+  controller.destroy()
+})
+
+test('POI markers avoid overlap across layers using server weights', async t => {
+  const { controller, layer } = setup()
+  Object.assign(layer, { id: 'low', name: 'POI', category: 'POI', source: '', asset_id: 'asset', asset_version: '1',
+    object_count: 10000, builtin: true, url: '/data-files/asset/data.geojson' })
+  const other = { ...layer, id: 'high', attached: false }
+  viewer.scene.cartesianToCanvasCoordinates = position => position
+  const resources = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+    const { layer_id } = JSON.parse(options.body)
+    return Response.json({ type: 'FeatureCollection', features: [{ type: 'Feature', id: layer_id,
+      geometry: { type: 'Point', coordinates: [113, 23] }, properties: { name: layer_id },
+      __object: { object_id: layer_id, feature_index: 0, asset: { asset_id: 'asset', version: '1' }, weight: layer_id === 'high' ? 20 : 1 } }], truncated: false })
+  })
+  t.mock.method(GeoJsonDataSource, 'load', async data => {
+    const resource = new GeoJsonDataSource()
+    resource.entities.values = data.features.map(feature => Object.assign(new Noop(), { id: feature.id, billboard: {},
+      position: { getValue: () => ({ x: 100, y: 100 }) }, properties: { getValue: () => feature.properties } }))
+    resources.push(resource)
+    return resource
+  })
+  await controller.load(layer)
+  await controller.load(other)
+  assert.equal(resources[0].entities.values[0].show, false)
+  assert.equal(resources[1].entities.values[0].show, true)
+  controller.remove(other)
+  controller.appearance(layer)
+  assert.equal(resources[0].entities.values[0].show, true)
+  controller.destroy()
+})
+
+test('merged display roads resolve the clicked original segment and preserve source highlighting', async t => {
+  const { controller, layer, picks } = setup()
+  Object.assign(layer, { id: 'roads', name: 'Roads', category: '道路', source: '', asset_id: 'asset', asset_version: '1',
+    object_count: 2, builtin: true, url: '/data-files/asset/data.geojson' })
+  let pickBody
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+    if (url === '/api/map/road-pick') {
+      pickBody = JSON.parse(options.body)
+      return Response.json({ object_id: 'part-two', asset: { asset_id: 'asset', version: '1' }, name: 'Road', type: 'line',
+        properties: { highway: 'primary' }, geometry: { type: 'LineString', coordinates: [[113.01,23],[113.02,23]] } })
+    }
+    assert.ok(JSON.parse(options.body).meters_per_pixel > 0)
+    return Response.json({ type: 'FeatureCollection', features: [{ type: 'Feature', id: 'part-one',
+      geometry: { type: 'LineString', coordinates: [[113,23],[113.02,23]] }, properties: { highway: 'primary' },
+      __object: { object_id: 'part-one', feature_index: 0, asset: { asset_id: 'asset', version: '1' }, weight: 0, source_object_ids: ['part-one','part-two'] },
+      __display: { road_class: 'primary', road_rank: 0 } }], truncated: false })
+  })
+  const entity = Object.assign(new Noop(), { id: 'part-one', polyline: {}, properties: { getValue: () => ({ highway: 'primary' }) } })
+  const data = new GeoJsonDataSource()
+  data.entities.values = [entity]; data.entities.contains = candidate => candidate === entity
+  geoRequest.resolve(data)
+  await controller.load(layer)
+  viewer.camera.pickEllipsoid = () => ({ longitude: 113.019, latitude: 23 })
+  viewer.scene.pick = () => ({ id: entity })
+  click({ position: new Cartesian2(400,300) })
+  await flush()
+  assert.deepEqual(pickBody.object_ids, ['part-one','part-two'])
+  assert.equal(picks.at(-1).objectId, 'part-two')
+  assert.equal(entity.polyline.width.getValue(), 6)
+  controller.destroy()
+})
+
+test('tiles remain available at distance and respect manual visibility', async () => {
+  const { controller, layer } = setup('3dtiles')
+  const resource = new Cesium3DTileset()
+  viewer.camera.positionWC.z = 3000
+  tileRequest.resolve(resource)
+  await controller.load(layer)
+  assert.equal(resource.show, true, 'distance must not prevent the model from loading')
+  layer.visible = false
+  controller.appearance(layer)
+  assert.equal(resource.show, false)
+  layer.visible = true
+  controller.appearance(layer)
+  assert.equal(resource.show, true, 'manually showing the model works at any distance')
+  controller.remove(layer)
+  assert.equal(resource.destroyed, true)
+  controller.destroy()
+})
 
 test('time updates reuse dynamic entities, preserve zero, hide missing and keep opacity/highlighting coherent', async t => {
   const { controller, layer } = setup()
@@ -386,6 +556,19 @@ test('simulation overlay uses result edges, maps road and cross picks to the for
   assert.equal(viewer.entities.values.length, 3)
   controller.showSimulation(null)
   assert.equal(viewer.entities.values.length, 0)
+  controller.destroy()
+})
+
+test('simulation draws each calculated route continuously and only labels important nodes', () => {
+  const { controller } = setup()
+  const network = { nodes: [{ id: 'S', coordinates: [113, 23] }, { id: 'A', coordinates: [113.01, 23] }, { id: 'T', coordinates: [113.02, 23] }],
+    edges: [{ id: 'S-A', source: 'S', target: 'A' }, { id: 'A-T', source: 'A', target: 'T' }] }
+  controller.showSimulation(network, [], { baseline: { reachable: true, path: ['S', 'A', 'T'] }, blocked: { reachable: false, path: [] } })
+  const paths = viewer.entities.values.filter(entity => entity.properties?.simulation_role === 'baseline')
+  assert.equal(paths.length, 1)
+  assert.equal(paths[0].polyline.positions.length, 3)
+  const names = viewer.entities.values.filter(entity => entity.label?.text).map(entity => entity.label.text)
+  assert.deepEqual(names.sort(), ['S', 'T'])
   controller.destroy()
 })
 
@@ -489,7 +672,7 @@ test('ordinary 3D feature picking still reads properties with no bookmark marker
 test('point markers respect depth instead of rendering through solid buildings', async () => {
   const { controller, layer } = setup()
   const data = new GeoJsonDataSource()
-  const entity = { billboard: {} }
+  const entity = { id: 'point', billboard: {} }
   data.entities.values = [entity]
   const loading = controller.load(layer)
   geoRequest.resolve(data)
@@ -613,6 +796,133 @@ test('explicit building height extrudes above terrain while ordinary or invalid 
   assert.equal(building.extrudedHeight.getValue(), -8.1)
   assert.equal(building.material.color.alpha, 0.4)
   assert.equal(entities[1].polygon.material.color.alpha, 0.4 * 0.36)
+  controller.destroy()
+})
+
+function buildingSource(height = 21) {
+  const data = new GeoJsonDataSource()
+  data.entities.values = [{ polygon: {}, properties: { map_extrude_height_m: new ConstantProperty(height) } }]
+  return { data, polygon: data.entities.values[0].polygon }
+}
+
+test('ion world terrain is shown only while the terrain switch is on', async () => {
+  basemapTerrain = worldTerrain
+  const { controller } = setup('geojson', undefined, undefined, { terrain: false })
+  await flush()
+  assert.equal(viewer.terrainProvider, flatTerrain)
+  await controller.setTerrain(true)
+  assert.equal(viewer.terrainProvider, worldTerrain)
+  await controller.setTerrain(false)
+  assert.equal(viewer.terrainProvider, flatTerrain)
+  // Rapid switching settles on the last request.
+  await Promise.all([controller.setTerrain(true), controller.setTerrain(false)])
+  assert.equal(viewer.terrainProvider, flatTerrain)
+  controller.destroy()
+  const defaults = setup()
+  await flush()
+  assert.equal(viewer.terrainProvider, worldTerrain)
+  defaults.controller.destroy()
+})
+
+test('without ion terrain the switch keeps the ellipsoid and never resamples white models', async () => {
+  const { controller, layer } = setup()
+  const { data, polygon } = buildingSource()
+  const loading = controller.load(layer)
+  geoRequest.resolve(data)
+  await loading
+  assert.deepEqual(terrainSamples, [flatTerrain])
+  await controller.setTerrain(false)
+  await controller.setTerrain(true)
+  assert.equal(viewer.terrainProvider, flatTerrain)
+  assert.deepEqual(terrainSamples, [flatTerrain])
+  assert.equal(polygon.height.getValue(), 33)
+  controller.destroy()
+})
+
+test('switching terrain re-places loaded white models and reuses cached samples', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer } = setup()
+  const { data, polygon } = buildingSource()
+  const loading = controller.load(layer)
+  geoRequest.resolve(data)
+  await loading
+  assert.equal(viewer.terrainProvider, worldTerrain)
+  assert.equal(polygon.height.getValue(), 51)
+  assert.equal(polygon.extrudedHeight.getValue(), 1.9)
+  await controller.setTerrain(false)
+  assert.equal(viewer.terrainProvider, flatTerrain)
+  assert.equal(polygon.height.getValue(), 33)
+  assert.equal(polygon.extrudedHeight.getValue(), -8.1)
+  assert.equal(polygon.heightReference.getValue(), 0)
+  await controller.setTerrain(true)
+  assert.equal(polygon.height.getValue(), 51)
+  await controller.setTerrain(false)
+  assert.equal(polygon.height.getValue(), 33)
+  assert.deepEqual(terrainSamples, [worldTerrain, flatTerrain])
+  assert.equal(layer.status, 'ready')
+  controller.destroy()
+})
+
+test('a terrain switch during white model sampling places the model on the latest terrain', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer } = setup('geojson', undefined, undefined, { terrain: false })
+  terrainGate = deferred()
+  const { data, polygon } = buildingSource()
+  const loading = controller.load(layer)
+  geoRequest.resolve(data)
+  await terrainStarted.promise
+  await controller.setTerrain(true)
+  terrainGate.resolve()
+  await loading
+  assert.deepEqual(terrainSamples, [flatTerrain, worldTerrain])
+  assert.equal(polygon.height.getValue(), 51)
+  assert.equal(layer.status, 'ready')
+  assert.ok(viewer.resources.has(data))
+  controller.destroy()
+})
+
+test('a terrain switch while the model is being attached is applied after attachment', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer } = setup()
+  addGate = deferred()
+  const { data, polygon } = buildingSource()
+  const loading = controller.load(layer)
+  geoRequest.resolve(data)
+  // Wait until the model is placed on world terrain and is waiting inside dataSources.add.
+  while (!viewer.resources.has(data)) await flush()
+  assert.equal(polygon.height.getValue(), 51)
+  await controller.setTerrain(false)
+  addGate.resolve()
+  await loading
+  await flush()
+  assert.equal(polygon.height.getValue(), 33)
+  assert.equal(layer.status, 'ready')
+  controller.destroy()
+})
+
+test('a failed height update after a terrain switch keeps the model and marks the layer retryable', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer } = setup('geojson', undefined, undefined, { terrain: false })
+  const { data, polygon } = buildingSource()
+  const loading = controller.load(layer)
+  geoRequest.resolve(data)
+  await loading
+  assert.equal(polygon.height.getValue(), 33)
+  terrainError = new Error('地形瓦片请求失败')
+  await controller.setTerrain(true)
+  assert.equal(layer.status, 'error')
+  assert.match(layer.error, /地形切换后白模高度更新失败：地形瓦片请求失败/)
+  assert.ok(layer.traceId)
+  assert.ok(viewer.resources.has(data))
+  assert.equal(polygon.height.getValue(), 33)
+  // Failed samples are not cached, so the next switch samples again.
+  terrainError = undefined
+  await controller.setTerrain(false)
+  await controller.setTerrain(true)
+  assert.equal(polygon.height.getValue(), 51)
+  assert.deepEqual(terrainSamples, [flatTerrain, worldTerrain, worldTerrain])
+  controller.remove(layer)
+  assert.equal(viewer.resources.size, 0)
   controller.destroy()
 })
 

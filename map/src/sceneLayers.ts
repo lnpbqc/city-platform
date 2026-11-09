@@ -4,6 +4,8 @@ import type { SceneLayerState } from './simulationTypes'
 
 export const captureLayers = (layers: MapLayer[]): SceneLayerState[] => layers.map((layer, index) => ({
   layer_id: layer.id,
+  name: layer.name,
+  category: layer.category,
   asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
   map_attached: layer.map_attached ?? layer.attached, map_visible: layer.visible, map_opacity: layer.opacity, order: layer.order ?? index,
 }))
@@ -17,7 +19,7 @@ export async function prepareSceneLayers(states: SceneLayerState[], catalog: Map
       throw new ApiError('场景图层没有固定资产版本', 409, { layer_id: state.layer_id }, 'SCENE_ASSET_UNAVAILABLE', `client-${crypto.randomUUID()}`)
     const metadata = catalog.find(layer => layer.id === state.layer_id
       && (layer.asset_id === asset?.asset_id && layer.asset_version === asset?.version || asset?.source_kind === 'default' && layer.builtin))
-    const layer = mapLayer({ id: state.layer_id, name: metadata?.name ?? asset?.name ?? '底图', category: asset ? metadata?.category ?? '专题' : '底图',
+    const layer = mapLayer({ id: state.layer_id, name: state.name ?? metadata?.name ?? asset?.name ?? '底图', category: asset ? state.category ?? metadata?.category ?? '专题' : '底图',
       type: asset?.type === '3dtiles' ? '3dtiles' : 'geojson', url: asset?.entry_url ?? '', source: asset?.source ?? '',
       asset_id: asset?.asset_id, asset_version: asset?.version, asset_source_kind: asset?.source_kind,
       map_attached: state.map_attached, map_visible: state.map_visible, map_opacity: state.map_opacity }, asset?.source_kind === 'default' || !asset)

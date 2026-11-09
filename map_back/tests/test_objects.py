@@ -51,6 +51,20 @@ def test_objects_have_stable_unique_ids_pagination_details_and_real_properties(c
         assert [row["object_id"] for row in query(restarted, layer)["items"]] == [row["object_id"] for row in rows]
 
 
+def test_unbounded_list_paginates_in_database_without_materializing_selection(client, monkeypatch):
+    from app import object_queries
+    layer = uploaded(client)
+    def no_full_selection(*args, **kwargs):
+        raise AssertionError('unbounded list must not load all matching IDs')
+    monkeypatch.setattr(object_queries, 'select_objects', no_full_selection)
+    first = query(client, layer, page_size=2)
+    second = query(client, layer, page=2, page_size=2)
+    assert first['total'] == second['total'] == 4
+    assert len(first['items']) == len(second['items']) == 2
+    assert not {row['object_id'] for row in first['items']} & {row['object_id'] for row in second['items']}
+    assert query(client, layer, page=9223372036854775808)['items'] == []
+
+
 def test_bbox_really_clips_lines_and_polygons_and_summary_matches(client):
     layer = uploaded(client)
     page = query(client, layer, bbox="0,0,1,1")

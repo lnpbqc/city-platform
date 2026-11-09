@@ -1,5 +1,5 @@
 import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { getObject, getObjects, selectObjects } from '../api.ts'
+import { getObject, getMapObject, getObjects, selectObjects } from '../api.ts'
 import type { GeometryDocument, MapLayer, ObjectQuery, ObjectRecord } from '../types'
 import type { CampusKey } from '../campuses'
 import type { TemporalContext } from '../temporalTypes'
@@ -131,7 +131,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
     detailAbort = new AbortController()
     detailLoading.value = true
     try {
-      const result = await getObject(id, detailAbort.signal, layer?.static === false ? getTime() : null)
+      const result = layer?.category === 'POI' ? await getMapObject(id, detailAbort.signal) : await getObject(id, detailAbort.signal, layer?.static === false ? getTime() : null)
       if (!alive || version !== detailVersion) return
       if (layer?.asset_id && result.asset.asset_id !== layer.asset_id
         || layer?.asset_version && result.asset.version !== layer.asset_version)
@@ -146,7 +146,8 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
   async function showPicked(id: string, layerId: string, pageNumber: number) {
     resetLayer(layerId, pageNumber)
     if (!activeLayer()) return
-    await Promise.all([refresh(), select(id)])
+    if (activeLayer()?.category === 'POI') await select(id)
+    else await Promise.all([refresh(), select(id)])
   }
   async function selectArea(geometry: GeometryDocument) {
     if (!alive) return

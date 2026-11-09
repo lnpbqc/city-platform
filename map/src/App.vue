@@ -391,6 +391,7 @@ addressChanged()
       v-if="showDialog"
       :editing="editing"
       :initial="initial"
+      :categories="layers.map(layer => layer.category)"
       @close="showDialog = false"
       @saved="onSaved"
     />

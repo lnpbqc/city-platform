@@ -12,7 +12,7 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
-  return { onMapSelection, inspectedSelection, onMapReady, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight }
+  return { onMapSelection, inspectedSelection, onMapReady, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
@@ -40,6 +40,7 @@ function setup(options = {}) {
   }
   const scope = vue.effectScope()
   const panel = scope.run(() => create(name => {
+    if (name === '../api') return { getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: hook => hooks.push(hook) }
     if (name === '../composables/useObjects') return { useObjects: () => objects }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
@@ -87,6 +88,49 @@ test('time axis height follows wrapping and releases its observer when hidden or
   await vue.nextTick()
   ctx.cleanup()
   assert.equal(observers[1].disconnected, true)
+})
+
+test('nearby queries only enabled POI layers and reports unavailable local indexes', async () => {
+  const calls = []
+  const ctx = setup({ nearby: async body => { calls.push(body); return { items: [], unavailable_layers: ['external'] } } })
+  ctx.props.layers = [
+    { id: 'poi', category: 'POI', attached: true, visible: true, asset_id: 'asset', asset_version: '1' },
+    { id: 'hidden', category: 'POI', attached: true, visible: false, asset_id: 'hidden', asset_version: '1' },
+    { id: 'external', category: 'POI', attached: true, visible: true },
+    { id: 'building', category: '建筑', attached: true, visible: true, asset_id: 'building', asset_version: '1' },
+  ]
+  await vue.nextTick()
+  await ctx.panel.queryNearby({ longitude: 113, latitude: 23 })
+  assert.deepEqual(calls[0], { longitude: 113, latitude: 23, radius_m: 1000, limit: 20,
+    layers: [{ layer_id: 'poi', asset_id: 'asset', version: '1' }] })
+  assert.equal(ctx.panel.nearbyOpen.value, true)
+  assert.deepEqual([...ctx.panel.nearbyUnavailable.value], ['external'])
+  ctx.props.layers[3].visible = false
+  await vue.nextTick()
+  assert.equal(ctx.panel.nearbyOpen.value, true, 'unrelated layer changes must preserve nearby results')
+  ctx.cleanup()
+})
+
+test('new ground clicks and layer visibility changes invalidate stale nearby responses', async () => {
+  const pending = []
+  const ctx = setup({ nearby: () => new Promise(resolve => pending.push(resolve)) })
+  ctx.props.layers = [{ id: 'poi', category: 'POI', attached: true, visible: true, asset_id: 'asset', asset_version: '1' }]
+  await vue.nextTick()
+  const first = ctx.panel.queryNearby({ longitude: 113, latitude: 23 })
+  const second = ctx.panel.queryNearby({ longitude: 114, latitude: 23 })
+  pending[1]({ items: [{ object_id: 'latest' }], unavailable_layers: [] })
+  await second
+  pending[0]({ items: [{ object_id: 'stale' }], unavailable_layers: [] })
+  await first
+  assert.equal(ctx.panel.nearbyItems.value[0].object_id, 'latest')
+  const third = ctx.panel.queryNearby({ longitude: 115, latitude: 23 })
+  ctx.props.layers[0].visible = false
+  await vue.nextTick()
+  pending[2]({ items: [{ object_id: 'hidden' }], unavailable_layers: [] })
+  await third
+  assert.equal(ctx.panel.nearbyOpen.value, false)
+  assert.deepEqual([...ctx.panel.nearbyItems.value], [])
+  ctx.cleanup()
 })
 
 test('removing the drawing layer cancels and stale completion cannot select the replacement layer', async () => {

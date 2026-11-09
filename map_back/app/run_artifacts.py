@@ -3,6 +3,8 @@ import json
 import os
 import stat
 import tempfile
+import shutil
+import logging
 from threading import RLock
 
 from sqlalchemy import select
@@ -10,10 +12,67 @@ from sqlalchemy import select
 from .assets import reject_link, valid_identity
 from .database import STORAGE_DIR, SessionLocal
 from .errors import ApiProblem
-from .models import Run
+from .models import Run, Scene, Bookmark
 
 RUNS_DIR = STORAGE_DIR / "runs"
 _lock = RLock()
+
+
+def delete_run(session, identity):
+    from .scenes import reserve_writer
+    with _lock:
+        reserve_writer(session)
+        record = session.get(Run, identity)
+        if record is None:
+            return
+        if record.status not in {'succeeded', 'failed', 'cancelled'}:
+            raise ApiProblem(409, 'RUN_NOT_TERMINAL', '请先取消排队或运行中的任务')
+        references = [{'type': 'scene', 'id': item.id, 'name': item.document['name']}
+                      for item in session.scalars(select(Scene)) if item.document.get('run_id') == identity]
+        references.extend({'type': 'bookmark', 'id': item.id, 'name': item.name}
+                          for item in session.scalars(select(Bookmark)) if (item.state or {}).get('run_id') == identity)
+        if references:
+            raise ApiProblem(409, 'RUN_IN_USE', '运行仍被场景或收藏引用，请先解除引用', {'references': references})
+        folder = RUNS_DIR / identity
+        temporary = None
+        recovery_ready = False
+        try:
+            if folder.exists() or folder.is_symlink():
+                reject_link(STORAGE_DIR)
+                reject_link(RUNS_DIR)
+                reject_link(folder)
+                if not valid_identity(identity) or not folder.resolve().is_relative_to(RUNS_DIR.resolve()):
+                    raise ValueError('运行目录越界')
+                # Validate every member before a directory deletion follows any links.
+                for member in folder.rglob('*'):
+                    reject_link(member)
+                temporary = tempfile.mkdtemp(prefix='.delete-run-', dir=STORAGE_DIR)
+                os.replace(folder, os.path.join(temporary, 'snapshot'))
+                # Same-volume hard links keep rollback copies without duplicating
+                # result contents. Check physical removal before committing SQL.
+                shutil.copytree(os.path.join(temporary, 'snapshot'), os.path.join(temporary, 'recovery'), copy_function=os.link)
+                recovery_ready = True
+                shutil.rmtree(os.path.join(temporary, 'snapshot'))
+            session.delete(record)
+            session.commit()
+        except Exception:
+            session.rollback()
+            if temporary:
+                staged = os.path.join(temporary, 'recovery' if recovery_ready else 'snapshot')
+                if os.path.exists(staged):
+                    os.replace(staged, folder)
+                try:
+                    shutil.rmtree(temporary)
+                except OSError:
+                    logging.getLogger('city.runs').exception('运行删除回滚暂存待清理：%s', temporary)
+            raise
+        if temporary:
+            try:
+                shutil.rmtree(temporary)
+            except OSError:
+                # The committed deletion must not recreate a run. Quarantined
+                # artifacts stay outside runs/ and can be retried during startup.
+                logging.getLogger('city.runs').exception('运行删除已提交，暂存文件待清理：%s', temporary)
 
 
 def canonical_bytes(value):
@@ -74,6 +133,11 @@ def _write(folder, name: str, content: bytes, immutable: bool):
 
 def publish(record: Run, *, result_only=False):
     with _lock:
+        # A result reader can retain an ORM snapshot while another request deletes
+        # the run. Check committed existence under the same lock as deletion.
+        with SessionLocal() as current:
+            if current.scalar(select(Run.id).where(Run.id == record.id)) is None:
+                raise ApiProblem(404, 'RUN_NOT_FOUND', '运行不存在')
         folder = run_folder(record.id)
         try:
             repaired = int(_write(folder, "input.json", canonical_bytes(record.input_snapshot), True))
@@ -121,4 +185,17 @@ def reconcile_runs():
                 issues.append({"run_id": entry.name, "code": "ORPHAN_RUN_DIRECTORY", "message": "目录没有对应运行，已保留"})
     except (OSError, ValueError):
         issues.append({"run_id": None, "code": "RUN_ARTIFACT_UNSAFE", "message": "运行根目录不可用或含链接"})
+    # Existing records have just been reconstructed from their authoritative SQL
+    # snapshots. Any interrupted deletion quarantine is now safe to remove.
+    with _lock:
+        for entry in STORAGE_DIR.glob('.delete-run-*'):
+            try:
+                reject_link(entry)
+                if not entry.is_dir() or not entry.resolve().is_relative_to(STORAGE_DIR.resolve()):
+                    raise ValueError('删除暂存目录无效')
+                for member in entry.rglob('*'):
+                    reject_link(member)
+                shutil.rmtree(entry)
+            except (OSError, ValueError):
+                issues.append({'run_id': None, 'code': 'RUN_DELETE_CLEANUP_PENDING', 'message': '运行删除暂存文件尚未清理'})
     return {"checked": len(identities), "repaired_files": repaired, "issues": issues}

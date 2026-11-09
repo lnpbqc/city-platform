@@ -79,11 +79,17 @@ def inventory(root: Path, identity: str):
 def detect_entry(identity: str, files: list[dict]):
     paths = {item["path"] for item in files}
     tiles = [path for path in paths if path == "tileset.json" or (path.count("/") == 1 and path.endswith("/tileset.json"))]
-    geo = [item["path"] for item in files if item["size"] <= 10 * 1024 * 1024 and Path(item["path"]).suffix.lower() in (".json", ".geojson")]
+    geo = [item["path"] for item in files if item["size"] <= 1024 * 1024 * 1024 and Path(item["path"]).suffix.lower() in (".json", ".geojson")]
     for kind, candidates in (("3dtiles", tiles), ("geojson", geo)):
         valid = []
         for relative in candidates:
             try:
+                if kind == "geojson":
+                    from .geojson_stream import members
+                    for _ in members(FILES_DIR / identity / relative, allow_crs=True):
+                        pass
+                    valid.append(relative)
+                    continue
                 data = json.loads((FILES_DIR / identity / relative).read_text(encoding="utf-8-sig"))
                 if isinstance(data, dict) and ((kind == "geojson" and data.get("type") == "FeatureCollection") or (kind == "3dtiles" and isinstance(data.get("asset"), dict) and isinstance(data.get("root"), dict))):
                     valid.append(relative)
@@ -192,7 +198,7 @@ def ensure_initial_version(session: Session, asset: Asset):
         session.add(version)
     if asset.source_kind != "external" and asset.status == "active":
         root, files, entry = published_files(asset, version.entry_url)
-        metadata = build_metadata(root, files, entry, asset.type)
+        metadata = build_metadata(root, files, entry, asset.type, include_bounds=version.sha256 is None)
         if version.sha256 is None:
             version.sha256 = metadata["sha256"]
             version.file_manifest = metadata["files"]

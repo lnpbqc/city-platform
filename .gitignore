@@ -9,6 +9,7 @@ __pycache__/
 /.agents/
 /.codex/
 /.aws/
+/.pi/
 /*.max
 /*.fbx
 /*.rar

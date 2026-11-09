@@ -169,24 +169,66 @@ def _tiles_bounds(document):
     return None
 
 
-def build_metadata(root: Path, files: list[dict], entry_relative: str, kind: str) -> dict:
+def _merge_longitude(left, right):
+    intervals = []
+    for bounds in (left, right):
+        west, east = bounds["west"] + 180, bounds["east"] + 180
+        intervals.extend([(west, east)] if west <= east else [(west, 360), (0, east)])
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    gaps = [(merged[(index + 1) % len(merged)][0] + (360 if index == len(merged) - 1 else 0) - end, index)
+            for index, (_, end) in enumerate(merged)]
+    gap, index = max(gaps)
+    if gap <= 0:
+        return -180, 180
+    return merged[(index + 1) % len(merged)][0] - 180, merged[index][1] - 180
+
+
+def build_metadata(root: Path, files: list[dict], entry_relative: str, kind: str, *, include_bounds: bool = True) -> dict:
     manifest = []
     for item in sorted(files, key=lambda value: value["path"]):
         digest = hashlib.sha256()
         size = 0
         with (root / item["path"]).open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
+                from .geojson_stream import check_cancel
+                check_cancel(None)
                 digest.update(chunk)
                 size += len(chunk)
         manifest.append({"path": item["path"], "size": size, "sha256": digest.hexdigest()})
     encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     bounds = None
-    if kind in ("geojson", "3dtiles"):
+    if include_bounds and kind in ("geojson", "3dtiles"):
         try:
-            with (root / entry_relative).open(encoding="utf-8-sig") as stream:
-                document = json.load(stream)
-            if isinstance(document, dict):
-                bounds = _geojson_bounds(document) if kind == "geojson" else _tiles_bounds(document)
+            if kind == "geojson":
+                from .geojson_stream import members
+                single = {}
+                for key, feature in members(root / entry_relative, require_collection=False):
+                    if key is not None:
+                        if key in ("type", "coordinates", "geometry", "geometries"):
+                            single[key] = feature
+                        continue
+                    item = _geojson_bounds(feature)
+                    if item:
+                        if bounds is None:
+                            bounds = item
+                        else:
+                            bounds["west"], bounds["east"] = _merge_longitude(bounds, item)
+                            bounds["south"] = min(bounds["south"], item["south"])
+                            bounds["north"] = max(bounds["north"], item["north"])
+                            for key, operation in (("min_height", min), ("max_height", max)):
+                                bounds[key] = operation(bounds[key], item[key]) if bounds[key] is not None and item[key] is not None else None
+                if single.get("type") != "FeatureCollection":
+                    bounds = _geojson_bounds(single)
+            else:
+                with (root / entry_relative).open(encoding="utf-8-sig") as stream:
+                    document = json.load(stream)
+                if isinstance(document, dict):
+                    bounds = _tiles_bounds(document)
         except (OSError, ValueError, TypeError, OverflowError, RecursionError):
             bounds = None
     return {"files": manifest, "sha256": hashlib.sha256(encoded).hexdigest(), "bounds": bounds}

@@ -1,5 +1,5 @@
 import { onBeforeUnmount, ref, shallowRef } from 'vue'
-import { getRuns } from '../api.ts'
+import { getRuns, deleteRun } from '../api.ts'
 import type { RunQuery, RunRecord } from '../simulationTypes'
 
 export function useRunHistory() {
@@ -24,6 +24,10 @@ export function useRunHistory() {
     try {
       const result = await getRuns({ ...query.value, page: page.value, page_size: pageSize.value }, controller.signal)
       if (!alive || current !== version) return
+      if (!result.items.length && page.value > 1) {
+        page.value = Math.max(1, Math.ceil(result.total / result.page_size))
+        return refresh()
+      }
       items.value = result.items
       total.value = result.total
       page.value = result.page
@@ -46,6 +50,10 @@ export function useRunHistory() {
     page.value = Math.max(1, Math.trunc(value))
     return refresh()
   }
+  async function remove(identity: string) {
+    await deleteRun(identity)
+    if (alive) await refresh()
+  }
   onBeforeUnmount(() => { alive = false; ++version; controller?.abort() })
-  return { items, total, page, pageSize, query, loading, error, refresh, setQuery, setPage }
+  return { items, total, page, pageSize, query, loading, error, refresh, setQuery, setPage, remove }
 }

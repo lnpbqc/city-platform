@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createMapController, type MapController } from '../mapController'
 import type { Selection } from '../types'
 import type { BoundaryState } from '../regionBoundary'
 import type { NavigationReading } from '../mapNavigation'
+import { useTerrainSetting } from '../composables/useTerrainSetting'
+import type { MapPoint } from '../mapController'
 const emit = defineEmits<{
   ready: [controller: MapController]
   selection: [value: Selection | null]
@@ -11,9 +13,12 @@ const emit = defineEmits<{
   fatal: [message: string]
   boundary: [state: BoundaryState]
   navigation: [state: NavigationReading, settled: boolean]
+  ground: [point: MapPoint]
 }>()
 const container = ref<HTMLElement | null>(null)
+const { terrainEnabled } = useTerrainSetting()
 let controller: MapController | undefined
+watch(terrainEnabled, (enabled) => { void controller?.setTerrain(enabled) })
 onMounted(() => {
   try {
     controller = createMapController(
@@ -22,6 +27,7 @@ onMounted(() => {
       (message) => emit('notice', message),
       (state) => emit('boundary', state),
       (state, settled) => emit('navigation', state, settled),
+      { terrain: terrainEnabled.value, onGroundClick: point => emit('ground', point) },
     )
     emit('ready', controller)
   } catch (error) {

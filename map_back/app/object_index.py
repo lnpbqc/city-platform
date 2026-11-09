@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .assets import lock_catalog, published_files
 from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_asset_id
 from .models import Asset, AssetVersion, ObjectIndex, SpatialObject
+from .geojson_stream import features, check_cancel
 from .spatial import area_m2, parse_geometry, representative_coordinates
 
 
@@ -24,10 +25,6 @@ def finite_number(value):
         return float(value) if math.isfinite(value) else None
     except OverflowError:
         return None
-
-
-def _nonfinite(value):
-    raise ValueError(f"JSON包含非有限数值 {value}")
 
 
 def _record(asset, version, ordinal, geometry, properties, kind, name):
@@ -53,25 +50,24 @@ def _record(asset, version, ordinal, geometry, properties, kind, name):
             "area_m2": area_m2(geometry), "west": envelope[0], "south": envelope[1], "east": envelope[2], "north": envelope[3]}
 
 
-def _records(asset: Asset, version: AssetVersion):
+def _records(asset: Asset, version: AssetVersion, cancel=None):
     if asset.type == "3dtiles":
-        return [_record(asset, version, -1, None, {}, "model", asset.name or asset.original_name)]
+        yield _record(asset, version, -1, None, {}, "model", asset.name or asset.original_name)
+        return
     root, files, entry = published_files(asset, version.entry_url)
     if entry not in {item["path"] for item in files}:
         raise ValueError("资产入口文件缺失")
-    payload = (root / entry).read_bytes()
     fingerprint = next((item["sha256"] for item in version.file_manifest or [] if item["path"] == entry), None)
-    if fingerprint is None or hashlib.sha256(payload).hexdigest() != fingerprint:
+    digest = hashlib.sha256()
+    with (root / entry).open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            check_cancel(cancel)
+            digest.update(chunk)
+    if fingerprint is None or digest.hexdigest() != fingerprint:
         raise ValueError("入口内容与已发布版本校验和不一致")
-    data = json.loads(payload.decode("utf-8-sig"), parse_constant=_nonfinite)
-    if not isinstance(data, dict) or data.get("type") != "FeatureCollection" or not isinstance(data.get("features"), list):
-        raise ValueError("对象索引需要GeoJSON FeatureCollection")
-    if "crs" in data:
-        raise ValueError("请先移除旧式crs声明，并转换为WGS84经纬度")
     default_kind = next(({"campus-buildings": "building", "demo-roads": "road", "demo-points": "point", "demo-areas": "area"}.get(spec["id"])
                          for campus in CAMPUS_KEYS for spec in BUILTIN_LAYERS if builtin_asset_id(campus, spec["id"]) == asset.id), None)
-    records = []
-    for ordinal, feature in enumerate(data["features"]):
+    for ordinal, feature in enumerate(features(root / entry, cancel)):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise ValueError("索引条目必须是Feature")
         properties = {} if feature.get("properties") is None else feature["properties"]
@@ -84,23 +80,31 @@ def _records(asset: Asset, version: AssetVersion):
         geometric_kind = {"Point": "point", "MultiPoint": "point", "LineString": "line", "MultiLineString": "line", "Polygon": "area", "MultiPolygon": "area"}.get((geometry or {}).get("type"), "unknown")
         kind = native_kind if isinstance(native_kind, str) and native_kind.strip() else default_kind or geometric_kind
         name = properties.get("name", properties.get("名称"))
-        records.append(_record(asset, version, ordinal, geometry, properties, kind, name if isinstance(name, str) else None))
-    return records
+        yield _record(asset, version, ordinal, geometry, properties, kind, name if isinstance(name, str) else None)
 
 
-def index_asset(session: Session, asset: Asset, version: AssetVersion | None = None):
+def index_asset(session: Session, asset: Asset, version: AssetVersion | None = None, *, cancel=None):
     version = version or session.get(AssetVersion, (asset.id, asset.current_version))
     if version is None:
         return None
     existing = session.get(ObjectIndex, (asset.id, version.version))
     if existing is not None:
         return existing
-    status, error, records = "unavailable", "该资产类型未提供本地对象索引", []
+    status, error = "unavailable", "该资产类型未提供本地对象索引"
     if asset.source_kind == "external":
         error = "外部资源未读取，无法提供本地对象索引"
     elif asset.type in ("geojson", "3dtiles") and asset.status == "active":
         try:
-            records = _records(asset, version)
+            with session.begin_nested():
+                batch = []
+                for record in _records(asset, version, cancel):
+                    batch.append(record)
+                    if len(batch) == 500:
+                        check_cancel(cancel)
+                        session.execute(insert(SpatialObject), batch)
+                        batch.clear()
+                if batch:
+                    session.execute(insert(SpatialObject), batch)
             status, error = "ready", ""
         except (OSError, ValueError, TypeError, KeyError) as cause:
             status, error = "invalid", str(cause)[:1000]
@@ -108,8 +112,6 @@ def index_asset(session: Session, asset: Asset, version: AssetVersion | None = N
         return None
     state = ObjectIndex(asset_id=asset.id, asset_version=version.version, status=status, error=error)
     session.add(state)
-    if records:
-        session.execute(insert(SpatialObject), records)
     session.flush()
     return state
 

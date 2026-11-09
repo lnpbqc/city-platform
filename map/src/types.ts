@@ -145,6 +145,27 @@ export interface MapLayer extends LayerRecord {
   traceId?: string
   errorCode?: string
 }
+export interface MapLayerReference {
+  layer_id: string
+  asset_id: string
+  version: string
+  campus?: string
+}
+export interface MapViewportFeature {
+  type: 'Feature'
+  id: string
+  geometry: GeometryDocument
+  properties: Record<string, unknown>
+  __object: { object_id: string; feature_index: number; asset: { asset_id: string; version: string }; weight: number; source_object_ids?: string[] }
+  __display?: { road_class?: string; road_rank?: number; poi_category?: string; priority?: number; name?: string }
+}
+export interface MapViewportResult {
+  type: 'FeatureCollection'
+  features: MapViewportFeature[]
+  truncated: boolean
+}
+export interface NearbyPoi extends ObjectRecord { distance_m: number; layer_id: string }
+
 export interface Selection {
   title: string
   layerName: string

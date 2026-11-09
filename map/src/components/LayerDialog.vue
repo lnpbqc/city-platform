@@ -11,13 +11,17 @@ import {
 import { ApiError, registerAsset, saveLayer, uploadLayer } from '../api'
 import type { LayerInput, LayerKind, LayerRecord } from '../types'
 import { poiFile } from '../poi'
+import { categoryOptions } from '../layerTree'
 
-const props = defineProps<{ editing?: LayerRecord; initial?: LayerInput }>()
+const props = defineProps<{ editing?: LayerRecord; initial?: LayerInput; categories?: string[] }>()
 const emit = defineEmits<{ close: []; saved: [record: LayerRecord] }>()
 const initial = props.editing ?? props.initial
 const mode = ref<'upload' | 'url'>(initial ? 'url' : 'upload')
 const name = ref(initial?.name ?? '')
-const category = ref(initial?.category ?? '自定义图层')
+const categoryChoice = ref(initial?.category ?? '自定义图层')
+const newCategory = ref('')
+const category = computed(() => (categoryChoice.value === '__new_category__' ? newCategory.value : categoryChoice.value).trim())
+const availableCategories = computed(() => categoryOptions([...(props.categories ?? []).map(category => ({ category })), { category: initial?.category ?? '自定义图层' }]))
 const kind = ref<LayerKind>(initial?.type ?? 'geojson')
 const url = ref(initial?.url ?? '')
 const source = ref(initial?.source ?? '')
@@ -33,7 +37,7 @@ const phase = ref<'uploading' | 'validating' | ''>('')
 let controller: AbortController | null = null
 let alive = true
 const dialog = ref<HTMLElement | null>(null)
-const limit = computed(() => (kind.value === 'geojson' ? 10 : 512))
+const limit = computed(() => (kind.value === 'geojson' ? 1024 : 512))
 let previousFocus: HTMLElement | null = null
 
 function selectFile(event: Event) {
@@ -50,6 +54,10 @@ async function submit() {
   if (busy.value) return
   error.value = ''
   notice.value = ''
+  if (!category.value || category.value.length > 80) {
+    error.value = '请输入 1 至 80 字的分类名称'
+    return
+  }
   if (
     mode.value === 'upload' &&
     !createEmptyPoi.value && (!file.value || file.value.size > limit.value * 1024 * 1024)
@@ -235,7 +243,7 @@ onBeforeUnmount(() => {
             }}</strong
             ><span>{{
               kind === 'geojson'
-                ? 'WGS84 GeoJSON，最大 10 MB'
+                ? 'WGS84 GeoJSON，最大 1 GiB（1,073,741,824 字节）'
                 : '包含 tileset.json 的 ZIP，最大 512 MiB'
             }}</span
             ><input
@@ -257,8 +265,11 @@ onBeforeUnmount(() => {
           >
           <div class="form-row">
             <label
-              >分类<input v-model.trim="category" list="layer-categories" required maxlength="80" />
-              <datalist id="layer-categories"><option value="POI" /><option value="道路" /></datalist>
+              >分类<select v-model="categoryChoice" aria-label="图层分类" required>
+                <option v-for="item in availableCategories" :key="item" :value="item">{{ item }}</option>
+                <option value="__new_category__">新建分类…</option>
+              </select>
+              <input v-if="categoryChoice === '__new_category__'" v-model.trim="newCategory" aria-label="新分类名称" placeholder="输入新分类名称" required maxlength="80" />
             </label
             ><label
               >来源说明<input

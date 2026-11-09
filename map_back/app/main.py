@@ -1,3 +1,5 @@
+import asyncio
+from threading import Event, Lock
 import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -21,6 +23,7 @@ from .database import FILES_DIR, STORAGE_DIR, SessionLocal, get_session
 from .assets import asset_for_url, asset_record, bind_asset_version, delete_asset, ensure_initial_version, inventory, lock_catalog, prepare_download, reconcile
 from .models import Asset, Bookmark, BuiltinLayerState, Layer, Run
 from .schemas import AssetDetail, BookmarkInput, BookmarkOutput, BookmarkRename, LayerInput, LayerMapStateInput, LayerOutput, ReconcileOutput
+from .poi_mutations import PoiChange, rewrite as rewrite_poi
 from .uploads import GEOJSON_LIMIT, ZIP_LIMIT, cleanup, extract_tiles, receive, validate_geojson
 from .contracts import VersionOutput
 from .errors import ERROR_RESPONSES, ApiProblem, TraceMiddleware, http_error, unexpected_error, validation_error
@@ -30,6 +33,7 @@ from .builtin_assets import SAMPLES_DIR
 from .layer_catalog import initialize_catalog, layer_orderable, router as layer_catalog_router
 from .object_index import index_asset, sync_indexes
 from .object_queries import router as object_queries_router
+from .map_queries import router as map_queries_router
 from .networks import ensure_networks, router as networks_router
 from .scenes import check_version, reserve_writer, scene_record, router as scenes_router
 from .routing import MODEL_VERSION
@@ -64,6 +68,7 @@ app.include_router(asset_catalog_router)
 app.include_router(asset_queries_router)
 app.include_router(layer_catalog_router)
 app.include_router(object_queries_router)
+app.include_router(map_queries_router)
 app.include_router(networks_router)
 app.include_router(scenes_router)
 app.include_router(runs_router)
@@ -96,8 +101,14 @@ def create_layer(body: LayerInput, session: SessionDep):
                           session.scalar(select(func.max(BuiltinLayerState.map_order))) or 0) + 1
     layer.orderable = layer_orderable(session, layer)
     if asset_id:
-        index_asset(session, session.get(Asset, asset_id))
+        state = index_asset(session, session.get(Asset, asset_id))
+        if session.info.get("upload") and (not state or state.status != "ready"):
+            raise HTTPException(422, state.error if state else "对象索引建立失败")
     session.add(layer)
+    from .geojson_stream import check_cancel
+    check_cancel(None)
+    if callback := session.info.get("before_publish"):
+        callback()
     session.commit()
     session.refresh(layer)
     return layer
@@ -130,6 +141,47 @@ async def save_poi_snapshot(
                                       poi_target=(layer_id, asset_id, version))
 
 
+@app.post("/api/layers/{layer_id}/poi-features", response_model=LayerOutput)
+async def change_poi(layer_id: str, body: PoiChange, request: Request, session: SessionDep):
+    temporary = STORAGE_DIR / "tmp" / str(uuid4())
+    temporary.mkdir(parents=True)
+    path = temporary / "poi.geojson"
+    cancelled = Event()
+    async def watch_disconnect():
+        while True:
+            if await request.is_disconnected():
+                cancelled.set()
+                return
+            await asyncio.sleep(0.1)
+    monitor = asyncio.create_task(watch_disconnect())
+    def cancel():
+        if cancelled.is_set():
+            raise HTTPException(400, "上传已取消")
+    try:
+        def prepare():
+            from .geojson_stream import cancellation
+            token = cancellation.set(cancel)
+            try:
+                with SessionLocal() as worker_session:
+                    rewrite_poi(worker_session, layer_id, body, path)
+            finally:
+                cancellation.reset(token)
+        await run_in_threadpool(prepare)
+        cancel()
+        monitor.cancel()
+        with path.open("rb") as stream:
+            file = UploadFile(stream, filename="poi.geojson")
+            return await publish_layer_upload(session, request, file, "POI", "geojson", "POI", "", "",
+                                              poi_target=(layer_id, body.asset_id, body.version))
+    finally:
+        cancelled.set()
+        monitor.cancel()
+        await run_in_threadpool(cleanup, temporary)
+
+
+_import_lock = Lock()
+
+
 async def publish_layer_upload(
     session: Session, request: Request, file: UploadFile, name: str, type: str, category: str,
     source: str, coordinate_description: str, *, poi_target: tuple[str, str, str] | None = None,
@@ -138,6 +190,22 @@ async def publish_layer_upload(
     temporary = STORAGE_DIR / "tmp" / identity
     published = FILES_DIR / identity
     temporary.mkdir(parents=True)
+    cancelled = Event()
+    def cancel():
+        if cancelled.is_set():
+            raise HTTPException(400, "上传已取消")
+    def final_cancel():
+        from anyio import from_thread
+        if from_thread.run(request.is_disconnected):
+            cancelled.set()
+        cancel()
+    async def watch_disconnect():
+        while True:
+            if await request.is_disconnected():
+                cancelled.set()
+                return
+            await asyncio.sleep(0.1)
+    monitor = asyncio.create_task(watch_disconnect())
     try:
         if category.strip() == "POI" and type != "geojson":
             raise HTTPException(422, "POI 图层需要 GeoJSON 点位文件")
@@ -146,67 +214,90 @@ async def publish_layer_upload(
             raise HTTPException(422, "GeoJSON 请上传 .geojson/.json，3D Tiles 请上传 .zip")
         content = temporary / "content"
         content.mkdir()
+        target = content / "data.geojson" if type == "geojson" else temporary / "upload.zip"
+        await receive(file, target, GEOJSON_LIMIT if type == "geojson" else ZIP_LIMIT, cancel=cancel)
+        return await run_in_threadpool(_publish_received, identity, temporary, published, target,
+            file.filename, name, type, category, source, coordinate_description, poi_target, cancel, final_cancel)
+    finally:
+        cancelled.set()
+        monitor.cancel()
+        await file.close()
+        await run_in_threadpool(cleanup, temporary)
+
+
+def _publish_received(identity, temporary, published, target, filename, name, type, category,
+                      source, coordinate_description, poi_target, cancel, final_cancel):
+    from .geojson_stream import cancellation
+    while not _import_lock.acquire(timeout=0.1):
+        cancel()
+    token = cancellation.set(cancel)
+    try:
+        cancel()
+        content = temporary / "content"
         if type == "geojson":
-            target = content / "data.geojson"
-            await receive(file, target, GEOJSON_LIMIT)
-            if category.strip() == "POI":
-                await run_in_threadpool(validate_geojson, target, point_only=True)
-            else:
-                await run_in_threadpool(validate_geojson, target)
+            validate_geojson(target, point_only=category.strip() == "POI")
         else:
-            archive = temporary / "upload.zip"
-            await receive(file, archive, ZIP_LIMIT)
-            target = await run_in_threadpool(extract_tiles, archive, content)
+            target = extract_tiles(target, content)
         relative = target.relative_to(content).as_posix()
         try:
             body = LayerInput(name=name, category=category, type=type, source=source, url=f"/data-files/{identity}/{relative}")
         except ValidationError as error:
             raise RequestValidationError(error.errors()) from error
-        if await request.is_disconnected():
-            raise HTTPException(400, "上传已取消")
-        await run_in_threadpool(shutil.move, str(content), str(published))
-        try:
-            lock_catalog(session)
-            layer = None
-            if poi_target:
-                layer_id, expected_asset, expected_version = poi_target
-                layer = session.get(Layer, layer_id)
-                if layer is None:
-                    raise HTTPException(404, "图层登记不存在")
-                if (layer.asset_id, layer.asset_version) != (expected_asset, expected_version):
-                    raise ApiProblem(409, "POI_SNAPSHOT_CONFLICT", "POI 图层已更新，请重新加载后编辑")
-                previous = session.get(Asset, expected_asset)
-                if (layer.category != "POI" or layer.type != "geojson" or not previous
-                        or previous.source_kind != "upload" or previous.protected or previous.status != "active"):
-                    raise HTTPException(422, "只能编辑本地上传的 POI 图层")
-                body.name, body.source = layer.name, layer.source
-                coordinate_description = previous.coordinate_description
-            files = inventory(FILES_DIR, identity)
-            original_name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1][:255] or None
-            asset = Asset(id=identity, original_name=original_name, name=body.name, source=body.source,
-                          coordinate_description=coordinate_description.strip() or ("WGS84，经纬度；高程单位：米" if type == "geojson" else ""),
-                          type=type, entry_url=body.url, byte_size=sum(item["size"] for item in files),
-                          file_count=len(files), uploaded_at=datetime.now(timezone.utc), status="active", error="")
-            session.add(asset)
-            session.flush()
-            ensure_initial_version(session, asset)
-            if await request.is_disconnected():
-                raise HTTPException(400, "上传已取消")
-            if layer is not None:
-                index_asset(session, asset)
-                layer.asset_id, layer.asset_version, layer.url = asset.id, asset.current_version, body.url
-                layer.orderable = layer_orderable(session, layer)
-                session.commit()
-                session.refresh(layer)
-                return layer
-            return create_layer(body, session)
-        except Exception:
-            session.rollback()
-            await run_in_threadpool(cleanup, published)
-            raise
+        cancel()
+        shutil.move(str(content), str(published))
+        with SessionLocal() as session:
+            session.info["upload"] = True
+            session.info["before_publish"] = final_cancel
+            return LayerOutput.model_validate(_publish_asset(session, body, identity, published, filename, type, coordinate_description, poi_target, cancel))
     finally:
-        await file.close()
-        await run_in_threadpool(cleanup, temporary)
+        cancellation.reset(token)
+        _import_lock.release()
+
+
+def _publish_asset(session, body, identity, published, filename, type, coordinate_description, poi_target, cancel):
+    try:
+        lock_catalog(session)
+        layer = None
+        if poi_target:
+            layer_id, expected_asset, expected_version = poi_target
+            layer = session.get(Layer, layer_id)
+            if layer is None:
+                raise HTTPException(404, "图层登记不存在")
+            if (layer.asset_id, layer.asset_version) != (expected_asset, expected_version):
+                raise ApiProblem(409, "POI_SNAPSHOT_CONFLICT", "POI 图层已更新，请重新加载后编辑")
+            previous = session.get(Asset, expected_asset)
+            if (layer.category != "POI" or layer.type != "geojson" or not previous
+                    or previous.source_kind != "upload" or previous.protected or previous.status != "active"):
+                raise HTTPException(422, "只能编辑本地上传的 POI 图层")
+            body.name, body.source = layer.name, layer.source
+            coordinate_description = previous.coordinate_description
+        files = inventory(FILES_DIR, identity)
+        original_name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1][:255] or None
+        asset = Asset(id=identity, original_name=original_name, name=body.name, source=body.source,
+                      coordinate_description=coordinate_description.strip() or ("WGS84，经纬度；高程单位：米" if type == "geojson" else ""),
+                      type=type, entry_url=body.url, byte_size=sum(item["size"] for item in files),
+                      file_count=len(files), uploaded_at=datetime.now(timezone.utc), status="active", error="")
+        session.add(asset)
+        session.flush()
+        ensure_initial_version(session, asset)
+        cancel()
+        if layer is not None:
+            state = index_asset(session, asset)
+            if not state or state.status != "ready":
+                raise HTTPException(422, state.error if state else "对象索引建立失败")
+            layer.asset_id, layer.asset_version, layer.url = asset.id, asset.current_version, body.url
+            layer.orderable = layer_orderable(session, layer)
+            session.flush()
+            result = LayerOutput.model_validate(layer)
+            cancel()
+            session.info["before_publish"]()
+            session.commit()
+            return result
+        return create_layer(body, session)
+    except Exception:
+        session.rollback()
+        cleanup(published)
+        raise
 
 
 @app.patch("/api/layers/{layer_id}", response_model=LayerOutput)

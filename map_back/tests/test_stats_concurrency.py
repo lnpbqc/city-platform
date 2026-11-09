@@ -42,6 +42,7 @@ def test_overview_reads_one_snapshot_during_asset_deletion(queued_client, monkey
             # may keep the subsequent aggregate queries on the same snapshot.
             frozen = result.freeze()
             observed["read_transaction"] = session.connection().connection.driver_connection.in_transaction
+            observed["journal_mode"] = session.connection().exec_driver_sql('PRAGMA journal_mode').scalar_one()
             selected.set()
             assert release_reader.wait(10), "主线程应在独立删除开始后恢复统计读取"
             return frozen()
@@ -73,7 +74,10 @@ def test_overview_reads_one_snapshot_during_asset_deletion(queued_client, monkey
                     assert writer_finished.wait(10)
                 else:
                     assert observed["read_transaction"]
-                    assert not writer_finished.wait(0.05)
+                    if observed['journal_mode'] == 'wal':
+                        assert writer_finished.wait(10)
+                    else:
+                        assert not writer_finished.wait(0.05)
             finally:
                 release_reader.set()
             result = reading.result(timeout=10)

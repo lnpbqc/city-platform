@@ -13,6 +13,8 @@ if DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine, "connect")
     def sqlite_foreign_keys(connection, record):
         connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=30000")
 
 SessionLocal = sessionmaker(engine)
 

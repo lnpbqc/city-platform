@@ -3,6 +3,17 @@ import type { CampusKey } from './campuses'
 import type { SceneInput, SceneRecord, NetworkRecord, RunInput, RunRecord, RunSnapshot, RunResult, RunQuery } from './simulationTypes'
 import type { TemporalContext, TimeLayerQuery, TimeSeriesQuery, TimeSeriesRecord } from './temporalTypes'
 import { publishApiEvent } from './apiEvents.ts'
+import type { MapLayerReference, MapViewportResult, NearbyPoi } from './types'
+
+export const getMapViewport = (body: MapLayerReference & { bbox: [number, number, number, number]; width: number; height: number; meters_per_pixel?: number }, signal?: AbortSignal) =>
+  request<MapViewportResult>('/api/map/viewport', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
+export const getNearbyPois = (body: { layers: MapLayerReference[]; longitude: number; latitude: number; radius_m?: number; limit?: number }, signal?: AbortSignal) =>
+  request<{ items: NearbyPoi[]; unavailable_layers: string[] }>('/api/map/nearby', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
+export const getMapObject = (id: string, signal?: AbortSignal) => request<ObjectRecord>(`/api/map/objects/${encodeURIComponent(id)}`, { signal })
+export const pickMapRoad = (body: MapLayerReference & { object_ids: string[]; longitude: number; latitude: number }, signal?: AbortSignal) =>
+  request<ObjectRecord>('/api/map/road-pick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
+export const savePoiFeature = (id: string, body: { asset_id: string; version: string; operation: 'add' | 'update' | 'delete'; object_id?: string; feature?: import('./poi').PoiFeature }) =>
+  request<LayerRecord>(`/api/layers/${encodeURIComponent(id)}/poi-features`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 export class ApiError extends Error {
   status: number
@@ -211,6 +222,7 @@ export const getNetwork = (id: string, version?: string, signal?: AbortSignal) =
 export const submitRun = (body: RunInput, key: string, signal?: AbortSignal) =>
   request<RunRecord>('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(body), signal })
 export const getRun = (id: string, signal?: AbortSignal) => request<RunRecord>(`/api/runs/${encodeURIComponent(id)}`, { signal })
+export const deleteRun = (id: string, signal?: AbortSignal) => request<void>(`/api/runs/${encodeURIComponent(id)}`, { method: 'DELETE', signal })
 export const getRunInput = (id: string, signal?: AbortSignal) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}/input`, { signal })
 export const getRunResult = (id: string, signal?: AbortSignal) => request<RunResult>(`/api/runs/${encodeURIComponent(id)}/result`, { signal })
 export const cancelRun = (id: string, signal?: AbortSignal) => request<RunRecord>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', signal })

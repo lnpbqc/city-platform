@@ -10,7 +10,7 @@ from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, RETIRED_LAYER_IDS, buil
 from .contracts import LayerCatalogOutput
 from .database import get_session
 from .errors import ApiProblem
-from .models import Asset, BuiltinLayerState, Layer
+from .models import Asset, BuiltinLayerState, Layer, ObjectIndex
 from .schemas import LayerCatalogStateInput
 from .object_index import index_asset, object_counts, sync_indexes
 
@@ -25,11 +25,20 @@ GROUPS = {"底图", "建筑", "道路", "POI", "水体", "专题", "仿真结果
 
 def initialize_catalog(session: Session):
     lock_catalog(session)
+    published = set(session.execute(select(Layer.id, Layer.asset_id, Layer.asset_version).join(ObjectIndex,
+        (ObjectIndex.asset_id == Layer.asset_id) & (ObjectIndex.asset_version == Layer.asset_version))
+        .where(ObjectIndex.status == 'ready')).all())
     ensure_builtin_assets(session)
     ensure_catalog(session)
     result = reconcile(session)
     sync_indexes(session)
     for layer in session.scalars(select(Layer)):
+        asset = session.get(Asset, layer.asset_id) if layer.asset_id else None
+        index = session.get(ObjectIndex, (layer.asset_id, layer.asset_version)) if layer.asset_id and layer.asset_version else None
+        # Both geometry and this flag were published together. Recheck file hashes
+        # above, but do not parse an unchanged GiB snapshot on every startup.
+        if asset and asset.status == 'active' and index and index.status == 'ready' and (layer.id, layer.asset_id, layer.asset_version) in published:
+            continue
         layer.orderable = layer_orderable(session, layer)
     session.commit()
     return result
@@ -47,7 +56,8 @@ def layer_orderable(session: Session, layer: Layer):
         entry = parts[1] if parts else entry
         if entry not in {item["path"] for item in files}:
             return False
-        data = json.loads((root / entry).read_text(encoding="utf-8-sig"))
+        from .geojson_stream import features
+        data = features(root / entry)
         def has_z(coordinates):
             if not isinstance(coordinates, list):
                 return False
@@ -55,7 +65,7 @@ def layer_orderable(session: Session, layer: Layer):
                 return len(coordinates) > 2
             return any(has_z(child) for child in coordinates)
 
-        for feature in data.get("features", []):
+        for feature in data:
             geometry = feature.get("geometry") or {}
             if has_z(geometry.get("coordinates")) or geometry.get("type") == "GeometryCollection":
                 return False
@@ -101,7 +111,7 @@ def catalog_rows(session: Session, campus: Campus):
     aliases = {"三维建筑": "建筑", "三维模型": "建筑", "线状网络": "道路"}
     for layer in session.scalars(select(Layer)):
         result.append({"id": layer.id, "name": layer.name,
-                       "category": layer.category if layer.category in GROUPS else aliases.get(layer.category, "专题"),
+                       "category": aliases.get(layer.category, layer.category),
                        "type": layer.type, "asset": {"asset_id": layer.asset_id, "version": layer.asset_version} if layer.asset_id else None,
                        "url": layer.url, "builtin": False, "campus": None, "source": layer.source,
                        "static": True, "orderable": layer.orderable, "object_count": counts.get((layer.asset_id, layer.asset_version)), "unit": None, "legend": [],

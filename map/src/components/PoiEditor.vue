@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, shallowRef } from 'vue'
-import { ApiError, savePoiData, uploadLayer } from '../api'
-import { fetchMapGeoJSON } from '../mapResource'
-import { poiAddress, poiCategory, poiFile, propertyText, type PoiData, type PoiFeature } from '../poi'
+import { ApiError, savePoiFeature, uploadLayer } from '../api'
+import { poiAddress, poiCategory, poiFile, propertyText, type PoiFeature } from '../poi'
 import type { LayerRecord, MapLayer, ObjectRecord } from '../types'
 
 const props = defineProps<{
@@ -42,31 +41,21 @@ async function save(remove = false) {
   busy.value = true
   try {
     const layer = target.value
-    const data: PoiData = layer
-      ? await fetchMapGeoJSON(layer.url, new AbortController().signal)
-      : { type: 'FeatureCollection', features: [] }
-    if (data.type !== 'FeatureCollection' || !Array.isArray(data.features) ||
-        data.features.some(feature => feature.geometry?.type !== 'Point')) throw new Error('POI 图层需要有效的 GeoJSON 点位文件。')
-    const index = props.object?.feature_index
-    if (props.object && (index == null || !data.features[index])) throw new Error('原点位已不可用，请重新选择。')
-    if (remove) data.features.splice(index!, 1)
-    else {
-      const original = index == null ? undefined : data.features[index]
-      const feature: PoiFeature = {
-        ...original,
-        type: 'Feature',
-        geometry: { ...original?.geometry, type: 'Point', coordinates: props.coordinates ?? original?.geometry.coordinates ?? coordinates },
-        properties: { ...(original?.properties ?? { semantic_source: 'manual' }),
-          name: name.value.trim(), category: category.value.trim(), address: address.value.trim() },
-      }
-      if (index == null) data.features.push(feature)
-      else data.features[index] = feature
+    const feature: PoiFeature = {
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: props.coordinates ?? props.object?.geometry?.coordinates ?? coordinates },
+      properties: { ...(props.object?.properties ?? { semantic_source: 'manual' }),
+        name: name.value.trim(), category: category.value.trim(), address: address.value.trim() },
     }
-    const file = poiFile(data)
-    if (layer) emit('saved', await savePoiData(layer.id, layer.asset_id!, layer.asset_version!, file))
+    if (layer) emit('saved', await savePoiFeature(layer.id, {
+      asset_id: layer.asset_id!, version: layer.asset_version!,
+      operation: remove ? 'delete' : props.object ? 'update' : 'add',
+      object_id: props.object?.object_id,
+      ...(remove ? {} : { feature }),
+    }))
     else {
       const body = new FormData()
-      body.set('file', file)
+      body.set('file', poiFile({ type: 'FeatureCollection', features: [feature] }))
       body.set('type', 'geojson')
       body.set('category', 'POI')
       body.set('name', layerName.value.trim())

@@ -33,9 +33,15 @@ from app.run_worker import RunQueue
 from test_scenes import draft, layer_state, upload
 
 
+legacy_tables = None
+
+
 def rows():
+    global legacy_tables
     with sqlite3.connect(DATABASE_URL.removeprefix("sqlite:///")) as connection:
-        tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('alembic_version','time_series_snapshots')")]
+        if legacy_tables is None:
+            legacy_tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('alembic_version','time_series_snapshots')")]
+        tables = legacy_tables
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         result = {}
         for table in tables:

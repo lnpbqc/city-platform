@@ -33,6 +33,7 @@ def test_object_read_snapshot_survives_concurrent_asset_deletion(client, monkeyp
         result = select_objects(session, query, polygon)
         if query.asset_id == identity:
             observed["read_transaction"] = session.connection().connection.driver_connection.in_transaction
+            observed["journal_mode"] = session.connection().exec_driver_sql('PRAGMA journal_mode').scalar_one()
             selected.set()
             assert release_reader.wait(10), "主线程应在写请求开始后恢复读取"
         return result
@@ -66,13 +67,12 @@ def test_object_read_snapshot_survives_concurrent_asset_deletion(client, monkeyp
                 assert selected.wait(10), "读取请求应先选中对象"
                 deleting = executor.submit(delete)
                 assert writer_committing.wait(10), "独立删除请求应开始提交"
-                if observed["read_transaction"]:
-                    # A real read snapshot blocks the writer's commit until the
-                    # reader completes. Never wait for that commit in the reader.
+                if observed["read_transaction"] and observed["journal_mode"] != 'wal':
+                    # Rollback journals block a writer while the snapshot is open.
                     assert not writer_finished.wait(0.05)
                 else:
-                    # Also makes the legacy no-BEGIN reproduction deterministic:
-                    # without a read transaction, the writer can finish now.
+                    # WAL allows the writer to finish while the reader retains
+                    # the old snapshot; the complete result is checked below.
                     assert writer_finished.wait(10)
             finally:
                 release_reader.set()

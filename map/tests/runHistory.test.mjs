@@ -6,13 +6,14 @@ import { stripTypeScriptTypes } from 'node:module'
 import { parse, compileScript } from 'vue/compiler-sfc'
 
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
-let calls, handler
+let calls, handler, removeHandler
 beforeEach(() => {
   calls = []
   globalThis.document = { addEventListener() {}, removeEventListener() {} }
   handler = async query => ({ ...query, items: [{ run_id: `run-${query.page}` }], total: 41 })
+  removeHandler = async identity => { calls.push({ deleted: identity }) }
 })
-mock.module('../src/api.ts', { exports: { getRuns: (query, signal) => { calls.push({ query, signal }); return handler(query, signal) } } })
+mock.module('../src/api.ts', { exports: { ApiError: class extends Error {}, deleteRun: identity => removeHandler(identity), getRuns: (query, signal) => { calls.push({ query, signal }); return handler(query, signal) } } })
 const { useRunHistory } = await import('../src/composables/useRunHistory.ts')
 const source = await readFile(new URL('../src/components/RunHistoryPanel.vue', import.meta.url), 'utf8')
 let compiled = stripTypeScriptTypes(compileScript(parse(source).descriptor, { id: 'run-history-test' }).content, { mode: 'transform' })
@@ -82,4 +83,31 @@ test('an open history panel reconnects at the existing filter and page', async t
   assert.equal(state.scene, 'scene-filter')
   assert.equal(state.status, 'failed')
   assert.deepEqual(calls.at(-1).query, { scene_id: 'scene-filter', status: 'failed', from: '', to: '', page: 3, page_size: 20 })
+})
+
+test('deleting the final row refreshes totals and returns to the preceding page', async t => {
+  const { history } = setup(t)
+  await history.setPage(3)
+  handler = async query => ({ ...query, total: 40, items: query.page === 3 ? [] : [{ run_id: 'remaining' }] })
+  await history.remove('run-3')
+  assert.ok(calls.some(call => call.deleted === 'run-3'))
+  assert.equal(history.page.value, 2)
+  assert.equal(history.total.value, 40)
+})
+
+test('history deletion requires explicit confirmation and reports failure without closing', async t => {
+  const deleted = []
+  const app = renderer.createApp(historyPanel, { scenes: [], locked: false, selected: '', revision: '', onDeleted: identity => deleted.push(identity) })
+  app.mount({}); t.after(() => app.unmount()); await new Promise(setImmediate)
+  const state = app._instance.setupState
+  state.pendingDelete = 'run-1'
+  assert.ok(calls.every(call => !call.deleted))
+  removeHandler = async () => { throw new Error('仍被场景引用') }
+  await state.confirmDelete()
+  assert.equal(state.pendingDelete, 'run-1')
+  assert.match(state.deleteError, /仍被场景引用/)
+  removeHandler = async () => {}
+  await state.confirmDelete()
+  assert.deepEqual(deleted, ['run-1'])
+  assert.equal(state.pendingDelete, '')
 })

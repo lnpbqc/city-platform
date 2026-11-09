@@ -31,6 +31,7 @@ const initialCamera: CameraState = localCamera ?? { longitude: 113.364, latitude
 let controller: MapController | undefined
 const currentLayers = (): SceneLayerState[] => props.layers.filter(layer => layer.id === 'basemap' || layer.asset_id && layer.asset_version).map((layer, index) => ({
   layer_id: layer.id, asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
+  name: layer.name, category: layer.category,
   map_attached: layer.attached || !!layer.map_attached, map_visible: layer.visible, map_opacity: layer.opacity, order: layer.order ?? index,
 }))
 const simulation = useSimulation(() => controller?.getCamera() ?? initialCamera, currentLayers)
@@ -99,7 +100,7 @@ function paint() {
   try { controller?.showSimulation(graph.value ?? null, blocked.value, displayResult.value, id => {
     if (!preview.value) { notice.value = `点击“${historical.value ? '从历史编辑' : '编辑配置'}”切换到草稿后选择阻断边。`; return }
     toggleEdge(id)
-  }) } catch (cause) { mapError.value = String(cause) }
+    }, { origin: draft.value.origin ?? undefined, destination: draft.value.destination ?? undefined }) } catch (cause) { mapError.value = String(cause) }
 }
 watch([graph, () => JSON.stringify(blocked.value), displayResult], paint)
 async function syncLayers(prepared: MapLayer[] = []) {
@@ -244,6 +245,11 @@ async function rerunHistory(identity: string) {
   await rerun(identity)
   if (submissionPending.value || run.value?.run_id !== previous) historyOpen.value = false
 }
+function deletedHistory(identity: string) {
+  simulation.runDeleted(identity)
+  if (!run.value) { showReplay({ baseline: null, blocked: null }); preview.value = true; paint() }
+  emit('runChanged')
+}
 onBeforeUnmount(() => { alive = false; cancelRestore(); document.removeEventListener('visibilitychange', visibility); controller = undefined })
 defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCapture })
 </script>
@@ -290,7 +296,7 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
       <div class="result-columns"><div class="blue"><h3>基准</h3><strong>{{ number(result.baseline.length_m) }} <small>m</small></strong><span>{{ number(result.baseline.duration_s) }} 秒</span><p>{{ result.baseline.reachable ? result.baseline.path.join(' → ') : '不可达' }}</p></div><div class="orange"><h3>阻断后</h3><strong>{{ number(result.blocked.length_m) }} <small>m</small></strong><span>{{ number(result.blocked.duration_s) }} 秒</span><p>{{ result.blocked.reachable ? result.blocked.path.join(' → ') : '不可达' }}</p></div><div><h3>长度变化</h3><strong>{{ result.metrics.increase_percent === null ? '—' : `${result.metrics.increase_percent >= 0 ? '+' : ''}${number(result.metrics.increase_percent)}%` }}</strong><span>按边速度累计时间</span><p>合成演示，长度使用路网显式权重。</p></div></div>
       <ReplayControls v-if="resultNetwork && !preview" :key="result.run_id" :network="resultNetwork" :result="result" :active="active" @position="showReplay" />
     </section>
-    <RunHistoryPanel v-if="historyOpen" :scenes="scenes" :locked="historyLocked" :selected="run?.run_id ?? ''" :revision="historyRevision" :recovery="recovery" @close="historyOpen = false" @select="selectHistory" @rerun="rerunHistory" />
+    <RunHistoryPanel v-if="historyOpen" :scenes="scenes" :locked="historyLocked" :selected="run?.run_id ?? ''" :revision="historyRevision" :recovery="recovery" @close="historyOpen = false" @select="selectHistory" @rerun="rerunHistory" @deleted="deletedHistory" />
     <div v-if="mapError || notice || mapLayers.some(layer => layer.status === 'error')" class="map-notice panel" role="status"><p>{{ mapError || notice }}</p><p v-for="layer in mapLayers.filter(layer => layer.status === 'error')" :key="layer.id">{{ layer.name }}：{{ layer.error }}</p><button class="text-button" @click="mapError = ''; notice = ''; syncLayers()">刷新场景图层</button></div>
   </section>
 </template>

@@ -25,6 +25,7 @@ mock.module('../src/api.ts', {
   exports: {
     getObjects: (query, signal) => { listCalls.push({ ...query, signal }); return listRequest(query, signal) },
     getObject: (id, signal, temporal) => { detailCalls.push({ id, signal, temporal }); return detailRequest(id, signal, temporal) },
+    getMapObject: (id, signal) => { detailCalls.push({ id, signal, lightweight: true }); return detailRequest(id, signal) },
     selectObjects: (query, geometry, signal) => { areaCalls.push({ ...query, geometry: structuredClone(geometry), signal }); return areaRequest(query, geometry, signal) },
   },
 })
@@ -41,6 +42,17 @@ function setup(initial = [first, second], getTime = () => null) {
 }
 const flush = async () => { await new Promise(setImmediate); await nextTick() }
 const polygon = { type: 'Polygon', coordinates: [[[112, 22], [114, 22], [114, 24], [112, 22]]] }
+
+test('POI picks read lightweight details without refreshing the full object list', async t => {
+  const { app, objects } = setup([{ ...first, category: 'POI' }])
+  t.after(() => app.unmount())
+  await flush()
+  const previous = listCalls.length
+  await objects.showPicked('one', 'first', 1)
+  assert.equal(listCalls.length, previous)
+  assert.equal(detailCalls.at(-1).lightweight, true)
+  assert.equal(objects.selected.value.geometry.type, 'Point')
+})
 
 test('dynamic object lists and selected details follow the clock while static queries remain unchanged', async t => {
   const time = ref({ time: '2026-10-25T00:00:00Z', resolution: 'hour' })

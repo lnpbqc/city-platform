@@ -6,7 +6,7 @@ const event = () => {
   return { addEventListener(fn) { listeners.push(fn) }, fire() { listeners.forEach(fn => fn()) } }
 }
 const provider = () => ({ errorEvent: event() })
-let ionImageryCalls, ionTerrainCalls, localUrls, localGate, wmtsError
+let ionImageryCalls, ionTerrainCalls, localUrls, localGate, wmtsError, ionTerrainError
 const Ion = {}
 class WebMercatorTilingScheme {}
 class Credit {
@@ -24,7 +24,7 @@ mock.module('cesium', {
       }
     },
     createWorldImageryAsync: async () => { ionImageryCalls++; return provider() },
-    createWorldTerrainAsync: async () => { ionTerrainCalls++; return provider() },
+    createWorldTerrainAsync: async () => { ionTerrainCalls++; if (ionTerrainError) throw ionTerrainError; return provider() },
     TileMapServiceImageryProvider: {
       fromUrl: async url => { localUrls.push(url); if (localGate) await localGate; return provider() },
     },
@@ -36,7 +36,7 @@ const { initializeBasemap } = await import('../src/basemap.ts')
 beforeEach(() => {
   ionImageryCalls = ionTerrainCalls = 0
   localUrls = []
-  localGate = wmtsError = undefined
+  localGate = wmtsError = ionTerrainError = undefined
   delete Ion.defaultAccessToken
 })
 function setup() {
@@ -51,11 +51,12 @@ function setup() {
     run: env => initializeBasemap(viewer, env, () => alive, message => notices.push(message)) }
 }
 
-test('Tianditu loads ordered imagery and labels with Web Mercator and never requests ion', async () => {
+test('Tianditu loads imagery without duplicate baked POI annotation layer and never requests ion', async () => {
   const app = setup()
-  await app.run({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: ' key+/ ', VITE_CESIUM_ION_TOKEN: 'ignored' })
-  assert.equal(app.imagery.length, 2)
-  for (const [index, layer] of ['img', 'cia'].entries()) {
+  const terrain = await app.run({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: ' key+/ ', VITE_CESIUM_ION_TOKEN: 'ignored' })
+  assert.equal(terrain, undefined)
+  assert.equal(app.imagery.length, 1)
+  for (const [index, layer] of ['img'].entries()) {
     const imagery = app.imagery[index]
     assert.equal(imagery.url, `https://t{s}.tianditu.gov.cn/${layer}_w/wmts?tk=key%2B%2F`)
     assert.equal(imagery.layer, layer)
@@ -80,7 +81,7 @@ test('Tianditu loads ordered imagery and labels with Web Mercator and never requ
 test('missing or blank Tianditu key falls back to local imagery even with an ion token', async () => {
   for (const key of [undefined, '  ']) {
     const app = setup()
-    await app.run({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: key, VITE_CESIUM_ION_TOKEN: 'ignored' })
+    assert.equal(await app.run({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: key, VITE_CESIUM_ION_TOKEN: 'ignored' }), undefined)
     assert.equal(app.imagery.length, 1)
     assert.match(app.notices[0], /VITE_TIANDITU_KEY/)
     assert.equal(app.viewer.terrainProvider, 'ellipsoid')
@@ -89,32 +90,44 @@ test('missing or blank Tianditu key falls back to local imagery even with an ion
   assert.equal(ionImageryCalls + ionTerrainCalls, 0)
 })
 
-test('default and explicit cesium modes preserve local and ion behavior', async () => {
+test('default and explicit cesium modes preserve local imagery and return ion terrain for the caller', async () => {
   for (const mode of [undefined, 'cesium']) {
     const local = setup()
-    await local.run({ VITE_BASEMAP_PROVIDER: mode })
+    assert.equal(await local.run({ VITE_BASEMAP_PROVIDER: mode }), undefined)
     assert.equal(local.imagery.length, 1)
     assert.match(local.notices[0], /尚未配置 ion Token/)
     const online = setup()
-    await online.run({ VITE_BASEMAP_PROVIDER: mode, VITE_CESIUM_ION_TOKEN: 'ion-token' })
+    const terrain = await online.run({ VITE_BASEMAP_PROVIDER: mode, VITE_CESIUM_ION_TOKEN: 'ion-token' })
     assert.equal(online.imagery.length, 1)
-    assert.notEqual(online.viewer.terrainProvider, 'ellipsoid')
+    assert.ok(terrain?.errorEvent)
+    // The map controller decides whether the terrain is shown.
+    assert.equal(online.viewer.terrainProvider, 'ellipsoid')
+    terrain.errorEvent.fire()
+    assert.match(online.notices.at(-1), /地形瓦片加载失败/)
   }
   assert.equal(ionImageryCalls, 2)
   assert.equal(ionTerrainCalls, 2)
   assert.equal(Ion.defaultAccessToken, 'ion-token')
 })
 
+test('ion terrain failure keeps the ellipsoid and reports the source', async () => {
+  const app = setup()
+  ionTerrainError = new Error('terrain failed')
+  assert.equal(await app.run({ VITE_CESIUM_ION_TOKEN: 'ion-token' }), undefined)
+  assert.match(app.notices.at(-1), /ion 地形不可用/)
+  assert.equal(app.viewer.terrainProvider, 'ellipsoid')
+})
+
 test('Tianditu tile errors give actionable notices without switching providers and stop after destroy', async () => {
   const app = setup()
   await app.run({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: 'key' })
   app.imagery.forEach(value => value.errorEvent.fire())
-  assert.equal(app.notices.length, 2)
+  assert.equal(app.notices.length, 1)
   assert.ok(app.notices.every(value => /天地图.*Key.*网络/.test(value)))
   assert.equal(ionImageryCalls + ionTerrainCalls + localUrls.length, 0)
   app.destroy()
   app.imagery.forEach(value => value.errorEvent.fire())
-  assert.equal(app.notices.length, 2)
+  assert.equal(app.notices.length, 1)
 })
 
 test('Tianditu initialization failure reports the source without ion fallback', async () => {

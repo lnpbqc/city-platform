@@ -31,11 +31,15 @@ from test_workspace_bookmarks import workspace
 
 database = DATABASE_URL.removeprefix("sqlite:///")
 columns = "id,name,kind,region_id,longitude,latitude,created_at"
+legacy_tables = None
 
 
 def core():
+    global legacy_tables
     with sqlite3.connect(database) as connection:
-        tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('bookmarks','alembic_version')")]
+        if legacy_tables is None:
+            legacy_tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('bookmarks','alembic_version')")]
+        tables = legacy_tables
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         return {table: sorted(connection.execute('SELECT * FROM "' + table + '"').fetchall(), key=repr) for table in tables}
 

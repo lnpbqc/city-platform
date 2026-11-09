@@ -15,6 +15,11 @@
 | 自定义登记 | `PATCH /api/layers/{id}`、`DELETE /api/layers/{id}` | 修改完整登记信息或删除登记，文件保留 |
 | 自定义状态 | `PATCH /api/layers/{id}/map-state` | 修改自定义层的加入、显隐和透明度 |
 | 上传 | `POST /api/layers/upload` | multipart 上传 GeoJSON 或 3D Tiles ZIP，校验后建立资产和登记 |
+| POI 快照 | `PUT /api/layers/{id}/poi-data` | multipart 提交 `file`、编辑时的 `asset_id` 和 `version`，发布新的受管快照并更新当前图层 |
+| POI 单点变更 | `POST /api/layers/{id}/poi-features` | JSON 提交单点新增、修改或删除，由服务端流式重写新快照 |
+| 地图视野 | `POST /api/map/viewport` | 固定资产版本的受控显示副本，携带原始对象身份及截断标志 |
+| 附近 POI | `POST /api/map/nearby` | 指定图层版本内按 WGS84 地表距离排序的 POI |
+| 地图轻量详情 | `GET /api/map/objects/{id}` | 地点卡片属性及坐标，避免传输完整线面几何 |
 | 资产 | `POST /api/assets/register` | 登记 HTTP(S) 或已有受管入口，重复位置返回 409 |
 | 资产 | `GET /api/assets`、`GET /api/assets/{id}` | 列表、元信息、文件清单及引用 |
 | 资产版本 | `GET /api/assets/{id}/versions`、`GET /api/assets/{id}/versions/{version}` | 固定版本及指纹 |
@@ -30,6 +35,7 @@
 | 场景 | `PUT /api/scenes/{id}`、`DELETE /api/scenes/{id}` | 带 `If-Match` 完整替换或删除 |
 | 运行 | `POST /api/runs`、`GET /api/runs`、`GET /api/runs/{id}` | 提交、历史列表与状态 |
 | 运行控制 | `POST /api/runs/{id}/cancel`、`POST /api/runs/{id}/rerun` | 取消或按旧快照重跑 |
+| 运行删除 | `DELETE /api/runs/{id}` | 删除终态运行及其输入、结果、日志，释放运行资产引用；不删除源数据 |
 | 运行内容 | `GET /api/runs/{id}/input`、`GET /api/runs/{id}/logs`、`GET /api/runs/{id}/result` | 固定输入、UTF-8 日志和成功结果 |
 | 运行导出 | `GET /api/runs/{id}/download?format=json` | 下载 JSON；另支持 `format=geojson` |
 | 运行对账 | `POST /api/runs/reconcile` | 补缺失镜像，报告改动及孤立内容 |
@@ -37,6 +43,8 @@
 | 收藏 | `PATCH /api/bookmarks/{id}`、`DELETE /api/bookmarks/{id}` | 改名或删除，保留关联场景和运行 |
 
 ## 通用规则
+
+POI 导入使用现有上传接口，设置 `category=POI` 和 `type=geojson`，文件须为 WGS84 Point 要素集合，空集合用于创建空 POI 图层。GeoJSON 上传及兼容 POI 快照接口上限为 1 GiB（1,073,741,824 字节），成功返回更新后的图层登记。若编辑时的资产引用已过期，返回 `409 POI_SNAPSHOT_CONFLICT`，客户端应重新加载后编辑。此前发布的文件与已有场景的固定引用继续有效。
 
 - JSON 使用 UTF-8。接口时间须带时区并按 UTC 输出；GeoJSON 使用 WGS84 经纬度，可选高程为米。相机位置经纬度为度、高度为米，`heading/pitch/roll` 为弧度。
 - 资产引用形如 `{"asset_id":"net-001","version":"1.0.0"}`。发布版本不可变，与 `tileset.json` 的格式版本独立。
@@ -58,7 +66,7 @@
 | 400 | `INVALID_ARGUMENT`、`IF_MATCH_REQUIRED`、`INVALID_IF_MATCH`、`INVALID_IDEMPOTENCY_KEY` | 参数格式或必需请求头 |
 | 403 | `FORBIDDEN`、`ASSET_PROTECTED` | 访问条件或默认资源保护 |
 | 404 | `ASSET_NOT_FOUND`、`ASSET_VERSION_NOT_FOUND`、`LAYER_NOT_FOUND`、`OBJECT_NOT_FOUND`、`SCENE_NOT_FOUND`、`NETWORK_NOT_FOUND`、`RUN_NOT_FOUND` | 资源及固定版本是否存在 |
-| 409 | `ASSET_IN_USE`、`ASSET_ALREADY_REGISTERED`、`ASSET_CONTENT_CHANGED`、`ASSET_UNAVAILABLE`、`OBJECT_INDEX_UNAVAILABLE`、`SCENE_VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT`、`RUN_TERMINAL` | 引用、资源状态、版本或幂等冲突 |
+| 409 | `ASSET_IN_USE`、`ASSET_ALREADY_REGISTERED`、`ASSET_CONTENT_CHANGED`、`ASSET_UNAVAILABLE`、`OBJECT_INDEX_UNAVAILABLE`、`POI_SNAPSHOT_CONFLICT`、`SCENE_VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT`、`RUN_TERMINAL` | 引用、资源状态、版本或幂等冲突 |
 | 413 | `PAYLOAD_TOO_LARGE` | 上传或解压总量超限 |
 | 422 | `VALIDATION_ERROR`、`CONTENT_INVALID`、`INVALID_NODE`、`INVALID_EDGE`、`ORDER_UNSUPPORTED` | 字段、几何、正式边及排序条件 |
 | 500 | `INTERNAL_ERROR` | 按诊断 ID 查询后端日志 |
@@ -67,7 +75,7 @@
 
 ## 图层、资产与引用
 
-目录参数 `campus=university-town|huangpu` 选择默认资源，默认大学城；切换校区共用默认图层状态，替换对应资产绑定。分类固定为底图、建筑、道路、水体、专题、仿真结果；未知自定义分类归入专题。
+目录参数 `campus=university-town|huangpu` 选择默认资源，默认大学城；切换校区共用默认图层状态，替换对应资产绑定。`category` 为 1 至 80 字的分类字符串；预置分类包含底图、建筑、道路、POI、水体、专题、仿真结果，自定义分类原样返回并独立分组。旧三维建筑、三维模型、线状网络别名保持兼容。
 
 地图状态字段为 `map_attached/map_visible/map_opacity`。目录状态接口的 `order` 是从 0 开始的完整目录目标位置，较小值显示更靠前；后台原子重排。排序仅支持已核对的二维 GeoJSON，三维瓦片、拉伸面、含 Z 几何及未知远端资源返回 `orderable=false`，调整顺序返回 422。
 
@@ -107,7 +115,38 @@ GeoJSON 对象 ID 由资产 ID、版本和原始 Feature 序号生成 UUID5；�
 
 传 `time/resolution` 时，对象附 `temporal={time,resolution,unit,value,missing}`，静态对象为 null，原属性保持。分辨率默认 hour，可选 day。
 
+## 地图视野与 POI
+
+`POST /api/map/viewport` 请求绑定图层和资产版本，例如：
+
+```json
+{"layer_id":"实际图层ID","asset_id":"实际资产ID","version":"1.0.0","campus":"university-town","bbox":[113.3,23.0,113.4,23.1],"width":1280,"height":720}
+```
+
+`bbox` 按西、南、东、北排列，支持跨日期变更线；`width/height` 为 1 至 16,384 的画布像素尺寸。可选 `meters_per_pixel` 为正有限地面米/像素，缺省按视野范围估算。响应为 `FeatureCollection`，另含 `truncated`。每个 Feature 的 `id` 为原始对象 UUID，`__object` 包含 `object_id/feature_index/asset/weight`，`properties` 保留原属性。显示序号不得用于重新生成对象 ID。单次每图层最多 2,000 个要素、100,000 个顶点、10 MiB；`truncated=true` 时客户端提示放大。线面裁剪与简化仅用于显示，原始几何可由原对象接口读取。
+
+道路先按比例尺筛选。名称、编号和桥隧层级等属性兼容的二度连接线段组成显示线组，再按等级用完整线组应用预算。放不下的线组整组省略，并返回 `truncated: true`。其 `id` 为代表来源对象 UUID，`__object.source_object_ids` 列出原始分段，`__display.road_class/road_rank` 提供制图等级。`POST /api/map/road-pick` 接收同一图层引用、`object_ids`（最多 2,000 项）及 `longitude/latitude`，返回距离点击位置最近的原始对象和原始几何。分析路网仍使用原始分段。
+
+POI 先按中文类别、有效名称和比例尺确定背景显示资格，再在完整候选范围按显式权重、语义优先级和稳定 ID 选择候选。权重取 `importance/weight/priority` 首个有效数值，默认 0；每个空间格可提供多个候选，由前端统一避让。`__display.poi_category/priority/name` 提供显示类别、语义优先级和有效名称。附近查询独立于背景资格与显示抽稀：
+
+```json
+{"layers":[{"layer_id":"实际POI图层ID","asset_id":"实际资产ID","version":"1.0.0"}],"longitude":113.366746,"latitude":23.043612,"radius_m":1000,"limit":20}
+```
+
+`POST /api/map/nearby` 的 `layers` 最多 100 项，由客户端提交已加入且已开启的 POI 图层；每项可指定 `campus`。半径默认且最大 1,000 米，数量默认且最大 20。返回 `{"items":[],"unavailable_layers":[]}`；对象含 `layer_id` 和 `distance_m`，按 WGS84 地表距离升序、对象 ID 稳定排序。抽稀隐藏点参与查询；无可用本地索引的图层列于 `unavailable_layers`，客户端须提示未参与查询。
+
+`GET /api/map/objects/{id}` 返回轻量对象字段，Point 保留点几何供编辑，线面 `geometry=null`，保留原属性、坐标及 `feature_index`。已有 `GET /api/objects/{id}` 继续返回完整原始几何。
+
+`POST /api/layers/{id}/poi-features` 使用编辑时的预期引用和单点操作：
+
+```json
+{"asset_id":"编辑时的资产ID","version":"1.0.0","operation":"update","object_id":"实际对象UUID","feature":{"type":"Feature","geometry":{"type":"Point","coordinates":[113.366746,23.043612]},"properties":{"name":"示例地点","category":"餐饮","address":"示例路"}}}
+```
+
+`operation` 为 `add/update/delete`；修改、删除须指定 `object_id`，新增、修改须指定 Point `feature`。服务端保留未改属性及原文件其他字段，变更后流式生成新快照并返回图层登记。接口仅支持本地上传、未受保护的 POI 图层；提交及最终发布均检查预期资产/版本，冲突返回 `409 POI_SNAPSHOT_CONFLICT`。新建图层仍使用上传接口。
+
 ## 路网、场景与并发
+
 
 路网目录按 ID、发布时间倒序及版本分页；详情省略版本时选择最新可用发布版本。读取异常快照返回 409 `NETWORK_INVALID`，校验接口仍返回 200 和 `valid=false/issues`，问题包含具体 `node_ids/edge_ids`。
 
@@ -142,6 +181,10 @@ GeoJSON 对象 ID 由资产 ID、版本和原始 Feature 序号生成 UUID5；�
 规范 JSON 采用 UTF-8、递归键排序、紧凑分隔符、不转义中文、拒绝 NaN/Infinity，SHA-256 输出小写十六进制。实现见 [run_store.py](../map_back/app/run_store.py) 和 [run_artifacts.py](../map_back/app/run_artifacts.py)。
 
 ### 状态、取消与恢复
+
+`DELETE /api/runs/{id}` 成功返回 204，重复删除仍返回 204；只允许 `succeeded/failed/cancelled`，活动运行返回 `409 RUN_NOT_TERMINAL`。场景或收藏仍引用该运行时返回 `409 RUN_IN_USE`，`detail.references` 列出引用来源。删除和结果文件发布共享锁，提交前的文件清理或数据库提交失败会恢复原记录和目录；提交后的隔离恢复副本清理失败会记录日志，由启动或运行对账重试。源资产和其他历史运行不受影响。
+
+历史图层读取按场景或运行快照验证固定资产引用；旧登记或原场景已删除但资产仍存在时可以继续恢复。新快照可携带图层 `name/category`，旧快照省略这些字段时保持原输入哈希。
 
 状态为 `queued → running → succeeded/failed/cancelled`，排队任务可直接取消；运行中取消等待计算子进程退出后记录终态及结束时间，终态取消返回 409 `RUN_TERMINAL`。
 

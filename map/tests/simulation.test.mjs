@@ -573,3 +573,16 @@ test('read-only catalog recovery does not interrupt saves and late catalogs cann
   assert.equal(simulation.sceneId.value, 'new')
   assert.equal(simulation.scenes.value[0].id, 'new')
 })
+
+test('deleting the selected historical run clears results and link state while preserving configuration', async t => {
+  const { app, simulation } = setup(); t.after(() => app.unmount())
+  await simulation.initialize()
+  await simulation.openRun('run-one')
+  const before = clone(simulation.draft.value)
+  simulation.runDeleted('run-one')
+  assert.equal(simulation.run.value, null)
+  assert.equal(simulation.result.value, null)
+  assert.equal(simulation.snapshot.value, null)
+  assert.equal(simulation.draft.value.run_id, null)
+  assert.deepEqual({ ...simulation.draft.value, run_id: before.run_id }, before)
+})

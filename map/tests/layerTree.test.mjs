@@ -1,6 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { layerGroups, moveTarget, objectCountLabel } from '../src/layerTree.ts'
+import { layerGroups, moveTarget, objectCountLabel, categoryOptions } from '../src/layerTree.ts'
+
+test('saved custom categories are reusable independent groups and legacy aliases stay compatible', () => {
+  const saved = [{ id: 'a', category: '市政设施', order: 3 }, { id: 'b', category: '市政设施', order: 1 }, { id: 'c', category: '三维建筑', order: 2 }]
+  assert.equal(categoryOptions(saved).filter(value => value === '市政设施').length, 1)
+  assert.deepEqual(layerGroups(saved).find(group => group.category === '市政设施').layers.map(layer => layer.id), ['b', 'a'])
+  assert.equal(layerGroups(saved).find(group => group.category === '建筑').layers[0].id, 'c')
+})
 
 const layers = [
   { id: 'basemap', category: '底图', attached: true, order: 0, orderable: false, object_count: 0 },

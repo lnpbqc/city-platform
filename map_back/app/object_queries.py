@@ -3,14 +3,14 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
-from sqlalchemy import and_, false, or_, select, text
+from sqlalchemy import and_, false, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_asset_id
 from .contracts import Geometry, ObjectOutput, ObjectSummary, Page
 from .database import get_session
 from .errors import ApiProblem
-from .models import Asset, AssetVersion, Layer, ObjectIndex, Scene, SceneAssetReference, SpatialObject
+from .models import Asset, AssetVersion, Layer, ObjectIndex, Scene, SceneAssetReference, SpatialObject, Run, RunAssetReference
 from .spatial import area_m2, clip_geometry, parse_bbox, representative_coordinates, selection_polygon
 
 router = APIRouter(prefix="/api/objects", tags=["objects"])
@@ -56,14 +56,31 @@ def _available(session: Session, asset: Asset, version: str):
         raise ApiProblem(409, "OBJECT_INDEX_UNAVAILABLE", state.error if state else "该资产尚未建立本地对象索引")
 
 
-def scene_layer_reference(session: Session, query: ObjectFilters):
+def snapshot_layers(session: Session, query: ObjectFilters):
     if not query.asset_id or not query.version:
-        return False
+        return []
     reference = {"asset_id": query.asset_id, "version": query.version}
     documents = session.scalars(select(Scene.document).join(SceneAssetReference, SceneAssetReference.scene_id == Scene.id)
         .where(SceneAssetReference.asset_id == query.asset_id, SceneAssetReference.asset_version == query.version))
-    return any(layer["layer_id"] == query.layer_id and layer["asset"] == reference
-               for document in documents for layer in document["layers"])
+    layers = [layer for document in documents for layer in document['layers']
+              if layer['layer_id'] == query.layer_id and layer['asset'] == reference]
+    runs = session.scalars(select(Run.input_snapshot).join(RunAssetReference, RunAssetReference.run_id == Run.id)
+        .where(RunAssetReference.asset_id == query.asset_id, RunAssetReference.asset_version == query.version))
+    layers.extend(layer for snapshot in runs for layer in snapshot['scene']['layers']
+                  if layer['layer_id'] == query.layer_id and layer['asset'] == reference)
+    return layers
+
+
+def scene_layer_reference(session: Session, query: ObjectFilters):
+    return bool(snapshot_layers(session, query))
+
+
+def referenced_layer_category(session: Session, query: ObjectFilters):
+    layer = session.get(Layer, query.layer_id) if query.layer_id else None
+    if layer and (not query.asset_id or (layer.asset_id, layer.asset_version) == (query.asset_id, query.version)):
+        return layer.category
+    category = next((item.get('category') for item in snapshot_layers(session, query) if item.get('category')), '')
+    return category or next((spec['category'] for spec in BUILTIN_LAYERS if spec['id'] == query.layer_id), '')
 
 
 def layer_reference(session: Session, query: ObjectFilters):
@@ -195,6 +212,18 @@ def _page(session, query, selection):
 
 @router.get("", response_model=Page[ObjectOutput])
 def list_objects(query: Annotated[ObjectFilters, Query()], session: SessionDep):
+    if query.bbox is None:
+        filters = _conditions(session, query)
+        total = session.scalar(_statement(func.count()).where(*filters))
+        start = (query.page - 1) * query.page_size
+        rows = list(session.scalars(_statement(SpatialObject).where(*filters).order_by(SpatialObject.id)
+                                   .offset(start).limit(query.page_size))) if start < total else []
+        refs = _layer_refs(session) if rows else {}
+        items = [_output(row, refs, preferred_layer=query.layer_id) for row in rows]
+        if query.time is not None:
+            from .timeseries import attach_temporal
+            attach_temporal(session, items, query.time, query.resolution)
+        return {'items': items, 'total': total, 'page': query.page, 'page_size': query.page_size}
     return _page(session, query, select_objects(session, query))
 
 

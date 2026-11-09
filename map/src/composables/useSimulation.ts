@@ -270,6 +270,12 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
     loading.value = false
     draft.value.run_id = null
   }
+  function runDeleted(identity: string) {
+    if (run.value?.run_id !== identity && draft.value.run_id !== identity) return
+    clearRun()
+    historical.value = false
+    draft.value.run_id = null
+  }
   async function persist(asNew: boolean, operation: ReturnType<typeof beginView>) {
     saving.value = true
     try {
@@ -471,5 +477,5 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
   })
   return { scenes, networks, draft, sceneId, sceneVersion, historical, network, run, result, snapshot, resultNetwork,
     loading, saving, submitting, cancelling, recovering, recoveryError, error, busy, submissionPending, editingLocked,
-    initialize, refreshCatalogs, recover, chooseScene, chooseNetwork, newScene, previewDraft, save, submit, cancel, refreshRun, toggleEdge, openRun, rerun, cancelRestore }
+    initialize, refreshCatalogs, recover, chooseScene, chooseNetwork, newScene, previewDraft, runDeleted, save, submit, cancel, refreshRun, toggleEdge, openRun, rerun, cancelRestore }
 }

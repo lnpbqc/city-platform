@@ -8,7 +8,7 @@ from zipfile import BadZipFile, ZipFile
 from fastapi import HTTPException, UploadFile
 from .spatial import parse_geometry
 
-GEOJSON_LIMIT = 10 * 1024 * 1024
+GEOJSON_LIMIT = 1024 * 1024 * 1024
 ZIP_LIMIT = 512 * 1024 * 1024
 EXPANDED_LIMIT = 2 * 1024 * 1024 * 1024
 FILE_LIMIT = 1_000_000
@@ -18,10 +18,12 @@ def invalid(message: str):
     raise HTTPException(422, message)
 
 
-async def receive(file: UploadFile, target: Path, limit: int):
+async def receive(file: UploadFile, target: Path, limit: int, *, cancel=None):
     total = 0
     with target.open("wb") as output:
         while chunk := await file.read(1024 * 1024):
+            if cancel:
+                cancel()
             total += len(chunk)
             if total > limit:
                 raise HTTPException(413, f"上传文件超过 {limit // 1024 // 1024} MB 上限")
@@ -39,13 +41,8 @@ def read_json(path: Path):
         invalid(f"{path.name} 不是有效的 UTF-8 JSON")
 
 
-def validate_geojson(path: Path, *, point_only: bool = False):
-    data = read_json(path)
-    if not isinstance(data, dict) or data.get("type") != "FeatureCollection" or not isinstance(data.get("features"), list):
-        invalid("GeoJSON 必须为 FeatureCollection")
-    if "crs" in data:
-        invalid("请移除旧式 crs 声明，并先转换为 WGS84 经纬度")
-
+def _validate_geojson(path: Path, *, point_only: bool = False, cancel=None):
+    from .geojson_stream import features
     def coordinates(value, depth):
         if depth == 0:
             if not isinstance(value, list) or len(value) not in (2, 3):
@@ -65,7 +62,7 @@ def validate_geojson(path: Path, *, point_only: bool = False):
             invalid("线至少需要两个位置；面环至少四个位置且首尾闭合")
 
     depths = {"Point": 0, "MultiPoint": 1, "LineString": 1, "MultiLineString": 2, "Polygon": 2, "MultiPolygon": 3}
-    for feature in data["features"]:
+    for feature in features(path, cancel):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             invalid("features 内必须是 Feature")
         if feature.get("properties") is not None and not isinstance(feature["properties"], dict):
@@ -92,6 +89,13 @@ def validate_geojson(path: Path, *, point_only: bool = False):
             parse_geometry(geometry)
         except ValueError as error:
             invalid(str(error))
+
+
+def validate_geojson(path: Path, *, point_only: bool = False, cancel=None):
+    try:
+        return _validate_geojson(path, point_only=point_only, cancel=cancel)
+    except ValueError as error:
+        invalid(str(error))
 
 
 def extract_tiles(archive: Path, destination: Path):
