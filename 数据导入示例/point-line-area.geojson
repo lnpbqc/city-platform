@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "示例采样位置", "source": "合成示例"},
+      "geometry": {"type": "Point", "coordinates": [113.3664, 23.0430]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例巡查路线", "source": "合成示例"},
+      "geometry": {"type": "LineString", "coordinates": [[113.3664, 23.0430], [113.3667, 23.0432], [113.3670, 23.0430]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例调查范围", "source": "合成示例"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[113.3664, 23.0428], [113.3670, 23.0428], [113.3670, 23.0432], [113.3664, 23.0432], [113.3664, 23.0428]]]
+      }
+    }
+  ]
+}

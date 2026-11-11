@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾图书馆", "category": "教育", "address": "示例路 1 号", "importance": 60, "source": "合成示例"},
+      "geometry": {"type": "Point", "coordinates": [113.3662, 23.0437]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾社区诊所", "category": "医疗", "address": "示例路 8 号", "importance": 50, "source": "合成示例"},
+      "geometry": {"type": "Point", "coordinates": [113.3671, 23.0435]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾换乘站", "category": "交通", "importance": 80, "source": "合成示例"},
+      "geometry": {"type": "Point", "coordinates": [113.3673, 23.0428]}
+    }
+  ]
+}

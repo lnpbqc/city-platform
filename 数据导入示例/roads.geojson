@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾大道", "edge_id": "A-B", "highway": "primary", "source": "合成示例"},
+      "geometry": {"type": "LineString", "coordinates": [[113.3660, 23.0435], [113.3673, 23.0435]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾东路", "edge_id": "B-D", "highway": "secondary", "source": "合成示例"},
+      "geometry": {"type": "LineString", "coordinates": [[113.3673, 23.0435], [113.3673, 23.0426]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾西路", "edge_id": "A-C", "highway": "secondary", "source": "合成示例"},
+      "geometry": {"type": "LineString", "coordinates": [[113.3660, 23.0435], [113.3660, 23.0426]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "示例青禾南路", "edge_id": "C-D", "highway": "secondary", "source": "合成示例"},
+      "geometry": {"type": "LineString", "coordinates": [[113.3660, 23.0426], [113.3673, 23.0426]]}
+    }
+  ]
+}

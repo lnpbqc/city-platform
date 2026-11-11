@@ -1,0 +1,20 @@
+{
+  "asset_id": "example-qinghe-network",
+  "version": "1.0.0",
+  "name": "示例青禾仿真路网",
+  "directed": false,
+  "crs": "EPSG:4326",
+  "synthetic": true,
+  "nodes": [
+    {"id": "A", "coordinates": [113.3660, 23.0435]},
+    {"id": "B", "coordinates": [113.3673, 23.0435]},
+    {"id": "C", "coordinates": [113.3660, 23.0426]},
+    {"id": "D", "coordinates": [113.3673, 23.0426]}
+  ],
+  "edges": [
+    {"id": "A-B", "source": "A", "target": "B", "length_m": 133, "speed_mps": 10},
+    {"id": "B-D", "source": "B", "target": "D", "length_m": 100, "speed_mps": 10},
+    {"id": "A-C", "source": "A", "target": "C", "length_m": 100, "speed_mps": 5},
+    {"id": "C-D", "source": "C", "target": "D", "length_m": 133, "speed_mps": 5}
+  ]
+}
