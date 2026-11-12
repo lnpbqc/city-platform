@@ -8,8 +8,8 @@ import RunExports from './RunExports.vue'
 import TimeAxis from './TimeAxis.vue'
 import { useSimulation } from '../composables/useSimulation'
 import { useTemporalLayers } from '../composables/useTemporalLayers'
-import type { MapLayer } from '../types'
-import { prepareSceneLayers } from '../sceneLayers'
+import { sameTilesPlacement, tilesPlacement, type MapLayer } from '../types'
+import { prepareSceneLayers, sceneTilesPlacement } from '../sceneLayers'
 import type { MapController } from '../mapController'
 import { validCamera, type CameraState, type NavigationReading } from '../mapNavigation'
 import type { SceneLayerState, SceneRecord } from '../simulationTypes'
@@ -33,6 +33,7 @@ const currentLayers = (): SceneLayerState[] => props.layers.filter(layer => laye
   layer_id: layer.id, asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
   name: layer.name, category: layer.category,
   map_attached: layer.attached || !!layer.map_attached, map_visible: layer.visible, map_opacity: layer.opacity, road_max_level: layer.road_max_level ?? 2, order: layer.order ?? index,
+  ...(layer.type === '3dtiles' ? tilesPlacement(layer, true) : {}),
 }))
 const simulation = useSimulation(() => controller?.getCamera() ?? initialCamera, currentLayers)
 const { scenes, networks, draft, sceneId, sceneVersion, network, run, result, snapshot, loading, saving, submitting, error,
@@ -122,6 +123,10 @@ async function syncLayers(prepared: MapLayer[] = []) {
       if (existing.status === 'error') await controller?.load(existing)
       if (!alive || version !== layerVersion) return
       existing.visible = state.map_visible; existing.opacity = state.map_opacity; controller?.setRoadMaxLevel(existing, state.road_max_level ?? 2); existing.order = state.order
+      if (existing.type === '3dtiles') {
+        const placement = sceneTilesPlacement(state)
+        if (!sameTilesPlacement(existing, placement)) void controller?.setTilesPlacement(existing, placement)
+      }
       controller?.appearance(existing)
       return
     }

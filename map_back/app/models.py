@@ -60,6 +60,9 @@ class Layer(Base):
     map_visible: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     map_opacity: Mapped[float] = mapped_column(Float, default=1, server_default="1")
     road_max_level: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    tiles_height_offset_m: Mapped[float] = mapped_column(Float, default=0, server_default="0")
+    tiles_ground_anchor: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    tiles_align_to_terrain: Mapped[bool | None] = mapped_column(Boolean)
     map_order: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
     orderable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -90,6 +93,7 @@ class BuiltinLayerState(Base):
     map_visible: Mapped[bool] = mapped_column(Boolean, default=True)
     map_opacity: Mapped[float] = mapped_column(Float, default=1)
     road_max_level: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    tiles_placements: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     map_order: Mapped[int] = mapped_column(Integer)
 
 

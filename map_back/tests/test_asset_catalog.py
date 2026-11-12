@@ -141,13 +141,61 @@ def test_backfilled_version_reports_measured_file_count(client):
     assert response.json()["file_count"] == len(response.json()["file_checksums"]) == 2
 
 
-def test_startup_reconciles_historical_files_and_metadata(client):
+def test_manual_scan_discovers_historical_files_and_indexes_them(client):
     identity = str(uuid4())
     folder = FILES_DIR / identity
     folder.mkdir()
     (folder / "data.geojson").write_text(json.dumps(GEO), encoding="utf-8")
     with TestClient(app) as restarted:
-        response = restarted.get(f"/api/assets/{identity}")
+        assert restarted.get(f"/api/assets/{identity}").status_code == 404
+    report = client.post("/api/assets/reconcile")
+    assert report.status_code == 200, report.text
+    assert report.json()["discovered"] == 1
+    response = client.get(f"/api/assets/{identity}")
     assert response.status_code == 200
     assert response.json()["sha256"]
     assert response.json()["current_version"] == "1.0.0"
+    assert client.get("/api/objects", params={"asset_id": identity}).json()["total"] == 1
+
+
+@pytest.mark.parametrize("status", ["missing", "unsafe"])
+def test_restart_marks_unavailable_entries_and_leaves_errors_for_manual_scan(client, status):
+    layer = upload(client, json.dumps(GEO).encode()).json()
+    identity = layer["asset_id"]
+    entry = FILES_DIR / identity / "data.geojson"
+    payload = entry.read_bytes()
+    entry.unlink()
+    if status == "unsafe":
+        entry.mkdir()
+
+    with TestClient(app) as restarted:
+        assets = restarted.get("/api/assets", params={"status": status}).json()
+        assert any(asset["id"] == identity and asset["error"] for asset in assets)
+        assert restarted.get("/api/objects", params={"asset_id": identity}).status_code == 409
+
+    if status == "unsafe":
+        entry.rmdir()
+    entry.write_bytes(payload)
+    with TestClient(app) as restarted:
+        assert any(asset["id"] == identity for asset in restarted.get("/api/assets", params={"status": status}).json())
+
+    assert client.post("/api/assets/reconcile").status_code == 200
+    assert client.get(f"/api/assets/{identity}").json()["status"] == "active"
+    assert client.get("/api/objects", params={"asset_id": identity}).json()["total"] == 1
+
+
+def test_manual_scan_rebuilds_missing_model_index(client):
+    from app.models import ObjectIndex
+
+    layer = upload(client, zip_data({"tileset.json": json.dumps(TILESET)}), "3dtiles", "model.zip").json()
+    key = layer["asset_id"], layer["asset_version"]
+    with SessionLocal() as session:
+        session.delete(session.get(ObjectIndex, key))
+        session.commit()
+
+    with TestClient(app):
+        with SessionLocal() as session:
+            assert session.get(ObjectIndex, key) is None
+    report = client.post("/api/assets/reconcile")
+    assert report.status_code == 200, report.text
+    assert client.get("/api/objects", params={"asset_id": key[0]}).json()["total"] == 1

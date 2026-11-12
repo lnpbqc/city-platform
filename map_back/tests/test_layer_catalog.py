@@ -110,7 +110,7 @@ def test_referencing_builtin_entry_protects_versions_and_removing_registration_k
         assert client.post("/api/layers", json={"name": "非法入口", "type": "geojson", "url": location}).status_code == 422
 
 
-def test_startup_computes_order_capability_after_backfilling_legacy_asset_binding(client):
+def test_manual_scan_computes_order_capability_after_backfilling_legacy_asset_binding(client):
     identity, layer_id = str(uuid4()), str(uuid4())
     folder = FILES_DIR / identity
     folder.mkdir()
@@ -121,6 +121,10 @@ def test_startup_computes_order_capability_after_backfilling_legacy_asset_bindin
         session.commit()
     with TestClient(app) as restarted:
         row = next(row for row in catalog(restarted) if row["id"] == layer_id)
+        assert row["asset"] is None
+    report = client.post("/api/assets/reconcile")
+    assert report.status_code == 200, report.text
+    row = next(row for row in catalog(client) if row["id"] == layer_id)
     assert row["asset"]["asset_id"] == identity and row["orderable"]
 
 

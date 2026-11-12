@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from '@lucide/vue'
 import LayerItem from './LayerItem.vue'
-import type { MapLayer } from '../types'
+import type { MapLayer, TilesPlacement } from '../types'
 import { layerGroups, moveTarget } from '../layerTree'
 const props = defineProps<{
   layers: MapLayer[]
@@ -34,6 +34,7 @@ const emit = defineEmits<{
   remove: [layer: MapLayer]
   opacity: [layer: MapLayer, value: number]
   roadMaxLevel: [layer: MapLayer, value: number]
+  tilesPlacement: [layer: MapLayer, value: TilesPlacement]
   move: [layer: MapLayer, direction: number]
 }>()
 const search = ref('')
@@ -143,6 +144,7 @@ function toggleGroup(category: string) {
             @remove="emit('remove', layer)"
             @opacity="emit('opacity', layer, $event)"
             @road-max-level="emit('roadMaxLevel', layer, $event)"
+            @tiles-placement="emit('tilesPlacement', layer, $event)"
             @move="emit('move', layer, $event)"
           />
         </div>

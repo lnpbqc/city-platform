@@ -1,18 +1,19 @@
 import json
+from time import perf_counter
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .assets import local_parts, lock_catalog, published_files, reconcile
+from .assets import check_published_entries, local_parts, lock_catalog, published_files
 from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, RETIRED_LAYER_IDS, builtin_asset_id, ensure_builtin_assets
 from .contracts import LayerCatalogOutput
 from .database import get_session
-from .errors import ApiProblem
-from .models import Asset, BuiltinLayerState, Layer, ObjectIndex
+from .errors import ApiProblem, logger
+from .models import Asset, BuiltinLayerState, Layer
 from .schemas import LayerCatalogStateInput
-from .object_index import index_asset, object_counts, sync_indexes
+from .object_index import index_asset, object_counts
 
 router = APIRouter(prefix="/api/layers/catalog", tags=["layers"])
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -24,24 +25,14 @@ GROUPS = {"底图", "建筑", "道路", "POI", "水体", "专题", "仿真结果
 
 
 def initialize_catalog(session: Session):
+    started = perf_counter()
     lock_catalog(session)
-    published = set(session.execute(select(Layer.id, Layer.asset_id, Layer.asset_version).join(ObjectIndex,
-        (ObjectIndex.asset_id == Layer.asset_id) & (ObjectIndex.asset_version == Layer.asset_version))
-        .where(ObjectIndex.status == 'ready')).all())
-    ensure_builtin_assets(session)
     ensure_catalog(session)
-    result = reconcile(session)
-    sync_indexes(session)
-    for layer in session.scalars(select(Layer)):
-        asset = session.get(Asset, layer.asset_id) if layer.asset_id else None
-        index = session.get(ObjectIndex, (layer.asset_id, layer.asset_version)) if layer.asset_id and layer.asset_version else None
-        # Both geometry and this flag were published together. Recheck file hashes
-        # above, but do not parse an unchanged GiB snapshot on every startup.
-        if asset and asset.status == 'active' and index and index.status == 'ready' and (layer.id, layer.asset_id, layer.asset_version) in published:
-            continue
-        layer.orderable = layer_orderable(session, layer)
+    logger.info("startup stage=catalog_bootstrap duration_ms=%.2f", (perf_counter() - started) * 1000)
+    started = perf_counter()
+    check_published_entries(session)
     session.commit()
-    return result
+    logger.info("startup stage=asset_entry_check duration_ms=%.2f", (perf_counter() - started) * 1000)
 
 
 def layer_orderable(session: Session, layer: Layer):
@@ -112,7 +103,8 @@ def catalog_rows(session: Session, campus: Campus):
                        "static": True, "orderable": spec["orderable"], "object_count": counts.get((asset.id, asset.current_version)) if asset else 0, "unit": spec["unit"],
                        "legend": [{"label": spec["name"], "color": spec["color"]}], "source": asset.source if asset else "底图服务",
                        "map_attached": state.map_attached, "map_visible": state.map_visible,
-                       "map_opacity": state.map_opacity, "road_max_level": state.road_max_level, "order": state.map_order})
+                       "map_opacity": state.map_opacity, "road_max_level": state.road_max_level, "order": state.map_order,
+                       **(state.tiles_placements or {}).get(campus, {})})
     aliases = {"三维建筑": "建筑", "三维模型": "建筑", "线状网络": "道路"}
     for layer in session.scalars(select(Layer)):
         result.append({"id": layer.id, "name": layer.name,
@@ -121,7 +113,9 @@ def catalog_rows(session: Session, campus: Campus):
                        "url": layer.url, "builtin": False, "campus": None, "source": layer.source,
                        "static": True, "orderable": layer.orderable, "object_count": counts.get((layer.asset_id, layer.asset_version)), "unit": None, "legend": [],
                        "map_attached": layer.map_attached, "map_visible": layer.map_visible,
-                       "map_opacity": layer.map_opacity, "road_max_level": layer.road_max_level, "order": layer.map_order})
+                       "map_opacity": layer.map_opacity, "road_max_level": layer.road_max_level, "order": layer.map_order,
+                       "tiles_height_offset_m": layer.tiles_height_offset_m, "tiles_ground_anchor": layer.tiles_ground_anchor,
+                       "tiles_align_to_terrain": layer.tiles_align_to_terrain})
     from .rendering import describe
 
     temporal = catalog_timeseries(session)
@@ -161,7 +155,13 @@ def update_catalog_state(layer_id: str, body: LayerCatalogStateInput, session: S
         rows.insert(body.order, current)
         for index, row in enumerate(rows):
             states[row["id"]].map_order = index
-    for key, value in body.model_dump(exclude_unset=True, exclude={"order"}).items():
+    changes = body.model_dump(exclude_unset=True, exclude={"order"})
+    if isinstance(state, BuiltinLayerState):
+        placement = {key: changes.pop(key) for key in ("tiles_height_offset_m", "tiles_ground_anchor", "tiles_align_to_terrain") if key in changes}
+        if placement:
+            placements = state.tiles_placements or {}
+            state.tiles_placements = {**placements, campus: {**placements.get(campus, {}), **placement}}
+    for key, value in changes.items():
         setattr(state, key, value)
     session.commit()
     return next(row for row in catalog_rows(session, campus) if row["id"] == layer_id)

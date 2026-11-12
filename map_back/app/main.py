@@ -4,6 +4,7 @@ import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -21,12 +22,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .database import FILES_DIR, STORAGE_DIR, SessionLocal, get_session
 from .assets import asset_for_url, asset_record, bind_asset_version, delete_asset, ensure_initial_version, inventory, lock_catalog, prepare_download, reconcile
-from .models import Asset, Bookmark, BuiltinLayerState, Layer, Run
+from .models import Asset, Bookmark, BuiltinLayerState, Layer, ObjectIndex, Run
 from .schemas import AssetDetail, BookmarkInput, BookmarkOutput, BookmarkRename, LayerInput, LayerMapStateInput, LayerOutput, ReconcileOutput
 from .poi_mutations import PoiChange, rewrite as rewrite_poi
 from .uploads import GEOJSON_LIMIT, ZIP_LIMIT, cleanup, extract_tiles, receive, validate_geojson
 from .contracts import VersionOutput
-from .errors import ERROR_RESPONSES, ApiProblem, TraceMiddleware, http_error, unexpected_error, validation_error
+from .errors import ERROR_RESPONSES, ApiProblem, TraceMiddleware, http_error, logger, unexpected_error, validation_error
 from .asset_catalog import router as asset_catalog_router
 from .asset_queries import router as asset_queries_router
 from .builtin_assets import SAMPLES_DIR
@@ -47,13 +48,17 @@ from .source_files import SourceFiles
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    started = perf_counter()
     await run_in_threadpool(recover_retention)
+    logger.info("startup stage=retention_recovery duration_ms=%.2f", (perf_counter() - started) * 1000)
     with SessionLocal() as session:
         await run_in_threadpool(initialize_catalog, session)
         await run_in_threadpool(ensure_timeseries, session)
         await run_in_threadpool(ensure_networks, session)
         session.commit()
+    started = perf_counter()
     await run_in_threadpool(run_queue.acquire)
+    logger.info("startup stage=run_recovery duration_ms=%.2f", (perf_counter() - started) * 1000)
     await run_in_threadpool(render_queue.acquire)
     try:
         yield
@@ -108,9 +113,12 @@ def create_layer(body: LayerInput, session: SessionDep):
                           session.scalar(select(func.max(BuiltinLayerState.map_order))) or 0) + 1
     layer.orderable = layer_orderable(session, layer)
     if asset_id:
+        started = perf_counter()
         state = index_asset(session, session.get(Asset, asset_id))
-        if session.info.get("upload") and (not state or state.status != "ready"):
-            raise HTTPException(422, state.error if state else "对象索引建立失败")
+        if session.info.get("upload"):
+            logger.info("upload asset_id=%s stage=object_index duration_ms=%.2f", asset_id, (perf_counter() - started) * 1000)
+            if not state or state.status != "ready":
+                raise HTTPException(422, state.error if state else "对象索引建立失败")
     session.add(layer)
     if layer.asset_id:
         enqueue(session, layer.asset_id, layer.asset_version, layer.category)
@@ -224,7 +232,9 @@ async def publish_layer_upload(
         content = temporary / "content"
         content.mkdir()
         target = content / "data.geojson" if type == "geojson" else temporary / "upload.zip"
+        started = perf_counter()
         await receive(file, target, GEOJSON_LIMIT if type == "geojson" else ZIP_LIMIT, cancel=cancel)
+        logger.info("upload asset_id=%s stage=receive duration_ms=%.2f", identity, (perf_counter() - started) * 1000)
         return await run_in_threadpool(_publish_received, identity, temporary, published, target,
             file.filename, name, type, category, source, coordinate_description, poi_target, cancel, final_cancel)
     finally:
@@ -243,21 +253,26 @@ def _publish_received(identity, temporary, published, target, filename, name, ty
     try:
         cancel()
         content = temporary / "content"
+        started = perf_counter()
         if type == "geojson":
             validate_geojson(target, point_only=category.strip() == "POI")
         else:
             target = extract_tiles(target, content)
+        logger.info("upload asset_id=%s stage=validate_or_extract duration_ms=%.2f", identity, (perf_counter() - started) * 1000)
         relative = target.relative_to(content).as_posix()
         try:
             body = LayerInput(name=name, category=category, type=type, source=source, url=f"/data-files/{identity}/{relative}")
         except ValidationError as error:
             raise RequestValidationError(error.errors()) from error
         cancel()
+        started = perf_counter()
         shutil.move(str(content), str(published))
         with SessionLocal() as session:
             session.info["upload"] = True
             session.info["before_publish"] = final_cancel
-            return LayerOutput.model_validate(_publish_asset(session, body, identity, published, filename, type, coordinate_description, poi_target, cancel))
+            result = _publish_asset(session, body, identity, published, filename, type, coordinate_description, poi_target, cancel)
+            logger.info("upload asset_id=%s stage=publish_total duration_ms=%.2f", identity, (perf_counter() - started) * 1000)
+            return LayerOutput.model_validate(result)
     finally:
         cancellation.reset(token)
         _import_lock.release()
@@ -291,7 +306,9 @@ def _publish_asset(session, body, identity, published, filename, type, coordinat
         ensure_initial_version(session, asset)
         cancel()
         if layer is not None:
+            started = perf_counter()
             state = index_asset(session, asset)
+            logger.info("upload asset_id=%s stage=object_index duration_ms=%.2f", identity, (perf_counter() - started) * 1000)
             if not state or state.status != "ready":
                 raise HTTPException(422, state.error if state else "对象索引建立失败")
             layer.asset_id, layer.asset_version, layer.url = asset.id, asset.current_version, body.url
@@ -397,8 +414,19 @@ def delete_bookmark(bookmark_id: str, session: SessionDep):
 
 @app.post("/api/assets/reconcile", response_model=ReconcileOutput)
 def reconcile_assets(session: SessionDep):
+    started = perf_counter()
+    lock_catalog(session)
+    ready_layers = select(Layer).join(ObjectIndex,
+        (ObjectIndex.asset_id == Layer.asset_id) & (ObjectIndex.asset_version == Layer.asset_version)
+    ).where(Layer.type == "geojson", ObjectIndex.status == "ready")
+    published = set(session.execute(ready_layers.with_only_columns(Layer.id, Layer.asset_id, Layer.asset_version)))
     result = reconcile(session)
     sync_indexes(session)
+    for layer in session.scalars(ready_layers):
+        if (layer.id, layer.asset_id, layer.asset_version) not in published:
+            layer.orderable = layer_orderable(session, layer)
+    session.commit()
+    logger.info("assets stage=full_reconcile discovered=%d duration_ms=%.2f", result["discovered"], (perf_counter() - started) * 1000)
     return result
 
 

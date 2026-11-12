@@ -19,7 +19,7 @@ from .database import FILES_DIR, STORAGE_DIR
 from .models import Asset, AssetVersion, Layer, Run, RunAssetReference, Scene, SceneAssetReference
 from .errors import ApiProblem
 from .asset_metadata import build_metadata
-from .builtin_assets import RETIRED_ASSET_IDS, builtin_asset_files, builtin_asset_for_url
+from .builtin_assets import RETIRED_ASSET_IDS, builtin_asset_files, builtin_asset_for_url, builtin_asset_location
 
 _deletion_lock = Lock()
 
@@ -194,6 +194,42 @@ def published_files(asset: Asset, entry_url: str | None = None):
     return directory(FILES_DIR, asset.id), files, parts[1] if parts else ""
 
 
+def check_published_entries(session: Session):
+    from .geojson_snapshot import ready_snapshot
+    from .rendering import expired_source
+
+    assets = session.scalars(select(Asset).where(Asset.source_kind != "external", Asset.status == "active"))
+    for asset in assets:
+        try:
+            if asset.source_kind == "default":
+                root, entry = builtin_asset_location(asset.id, asset.entry_url)
+            else:
+                parts = local_parts(asset.entry_url) if asset.entry_url else None
+                if (asset.entry_url and not parts) or (parts and parts[0] != asset.id):
+                    raise ValueError("资产入口与目录标识不一致")
+                root = directory(FILES_DIR, asset.id)
+                entry = parts[1] if parts else None
+            if entry:
+                path = root / entry
+                parent = root
+                for part in PurePosixPath(entry).parts[:-1]:
+                    parent /= part
+                    if not stat.S_ISDIR(reject_link(parent).st_mode):
+                        raise ValueError("资产入口路径不是目录")
+                if not stat.S_ISREG(reject_link(path).st_mode) or not path.resolve().is_relative_to(root.resolve()):
+                    raise ValueError("资产入口不是目录内的常规文件")
+        except FileNotFoundError:
+            if (asset.type == "geojson" and asset.source_kind == "upload"
+                    and expired_source(session, asset.id, asset.current_version)
+                    and ready_snapshot(session, asset.id, asset.current_version)):
+                continue
+            asset.status, asset.error = "missing", "发布目录或图层入口缺失"
+        except HTTPException as error:
+            asset.status, asset.error = "unsafe", str(error.detail)[:1000]
+        except (OSError, ValueError) as error:
+            asset.status, asset.error = "unsafe", str(error)[:1000]
+
+
 def ensure_initial_version(session: Session, asset: Asset):
     version = session.get(AssetVersion, (asset.id, asset.current_version))
     if version is None:
@@ -318,6 +354,8 @@ def reconcile(session: Session):
             parts = local_parts(asset.entry_url) if asset.entry_url else None
             if parts and parts[1] not in {item["path"] for item in files} and not expired_source(session, asset.id, asset.current_version):
                 asset.status, asset.error = "missing", "图层入口文件缺失"
+        except HTTPException as error:
+            asset.status, asset.error = "unsafe", str(error.detail)[:1000]
         except (OSError, ValueError) as error:
             asset.status, asset.error = "unsafe", str(error)[:1000]
     session.flush()
@@ -334,6 +372,8 @@ def reconcile(session: Session):
         except FileNotFoundError:
             asset.status, asset.error = "missing", "发布目录或文件缺失"
             asset.byte_size, asset.file_count = 0, 0
+        except HTTPException as error:
+            asset.status, asset.error = "unsafe", str(error.detail)[:1000]
         except (OSError, ValueError) as error:
             asset.status, asset.error = "unsafe", str(error)[:1000]
     for layer in session.scalars(select(Layer)):
@@ -353,7 +393,6 @@ def reconcile(session: Session):
                 bind_asset_version(session, layer, builtin_id)
             elif parts and session.get(Asset, parts[0]):
                 bind_asset_version(session, layer, parts[0])
-    session.commit()
     return {"assets": [asset_record(session, item) for item in session.scalars(
         select(Asset).where(Asset.id.not_in(RETIRED_ASSET_IDS)).order_by(Asset.discovered_at.desc()))], "discovered": discovered}
 

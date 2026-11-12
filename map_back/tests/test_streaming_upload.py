@@ -7,11 +7,11 @@ def test_limit_is_one_gib():
     assert uploads.GEOJSON_LIMIT == 1_073_741_824
 
 
-def test_restart_reuses_published_geometry_metadata_but_checks_content(client, monkeypatch):
+def test_restart_reuses_published_geometry_metadata_and_defers_checksum_verification(client, monkeypatch):
     from app.database import SessionLocal, FILES_DIR
     from app.models import Asset, AssetVersion, Layer
     from app.layer_catalog import initialize_catalog
-    from app import geojson_stream
+    from app import assets, geojson_stream
     doc = {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [113, 23]}, 'properties': {}}]}
     response = client.post('/api/layers/upload', data={'name': 'restart', 'type': 'geojson'}, files={'file': ('restart.geojson', json.dumps(doc))})
     assert response.status_code == 201, response.text
@@ -20,18 +20,20 @@ def test_restart_reuses_published_geometry_metadata_but_checks_content(client, m
         initialize_catalog(session)
     def forbidden(*args, **kwargs):
         raise AssertionError('Restart must reuse immutable geometry metadata')
-    monkeypatch.setattr(geojson_stream, 'members', forbidden)
     with SessionLocal() as session:
         version = session.get(AssetVersion, (record['asset_id'], record['asset_version']))
         bounds = version.bounds
-        initialize_catalog(session)
-        assert session.get(Asset, record['asset_id']).status == 'active'
-        assert session.get(Layer, record['id']).orderable
-        assert version.bounds == bounds
         with (FILES_DIR / record['asset_id'] / 'data.geojson').open('ab') as stream:
             stream.write(b' ')
-        initialize_catalog(session)
-        assert session.get(Asset, record['asset_id']).status == 'unsafe'
+        with monkeypatch.context() as patch:
+            patch.setattr(geojson_stream, 'members', forbidden)
+            patch.setattr(assets, 'inventory', forbidden)
+            initialize_catalog(session)
+            assert session.get(Asset, record['asset_id']).status == 'active'
+            assert session.get(Layer, record['id']).orderable
+            assert version.bounds == bounds
+    assert client.post('/api/assets/reconcile').status_code == 200
+    assert client.get(f"/api/assets/{record['asset_id']}").json()['status'] == 'unsafe'
 
 
 def test_stream_bom_tail_and_crs(tmp_path):

@@ -1,5 +1,7 @@
 import { beforeEach, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Quaternion } from 'cesium'
 
 const deferred = () => {
   let resolve
@@ -11,11 +13,20 @@ const deferred = () => {
   return { promise, resolve, reject }
 }
 let geoRequest, tileRequest, viewer, addGate, click, move, down, up, geoSource, tileSource
+let frameTime
 beforeEach(t => {
   t.mock.method(globalThis, 'fetch', async () => new Response('{"type":"FeatureCollection","features":[]}'))
   basemapTerrain = undefined
   terrainSamples = []
+  tilesSamples = []
+  sampleTilesHeight = async () => 32
+  frameTime = 0
+  t.mock.method(performance, 'now', () => frameTime)
 })
+function runFrame(time) {
+  frameTime = time
+  viewer.scene.postUpdate.fire()
+}
 const event = () => {
   const listeners = new Set()
   return { addEventListener(fn) { listeners.add(fn); return () => listeners.delete(fn) }, fire(...args) { for (const fn of listeners) fn(...args) } }
@@ -36,6 +47,7 @@ mock.module('../src/buildingTerrain.ts', {
 const flatTerrain = { name: 'ellipsoid' }
 const worldTerrain = { name: 'world', bounds: { minimum: 2, maximum: 30 } }
 let basemapTerrain
+let tilesSamples, sampleTilesHeight
 mock.module('../src/basemap.ts', {
   exports: { initializeBasemap: async () => basemapTerrain },
 })
@@ -57,6 +69,7 @@ class Cesium3DTileset {
   initialTilesLoaded = event()
   tileUnload = event()
   boundingSphere = { center: { longitude: 113, latitude: 23, height: 0 }, radius: 500 }
+  modelMatrix = { height: 5 }
   isDestroyed() {
     return this.destroyed
   }
@@ -73,14 +86,19 @@ class Viewer {
   clock = { currentTime: 0 }
   terrainProvider = flatTerrain
   resources = new Set()
+  canvasEvents = new Map()
   scene = {
     mode: 3,
-    canvas: { clientWidth: 800, clientHeight: 600 },
+    canvas: { clientWidth: 800, clientHeight: 600,
+      addEventListener: (name, callback) => this.canvasEvents.set(name, callback),
+      removeEventListener: name => this.canvasEvents.delete(name),
+    },
     globe: { pick: () => undefined, ellipsoid: {} },
     pick: () => undefined,
     morphTo3D: () => { this.scene.mode = 3 },
     morphTo2D: () => { this.scene.mode = 2 },
     morphComplete: event(),
+    postUpdate: event(),
     backgroundColor: null,
     renderError: { addEventListener() {} },
     screenSpaceCameraController: { enableInputs: true },
@@ -110,7 +128,16 @@ class Viewer {
     flyToBoundingSphere: (sphere, options) => {
       this.lastFlight = { sphere, options }
     },
-    setView: (options) => { this.lastView = options; this.camera.positionCartographic = options.destination; Object.assign(this.camera, options.orientation) },
+    setView: (options) => {
+      this.lastView = options
+      if (options.orientation.direction) {
+        this.camera.directionWC = options.orientation.direction
+        this.camera.upWC = options.orientation.up
+      } else {
+        this.camera.positionCartographic = options.destination
+        Object.assign(this.camera, options.orientation)
+      }
+    },
   }
   imageryLayers = { addImageryProvider() {} }
   entities = {
@@ -191,16 +218,36 @@ mock.module('cesium', {
     Viewer,
     Ion: {},
     Math: { toRadians: (value) => value, toDegrees: (value) => value },
-    Cartographic: { fromCartesian: (value) => value },
+    Cartographic: {
+      fromCartesian: (value) => {
+        if (!(value instanceof Vector)) return value
+        const point = Wgs84Cartographic.fromCartesian(value)
+        return point && { longitude: Wgs84Math.toDegrees(point.longitude), latitude: Wgs84Math.toDegrees(point.latitude), height: point.height }
+      },
+      fromDegrees: (longitude, latitude) => ({ longitude, latitude }),
+    },
+    Ellipsoid: { WGS84: { maximumRadius: 6378137, geodeticSurfaceNormalCartographic: () => 1 } },
+    Matrix3,
+    PerspectiveFrustum,
+    Quaternion,
+    Matrix4: {
+      clone: (matrix) => ({ ...matrix }),
+      getTranslation: RootMatrix.getTranslation,
+      fromTranslation: (height) => ({ height }),
+      multiply: (translation, original, result) => Object.assign(result, { height: translation.height + original.height }),
+    },
+    sampleTerrainMostDetailed: async (terrain, [point]) => {
+      tilesSamples.push({ terrain, ...point })
+      return [{ ...point, height: await sampleTilesHeight(point) }]
+    },
     EllipsoidGeodesic: class { surfaceDistance = 350 },
     Cartesian2,
-    Cartesian3: {
-      distance: (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z),
-      fromDegrees: (longitude, latitude, height) => ({
-        longitude,
-        latitude,
-        height,
-      }),
+    Cartesian3: class extends Vector {
+      static multiplyByScalar(value, scale, result) {
+        return typeof value === 'number' ? value * scale : Vector.multiplyByScalar(value, scale, result)
+      }
+      static distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) }
+      static fromDegrees(longitude, latitude, height) { return { longitude, latitude, height } }
     },
     Color: { fromCssColorString: () => color, WHITE: color },
     GeoJsonDataSource,
@@ -224,7 +271,7 @@ mock.module('cesium', {
     },
     ClassificationType: { TERRAIN: 0 },
     ScreenSpaceEventHandler: Handler,
-    ScreenSpaceEventType: { LEFT_CLICK: 1, MOUSE_MOVE: 2, LEFT_DOWN: 3, LEFT_UP: 4 },
+    ScreenSpaceEventType: { LEFT_CLICK: 1, MOUSE_MOVE: 2, LEFT_DOWN: 3, LEFT_UP: 4, PINCH_MOVE: 5 },
     Entity: Noop,
     SceneMode: { SCENE3D: 3, SCENE2D: 2, MORPHING: 0 },
     createWorldImageryAsync() {},
@@ -315,6 +362,133 @@ function setup(type = 'geojson', onBoundaryState = () => {}, onNavigation = () =
   }
   return { controller, layer, notices, picks }
 }
+
+function zoomCamera(height, angle = 75, aspect = 4 / 3) {
+  const radians = angle * Math.PI / 180
+  const { camera } = viewer
+  camera.frustum = new PerspectiveFrustum({ fov: Math.PI / 3, aspectRatio: aspect })
+  camera.directionWC = new Vector(-Math.cos(radians), 0, Math.sin(radians))
+  camera.upWC = new Vector(-Math.sin(radians), 0, -Math.cos(radians))
+  camera.positionWC = new Vector(6378137 + height, 0, 0)
+  camera.positionCartographic.height = height
+  camera.zoomOut = (distance = 500) => {
+    camera.positionCartographic.height += distance
+    camera.positionWC.x += distance
+  }
+  camera.zoomIn = () => { camera.positionWC.x -= 500 }
+  return camera
+}
+
+test('a large wheel step keeps the Earth in view before the first zoom frame is drawn', () => {
+  const { controller } = setup()
+  const camera = zoomCamera(300_000)
+  viewer.canvasEvents.get('wheel')({ deltaY: 120 })
+  camera.positionWC.x = 36_378_137
+  camera.positionCartographic.height = 30_000_000
+  runFrame(16)
+  const offset = Vector.angleBetween(camera.directionWC, new Vector(-1, 0, 0))
+  const radius = Math.asin(6378137 / camera.positionWC.x)
+  assert.ok(offset - radius < camera.frustum.fovy / 2, 'the first rendered frame still shows the Earth')
+  assert.equal(camera.positionWC.x, 36_378_137)
+  controller.destroy()
+})
+
+test('the minus button zooms and turns toward Earth in the same frames', () => {
+  const settled = []
+  const { controller } = setup('geojson', undefined, (value, done) => { if (done) settled.push(value) })
+  const camera = zoomCamera(300_000)
+  const towardEarth = new Vector(-1, 0, 0)
+  const original = Vector.angleBetween(camera.directionWC, towardEarth)
+  controller.zoom(-1)
+  runFrame(16)
+  const firstHeight = camera.positionCartographic.height
+  const firstAngle = Vector.angleBetween(camera.directionWC, towardEarth)
+  assert.ok(firstHeight > 300_000 && firstHeight < 420_000)
+  assert.ok(firstAngle < original)
+  runFrame(32)
+  assert.ok(camera.positionCartographic.height > firstHeight)
+  assert.ok(Vector.angleBetween(camera.directionWC, towardEarth) < firstAngle)
+  for (let time = 48; time <= 480; time += 16) runFrame(time)
+  const afterZoom = camera.positionWC.clone()
+  assert.ok(Math.abs(camera.positionCartographic.height - 420_000) < 1e-6)
+  assert.deepEqual(viewer.lastView.destination, afterZoom)
+  const radius = Math.asin(6378137 / afterZoom.x)
+  const upperThird = Math.atan(Math.tan(camera.frustum.fovy / 2) / 3)
+  const edge = radius - Vector.angleBetween(camera.directionWC, towardEarth)
+  assert.ok(Math.abs(edge - upperThird) < 1e-7)
+  camera.moveEnd.fire()
+  assert.ok(Math.abs(settled.at(-1).camera.height - 420_000) < 1e-6)
+  controller.destroy()
+})
+
+test('wheel and pinch zoom out center a fitting globe on a wide or narrow canvas', () => {
+  for (const aspect of [2, 0.55]) {
+    const { controller } = setup()
+    const camera = zoomCamera(30_000_000, 25, aspect)
+    const zoomOut = aspect > 1
+      ? () => viewer.canvasEvents.get('wheel')({ deltaY: 120 })
+      : () => viewer.handlers[0].getInputAction(5)({ distance: { startPosition: { y: 40 }, endPosition: { y: 20 } } })
+    const original = camera.directionWC.clone()
+    zoomOut()
+    camera.zoomOut()
+    runFrame(frameTime + 16)
+    const firstTurn = Vector.angleBetween(camera.directionWC, original)
+    assert.ok(firstTurn > 0)
+    zoomOut()
+    camera.zoomOut()
+    runFrame(frameTime + 16)
+    assert.ok(Vector.angleBetween(camera.directionWC, original) > firstTurn)
+    for (let step = 0; step < 22; step++) runFrame(frameTime + 16)
+    assert.ok(Vector.angleBetween(camera.directionWC, new Vector(-1, 0, 0)) < 1e-7)
+    camera.moveEnd.fire()
+    controller.destroy()
+  }
+})
+
+test('zoom framing leaves near, 2D and programmatic views alone and stops on reversed input', () => {
+  const { controller } = setup()
+  let camera = zoomCamera(50_000)
+  controller.zoom(-1)
+  runFrame(250)
+  camera.moveEnd.fire()
+  assert.equal(viewer.lastView, undefined)
+  camera = zoomCamera(300_000, 40)
+  camera.pickEllipsoid = () => new Vector(6378137, 0, 0)
+  controller.zoom(-1)
+  runFrame(500)
+  camera.moveEnd.fire()
+  assert.equal(viewer.lastView, undefined, 'the upper third already shows Earth')
+  camera = zoomCamera(20_000_000, 25)
+  camera.pickEllipsoid = () => undefined
+  controller.setMode(true)
+  controller.zoom(-1)
+  runFrame(516)
+  camera.moveEnd.fire()
+  assert.equal(viewer.lastView, undefined)
+  controller.setMode(false)
+  controller.zoom(-1)
+  runFrame(532)
+  assert.ok(viewer.lastView.orientation.direction)
+  viewer.canvasEvents.get('wheel')({ deltaY: -120 })
+  const lastFramedView = viewer.lastView
+  const interruptedHeight = camera.positionCartographic.height
+  runFrame(548)
+  assert.equal(viewer.lastView, lastFramedView)
+  assert.equal(camera.positionCartographic.height, interruptedHeight)
+  controller.zoom(-1)
+  controller.setCamera({ longitude: 113, latitude: 23, height: 20_000_000, heading: 0, pitch: -0.2, roll: 0, scene_mode: '3d' })
+  const restored = viewer.lastView
+  runFrame(564)
+  camera.moveEnd.fire()
+  assert.equal(viewer.lastView, restored)
+  controller.zoom(-1)
+  viewer.canvasEvents.get('pointerdown')()
+  runFrame(580)
+  camera.moveEnd.fire()
+  assert.equal(viewer.lastView, restored)
+  controller.destroy()
+  assert.equal(viewer.canvasEvents.has('wheel'), false)
+})
 
 test('empty ground clicks query nearby POIs without changing existing object picking', () => {
   const nearby = []
@@ -448,6 +622,183 @@ test('merged display roads resolve the clicked original segment and preserve sou
   assert.deepEqual(pickBody.object_ids, ['part-one','part-two'])
   assert.equal(picks.at(-1).objectId, 'part-two')
   assert.equal(entity.polyline.width.getValue(), 6)
+  controller.destroy()
+})
+
+test('tiles sample the model origin by default without blocking the initial load', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer } = setup('3dtiles')
+  layer.tiles_height_offset_m = 2
+  const gate = deferred()
+  sampleTilesHeight = () => gate.promise
+  const tile = new Cesium3DTileset()
+  tile.root = { transform: RootMatrix.fromTranslation(Vector.fromDegrees(113.366746, 23.043612, 16)) }
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(tile.modelMatrix.height, 7)
+  assert.ok(Math.abs(layer.tilesModelOrigin.longitude - 113.366746) < 1e-8)
+  assert.ok(Math.abs(tilesSamples[0].latitude - 23.043612) < 1e-8)
+  assert.ok(Math.abs(layer.tilesModelOrigin.height - 16) < 1e-6)
+  gate.resolve(32)
+  await flush()
+  assert.ok(Math.abs(tile.modelMatrix.height - 23) < 1e-6)
+  await controller.setTerrain(false)
+  assert.ok(Math.abs(tile.modelMatrix.height - (-9)) < 1e-6)
+  await controller.setTerrain(true)
+  assert.ok(Math.abs(tile.modelMatrix.height - 23) < 1e-6)
+  assert.equal(tilesSamples.length, 1)
+  const anchor = { longitude: 113.4, latitude: 23.1, height: 20 }
+  await controller.setTilesPlacement(layer, { tiles_height_offset_m: 2, tiles_ground_anchor: anchor })
+  assert.equal(tilesSamples[1].longitude, 113.4)
+  assert.equal(tile.modelMatrix.height, 19)
+  await controller.setTilesPlacement(layer, { tiles_height_offset_m: 2, tiles_ground_anchor: anchor, tiles_align_to_terrain: false })
+  assert.equal(tile.modelMatrix.height, 7)
+  assert.equal(tilesSamples.length, 2)
+  controller.destroy()
+})
+
+test('tiles describe missing origins and missing terrain while preserving the offset', async () => {
+  const { controller, layer } = setup('3dtiles')
+  layer.tiles_height_offset_m = -3
+  const tile = new Cesium3DTileset()
+  tile.root = { transform: RootMatrix.IDENTITY }
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(tile.modelMatrix.height, 2)
+  assert.equal(layer.tilesModelOrigin, null)
+  assert.match(layer.tilesTerrainNotice, /模型原点/)
+  tileRequest = deferred()
+  const next = new Cesium3DTileset()
+  next.root = { transform: RootMatrix.fromTranslation(Vector.fromDegrees(113.570902, 23.310314, 55)) }
+  tileRequest.resolve(next)
+  await controller.load(layer)
+  await flush()
+  assert.match(layer.tilesTerrainNotice, /地形服务不可用/)
+  assert.equal(next.modelMatrix.height, 2)
+  assert.equal(tilesSamples.length, 0)
+  controller.destroy()
+})
+
+test('tiles use the original WGS84 height from the campus manifests and GridMaster matrix', async () => {
+  const cases = [
+    ['university-town', [113.366746, 23.043612, 16]],
+    ['huangpu', [113.570902, 23.310314, 55]],
+    [null, [94.3790795643, 29.6267108305, 2962.4180433]],
+  ]
+  for (const [campus, [longitude, latitude, height]] of cases) {
+    const { controller, layer } = setup('3dtiles')
+    const tile = new Cesium3DTileset()
+    const transform = campus
+      ? RootMatrix.fromArray(JSON.parse(await readFile(new URL(`../public/samples/${campus}/buildings/tileset.json`, import.meta.url), 'utf8')).root.transform)
+      : RootMatrix.fromTranslation(new Vector(-423877.3019, 5535198.0823, 3135935.9247))
+    tile.root = { transform }
+    tileRequest.resolve(tile)
+    await controller.load(layer)
+    assert.ok(Math.abs(layer.tilesModelOrigin.longitude - longitude) < 1e-8)
+    assert.ok(Math.abs(layer.tilesModelOrigin.latitude - latitude) < 1e-8)
+    assert.ok(Math.abs(layer.tilesModelOrigin.height - height) < 1e-5)
+    controller.destroy()
+  }
+})
+
+test('manual tile anchors use the displayed surface and reuse the terrain sample', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer } = setup('3dtiles', undefined, undefined, { terrain: false })
+  const tile = new Cesium3DTileset()
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(tile.modelMatrix.height, 5)
+  await controller.setTilesPlacement(layer, { tiles_height_offset_m: 10, tiles_ground_anchor: null })
+  assert.equal(tile.modelMatrix.height, 15)
+  await controller.setTilesPlacement(layer, { tiles_height_offset_m: -6, tiles_ground_anchor: null })
+  assert.equal(tile.modelMatrix.height, -1)
+  const anchor = { longitude: 113.4, latitude: 23.1, height: 20 }
+  await controller.setTilesPlacement(layer, { tiles_height_offset_m: -6, tiles_ground_anchor: anchor })
+  assert.equal(tile.modelMatrix.height, -21)
+  assert.equal(viewer.terrainProvider, flatTerrain)
+  assert.deepEqual(tilesSamples, [])
+  await Promise.all([controller.setTerrain(true), controller.setTerrain(false), controller.setTerrain(true)])
+  assert.equal(viewer.terrainProvider, worldTerrain)
+  assert.equal(tile.modelMatrix.height, 11)
+  assert.deepEqual(tilesSamples, [{ terrain: worldTerrain, longitude: 113.4, latitude: 23.1 }])
+  controller.remove(layer)
+  tileRequest = deferred()
+  const another = new Cesium3DTileset()
+  tileRequest.resolve(another)
+  await controller.load(layer)
+  await flush()
+  assert.equal(another.modelMatrix.height, 11)
+  assert.equal(tilesSamples.length, 1)
+  controller.destroy()
+})
+
+test('disabling terrain moves lz down 2983 metres immediately and ignores a late terrain sample', async () => {
+  const provider = deferred()
+  basemapTerrain = provider.promise
+  const { controller, layer } = setup('3dtiles')
+  layer.tiles_height_offset_m = -3
+  const tile = new Cesium3DTileset()
+  const original = tile.modelMatrix.height
+  tile.root = { transform: RootMatrix.fromTranslation(Vector.fromDegrees(94.3790795643, 29.6267108305, 2980)) }
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(tile.modelMatrix.height, original - 3)
+  const firstDisable = controller.setTerrain(false)
+  assert.ok(Math.abs(tile.modelMatrix.height - original + 2983) < 1e-5)
+  provider.resolve(worldTerrain)
+  await firstDisable
+  await flush()
+  assert.deepEqual(tilesSamples, [])
+
+  const sample = deferred()
+  sampleTilesHeight = () => sample.promise
+  const enabling = controller.setTerrain(true)
+  await flush()
+  assert.equal(tilesSamples.length, 1)
+  assert.ok(Math.abs(tile.modelMatrix.height - original + 2983) < 1e-5)
+  await controller.setTerrain(false)
+  sample.resolve(3010)
+  await enabling
+  assert.ok(Math.abs(tile.modelMatrix.height - original + 2983) < 1e-5)
+  await controller.setTerrain(true)
+  assert.ok(Math.abs(tile.modelMatrix.height - original - 27) < 1e-5)
+  assert.equal(tilesSamples.length, 1)
+  controller.destroy()
+})
+
+test('tiles retain the last effective position on failure and ignore superseded samples', async () => {
+  basemapTerrain = worldTerrain
+  const { controller, layer, notices } = setup('3dtiles')
+  const tile = new Cesium3DTileset()
+  const placement = (longitude, offset) => ({
+    tiles_height_offset_m: offset, tiles_ground_anchor: { longitude, latitude: 23, height: 20 },
+  })
+  sampleTilesHeight = async () => { throw new Error('offline') }
+  Object.assign(layer, placement(113, 2))
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  await flush()
+  assert.equal(tile.modelMatrix.height, 7)
+  assert.match(notices.at(-1), /地形采样失败/)
+  await controller.setTerrain(false)
+  assert.equal(tile.modelMatrix.height, -13)
+  await controller.setTerrain(true)
+  assert.equal(tile.modelMatrix.height, -13)
+  assert.match(notices.at(-1), /已保留上次校正高度/)
+  sampleTilesHeight = async () => 30
+  await controller.setTerrain(false)
+  await controller.setTerrain(true)
+  assert.equal(tile.modelMatrix.height, 17)
+  sampleTilesHeight = async () => { throw new Error('offline') }
+  await controller.setTilesPlacement(layer, placement(114, 4))
+  assert.equal(tile.modelMatrix.height, 17)
+  const slow = deferred()
+  sampleTilesHeight = ({ longitude }) => longitude === 114 ? slow.promise : Promise.resolve(44)
+  const superseded = controller.setTilesPlacement(layer, placement(114, 4))
+  await controller.setTilesPlacement(layer, placement(115, -2))
+  slow.resolve(60)
+  await superseded
+  assert.equal(tile.modelMatrix.height, 27)
   controller.destroy()
 })
 

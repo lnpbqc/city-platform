@@ -67,10 +67,16 @@ async function setup(t, options = {}) {
   t.after(() => app.unmount())
   await flush()
   const state = app._instance.setupState
-  const calls = { load: [], paint: [], replay: [], camera: [], temporal: [] }
+  const calls = { load: [], paint: [], replay: [], camera: [], temporal: [], placement: [] }
   const ready = () => state.ready({ initialize: (_region, value) => calls.camera.push(value), getCamera: () => calls.camera.at(-1) ?? camera, setCamera: value => calls.camera.push(value),
-    load: async item => { calls.load.push({ asset_id: item.asset_id, asset_version: item.asset_version, source_kind: item.asset_source_kind, order: item.order }); item.attached = true; item.status = 'ready' },
-    remove() {}, appearance() {}, setRoadMaxLevel(layer, value) { layer.road_max_level = value }, syncOrder() {}, showTemporal: (layer, frame) => calls.temporal.push({ layer: layer.id, time: frame?.time }), showReplay: value => calls.replay.push(value), showSimulation: value => calls.paint.push(value?.asset_id ?? null) })
+    load: async item => {
+      calls.load.push({ asset_id: item.asset_id, asset_version: item.asset_version, source_kind: item.asset_source_kind, order: item.order })
+      if (item.type === '3dtiles') calls.placement.push({ offset: item.tiles_height_offset_m, anchor: item.tiles_ground_anchor, align: item.tiles_align_to_terrain })
+      item.attached = true; item.status = 'ready'
+    },
+    remove() {}, appearance() {}, setRoadMaxLevel(layer, value) { layer.road_max_level = value },
+    setTilesPlacement(layer, value) { Object.assign(layer, value) },
+    syncOrder() {}, showTemporal: (layer, frame) => calls.temporal.push({ layer: layer.id, time: frame?.time }), showReplay: value => calls.replay.push(value), showSimulation: value => calls.paint.push(value?.asset_id ?? null) })
   if (options.ready !== false) { ready(); await flush() }
   return { state, calls, ready, props: app._instance.props, events }
 }
@@ -118,6 +124,35 @@ test('restored scene loads its pinned asset version and preserves source kind an
   ready(); await flush()
   assert.deepEqual(assetCalls, [{ id: 'area', version: '1.0.0' }])
   assert.deepEqual(calls.load, [{ asset_id: 'area', asset_version: '1.0.0', source_kind: 'upload', order: 2 }])
+})
+
+test('map captures model placement and the simulation restores it from the pinned scene', async t => {
+  const { captureLayers, prepareSceneLayers } = await import('../src/sceneLayers.ts')
+  const anchor = { longitude: 113.36, latitude: 23.04, height: 25 }
+  const [captured] = captureLayers([{ id: layer.layer_id, type: '3dtiles', asset_id: 'area', asset_version: '1.0.0',
+    attached: true, visible: true, opacity: 0.4, order: 2, tiles_height_offset_m: -3, tiles_ground_anchor: anchor }])
+  assert.equal(captured.tiles_height_offset_m, -3)
+  assert.deepEqual(captured.tiles_ground_anchor, anchor)
+  assert.equal(captured.tiles_align_to_terrain, true)
+  sceneValue = { ...scene, layers: [captured] }
+  assetHandler = async (id, version) => ({ asset_id: id, version, source_kind: 'upload',
+    type: '3dtiles', name: 'model', entry_url: '/tileset.json', source: '', status: 'ready' })
+  const { state, calls, ready } = await setup(t, { ready: false })
+  await state.chooseScene('scene-one')
+  ready(); await flush()
+  assert.deepEqual(calls.placement, [{ offset: -3, anchor, align: true }])
+  assert.deepEqual(state.draft.layers[0].tiles_ground_anchor, anchor)
+  const [automatic] = await prepareSceneLayers([{ ...captured, tiles_ground_anchor: null }], [])
+  const [legacy] = await prepareSceneLayers([{ ...layer, tiles_height_offset_m: 4 }], [])
+  const [legacyManual] = await prepareSceneLayers([{ ...layer, tiles_ground_anchor: anchor }], [])
+  const [disabled] = await prepareSceneLayers([{ ...captured, tiles_align_to_terrain: false }], [])
+  assert.equal(automatic.tiles_align_to_terrain, true)
+  assert.equal(automatic.tiles_ground_anchor, null)
+  assert.equal(legacy.tiles_align_to_terrain, false)
+  assert.equal(legacy.tiles_height_offset_m, 4)
+  assert.equal(legacyManual.tiles_align_to_terrain, true)
+  assert.deepEqual(legacyManual.tiles_ground_anchor, anchor)
+  assert.equal(disabled.tiles_align_to_terrain, false)
 })
 
 test('configuration stays locked until the initial catalog and simulation directories are ready', async t => {

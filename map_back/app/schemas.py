@@ -3,7 +3,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
-from .contracts import Bounds, CameraState
+from .contracts import Bounds, CameraState, TilesGroundAnchor
 
 
 class LayerInput(BaseModel):
@@ -36,6 +36,9 @@ class LayerOutput(LayerInput):
     map_visible: bool
     map_opacity: float
     road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
+    tiles_height_offset_m: float = Field(default=0, allow_inf_nan=False, strict=True)
+    tiles_ground_anchor: TilesGroundAnchor | None = None
+    tiles_align_to_terrain: bool | None = Field(default=None, strict=True)
 
     @field_validator("created_at")
     @classmethod
@@ -50,8 +53,11 @@ class LayerMapStateInput(BaseModel):
     map_opacity: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
     road_max_level: int | None = Field(default=None, ge=1, le=4, strict=True)
+    tiles_height_offset_m: float | None = Field(default=None, allow_inf_nan=False, strict=True)
+    tiles_ground_anchor: TilesGroundAnchor | None = None
+    tiles_align_to_terrain: bool | None = Field(default=None, strict=True)
 
-    @field_validator("map_attached", "map_visible", "map_opacity", "road_max_level")
+    @field_validator("map_attached", "map_visible", "map_opacity", "road_max_level", "tiles_height_offset_m")
     @classmethod
     def not_null(cls, value):
         if value is None:

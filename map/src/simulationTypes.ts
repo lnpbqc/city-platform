@@ -1,7 +1,8 @@
 import type { CameraState } from './mapNavigation'
+import type { TilesPlacement } from './types'
 
 export interface AssetVersionRef { asset_id: string; version: string }
-export interface SceneLayerState {
+export interface SceneLayerState extends TilesPlacement {
   layer_id: string
   name?: string
   category?: string

@@ -4,7 +4,7 @@ import json
 import math
 from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.orm import Session
 
 from .assets import lock_catalog, published_files
@@ -116,6 +116,9 @@ def index_asset(session: Session, asset: Asset, version: AssetVersion | None = N
         try:
             with session.begin_nested():
                 from .geojson_snapshot import SnapshotWriter
+                # A lost index marker may leave records with these stable IDs.
+                session.execute(delete(SpatialObject).where(SpatialObject.asset_id == asset.id,
+                    SpatialObject.asset_version == version.version))
                 snapshot = SnapshotWriter(session, asset.id, version.version, cancel) if asset.type == "geojson" else None
                 batch = []
                 for record in _records(asset, version, cancel, snapshot=snapshot):
@@ -144,7 +147,6 @@ def sync_indexes(session: Session):
     for asset in session.scalars(select(Asset)):
         for version in session.scalars(select(AssetVersion).where(AssetVersion.asset_id == asset.id)):
             index_asset(session, asset, version)
-    session.commit()
 
 
 def object_counts(session: Session):

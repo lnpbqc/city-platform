@@ -79,6 +79,10 @@ POI 导入使用现有上传接口，设置 `category=POI` 和 `type=geojson`，
 
 地图状态字段为 `map_attached/map_visible/map_opacity`。目录状态接口的 `order` 是从 0 开始的完整目录目标位置，较小值显示更靠前；后台原子重排。排序仅支持已核对的二维 GeoJSON，三维瓦片、拉伸面、含 Z 几何及未知远端资源返回 `orderable=false`，调整顺序返回 422。
 
+3D Tiles 高度设置包含 `tiles_align_to_terrain`（可空布尔值）、`tiles_height_offset_m`（有符号米值，默认 0）和 `tiles_ground_anchor`（可空手动锚点，包含 WGS84 `longitude`、`latitude` 及原始椭球高 `height`，高程单位为米）。开启对齐时优先使用手动锚点，空锚点使用固定版本模型的原点。`false` 关闭对齐并继续应用手动偏移。PATCH 省略字段时保留已保存值。内置三维模型按 `campus` 保存高度设置。
+
+普通图层的对齐开关缺省或为 `null` 时按开启处理。旧场景的对齐开关缺省或为 `null` 时，有锚点沿用锚点，无锚点按原始高度加偏移恢复。新保存的 3D Tiles 场景状态包含明确的开关、锚点和偏移。
+
 上传字段与限制以实时 Schema 和[数据与模型说明](数据与模型说明.md)为准。`POST /api/assets/register` 的 `location` 接受 HTTP(S) 或已有 `/data-files/` 入口；原始磁盘路径不开放。外部资源只记录元信息，`ready` 表示登记可用，实际渲染取决于浏览器和远端服务。
 
 资产列表支持 `type/status/q/from/to/sort`；关键词按字面匹配 ID、名称、原文件名及来源，日期须带时区并包含端点。`sort=byte_size|-byte_size` 按体积排序，未知外部体积置末。分页列表和统计读取目录快照，详情检查实际文件；显式对账刷新磁盘变化。旧数组模式在未提供筛选或排序时逐项检查文件。

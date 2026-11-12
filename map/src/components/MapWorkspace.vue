@@ -19,7 +19,7 @@ import WorkspaceFeedback from './WorkspaceFeedback.vue'
 import { demoRegion, resolveRegionTarget, type RegionTarget } from '../regions'
 import type { MapController, MapPoint } from '../mapController'
 import type { BoundaryState } from '../regionBoundary'
-import type { LayerRecord, MapLayer, Selection, ObjectRecord } from '../types'
+import type { LayerRecord, MapLayer, Selection, ObjectRecord, TilesPlacement } from '../types'
 import { editablePoi } from '../poi'
 import type { SceneRecord } from '../simulationTypes'
 import type { CameraState } from '../mapNavigation'
@@ -53,6 +53,7 @@ const emit = defineEmits<{
   remove: [layer: MapLayer]
   opacity: [layer: MapLayer, value: number]
   roadMaxLevel: [layer: MapLayer, value: number]
+  tilesPlacement: [layer: MapLayer, value: TilesPlacement]
   retryMapState: [layer: MapLayer]
   move: [layer: MapLayer, direction: number]
   sceneMode: [active: boolean]
@@ -398,6 +399,10 @@ function setRoadMaxLevel(layer: MapLayer, value: number) {
   if (!sceneLayers.value) { emit('roadMaxLevel', layer, value); return }
   controller?.setRoadMaxLevel(layer, value)
 }
+function setTilesPlacement(layer: MapLayer, value: TilesPlacement) {
+  if (!sceneLayers.value) { emit('tilesPlacement', layer, value); return }
+  void controller?.setTilesPlacement(layer, value)
+}
 function move(layer: MapLayer, direction: number) {
   if (!sceneLayers.value) { emit('move', layer, direction); return }
   const target = moveTarget(sceneLayers.value, layer, direction)
@@ -539,6 +544,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @remove="changeLayer($event, 'remove')"
       @opacity="setOpacity"
       @road-max-level="setRoadMaxLevel"
+      @tiles-placement="setTilesPlacement"
       @move="move"
     />
     <RegionPicker v-if="!comparisonOpen"

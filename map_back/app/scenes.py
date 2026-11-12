@@ -57,7 +57,8 @@ def scene_document(session: Session, body: SceneInput):
     seen = set()
     references = set()
     builtin_ids = {layer["id"] for layer in BUILTIN_LAYERS}
-    for layer in body.layers:
+    document = body.model_dump(mode="json")
+    for layer, state in zip(body.layers, document["layers"]):
         if layer.layer_id in seen:
             raise ApiProblem(422, "INVALID_SCENE_LAYERS", "场景图层ID重复", {"layer_id": layer.layer_id})
         seen.add(layer.layer_id)
@@ -75,6 +76,9 @@ def scene_document(session: Session, body: SceneInput):
             raise ApiProblem(422, "ASSET_UNAVAILABLE", "场景引用的资产不可用", {**reference.model_dump(), "status": asset.status})
         if layer.layer_id in builtin_ids and reference.asset_id not in {builtin_asset_id(campus, layer.layer_id) for campus in CAMPUS_KEYS}:
             raise ApiProblem(422, "INVALID_SCENE_LAYERS", "默认图层与资产绑定不一致", {"layer_id": layer.layer_id})
+        if asset.type == "3dtiles" and layer.tiles_align_to_terrain is None:
+            placement = layer.model_copy(update={"tiles_align_to_terrain": layer.tiles_ground_anchor is not None})
+            state.update(placement.model_dump(mode="json"))
         references.add((reference.asset_id, reference.version))
     if body.network:
         try:
@@ -92,7 +96,6 @@ def scene_document(session: Session, body: SceneInput):
         raise ApiProblem(422, "NETWORK_REQUIRED", "保存阻断边前须选择路网版本")
     if body.run_id is not None and session.get(Run, body.run_id) is None:
         raise ApiProblem(422, "RUN_NOT_FOUND", "运行记录不存在")
-    document = body.model_dump(mode="json")
     document["blocked_edges"] = sorted(set(body.blocked_edges))
     return document, references
 

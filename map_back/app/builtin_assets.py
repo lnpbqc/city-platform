@@ -9,7 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from .models import Asset
+from .models import Asset, AssetVersion
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_DIR = PROJECT_ROOT / "map" / "public" / "samples"
@@ -62,7 +62,7 @@ def builtin_asset_for_url(url: str) -> str | None:
     raise HTTPException(422, "默认样例地址不在入口白名单")
 
 
-def builtin_asset_files(identity: str, entry_url: str):
+def builtin_asset_location(identity: str, entry_url: str):
     from .assets import reject_link
 
     match = next(((campus, layer) for campus in CAMPUS_KEYS for layer in BUILTIN_LAYERS
@@ -71,11 +71,18 @@ def builtin_asset_files(identity: str, entry_url: str):
     if match is None:
         raise ValueError("默认资产标识或入口不在样例白名单")
     campus, layer = match
-    for folder in (SAMPLES_DIR.parent, SAMPLES_DIR, SAMPLES_DIR / campus):
-        reject_link(folder)
     campus_root = SAMPLES_DIR / campus
     root = campus_root / "buildings" if layer["type"] == "3dtiles" else campus_root
-    reject_link(root)
+    for folder in (SAMPLES_DIR.parent, SAMPLES_DIR, campus_root, root):
+        if not stat.S_ISDIR(reject_link(folder).st_mode):
+            raise ValueError("默认资产路径不是目录")
+    return root, Path(layer["filename"]).name
+
+
+def builtin_asset_files(identity: str, entry_url: str):
+    from .assets import reject_link
+
+    root, entry_relative = builtin_asset_location(identity, entry_url)
     files = []
 
     def add(path: Path):
@@ -90,13 +97,11 @@ def builtin_asset_files(identity: str, entry_url: str):
         else:
             raise ValueError("默认资产含非常规文件")
 
-    if layer["type"] == "3dtiles":
+    if entry_relative == "tileset.json":
         for child in root.iterdir():
             add(child)
-        entry_relative = "tileset.json"
     else:
-        add(root / layer["filename"])
-        entry_relative = layer["filename"]
+        add(root / entry_relative)
     return root, sorted(files, key=lambda item: item["path"]), entry_relative
 
 
@@ -107,6 +112,8 @@ def ensure_builtin_assets(session: Session):
         for layer in BUILTIN_LAYERS:
             identity = builtin_asset_id(campus, layer["id"])
             asset = session.get(Asset, identity)
+            if asset and session.get(AssetVersion, (identity, asset.current_version)):
+                continue
             if asset is None:
                 asset = Asset(id=identity, original_name=Path(layer["filename"]).name,
                               name=f"{CAMPUS_NAMES[campus]} · {layer['name']}", type=layer["type"],

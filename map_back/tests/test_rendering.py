@@ -6,9 +6,11 @@ import shutil
 from zipfile import ZipFile
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from app.database import FILES_DIR, STORAGE_DIR, SessionLocal
+from app.main import app
 from app.models import Asset, GeoJSONSnapshot
 from app.render_models import RenderJob
 from app import rendering
@@ -109,7 +111,9 @@ def test_exact_seven_days_expiry_keeps_canonical_export_and_restart(client, tmp_
     restored = client.post('/api/layers', json={name: layer[name] for name in ('name', 'type', 'category', 'source', 'url')})
     assert restored.status_code == 201, restored.text
     assert restored.json()['asset_id'] == layer['asset_id']
-    rendering.recover_retention()
+    with TestClient(app) as restarted:
+        assert restarted.get(f"/api/assets/{layer['asset_id']}").json()['status'] == 'active'
+        assert restarted.get(export).json() == GEO
     assert client.post('/api/assets/reconcile').status_code == 200
     assert client.get(f"/api/assets/{layer['asset_id']}").json()['status'] == 'active'
     assert client.get(export).json() == GEO

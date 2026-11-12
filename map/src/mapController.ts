@@ -25,9 +25,15 @@ import {
   ClassificationType,
   Credit,
   EllipsoidGeodesic,
+  Ellipsoid,
+  Matrix3,
+  Matrix4,
+  PerspectiveFrustum,
+  Quaternion,
+  sampleTerrainMostDetailed,
   LabelGraphics,
 } from 'cesium'
-import type { MapLayer, Selection, GeometryDocument, ObjectRecord, MapViewportFeature } from './types'
+import { tilesPlacement, type MapLayer, type Selection, type GeometryDocument, type ObjectRecord, type MapViewportFeature, type TilesGroundAnchor, type TilesPlacement } from './types.ts'
 import type { PolygonGraphics, TerrainProvider } from 'cesium'
 import type { RegionTarget } from './regions'
 import { fetchRegionBoundary, type BoundaryState } from './regionBoundary.ts'
@@ -55,6 +61,7 @@ type BuildingPlacement = {
   placed?: TerrainProvider
 }
 type Entry = { version: number; resource?: Resource; abort: AbortController; cleanup: (() => void)[]; objectIds?: string[]; temporal?: TimeSeriesRecord | null; buildings?: BuildingPlacement
+  tilesPlacement?: { original: Matrix4; center: Cartographic | undefined; revision: number; aligned: boolean }
   viewport?: boolean; viewAbort?: AbortController; viewVersion?: number; weights?: Map<string, number>
   bounds?: { west: number; south: number; east: number; north: number } | null
   viewportVisible?: boolean
@@ -66,6 +73,19 @@ type Entry = { version: number; resource?: Resource; abort: AbortController; cle
 export interface MapPoint {
   longitude: number
   latitude: number
+}
+
+function tilesetOrigin(transform: Matrix4 | undefined): TilesGroundAnchor | null {
+  if (!transform || transform[3] !== 0 || transform[7] !== 0 || transform[11] !== 0 || transform[15] !== 1
+    || !Array.from({ length: 16 }, (_, index) => transform[index]).every(Number.isFinite)) return null
+  const origin = Cartographic.fromCartesian(Matrix4.getTranslation(transform, new Cartesian3()))
+  if (!origin || ![origin.longitude, origin.latitude, origin.height].every(Number.isFinite)
+    || Math.abs(origin.height) > 100_000) return null
+  return {
+    longitude: CesiumMath.toDegrees(origin.longitude),
+    latitude: CesiumMath.toDegrees(origin.latitude),
+    height: origin.height,
+  }
 }
 
 export interface MapControllerOptions {
@@ -341,7 +361,7 @@ export function createMapController(
     return index < 0 ? undefined : Math.floor(index / pageSize) + 1
   }
   async function focusObject(layerId: string, object: ObjectRecord) {
-    autoFrame = false
+    stopAutoFrame()
     const match = [...entries].find(([layer]) => layer.id === layerId)
     if (!alive || !match?.[1].resource) { onNotice('所选图层尚未加载，暂时无法定位对象。'); return }
     const [layer, entry] = match
@@ -492,7 +512,7 @@ export function createMapController(
     if (!alive) return
     cancelAreaSelection()
     cancelPointPicking()
-    autoFrame = false
+    stopAutoFrame()
     areaMode = mode
     areaCallback = callback
     areaCancelled = cancelled
@@ -555,12 +575,104 @@ export function createMapController(
     }
     onNavigation({ camera: getCamera(), pointer, scale }, settled)
   }
-  const navigationCleanup = [viewer.camera.changed.addEventListener(() => navigation()),
-    viewer.camera.moveEnd.addEventListener(() => { navigation(true); refreshViewports() }),
+  let zoomMotion: { position: Cartesian3; updated?: number; adjusting: boolean } | undefined
+  let buttonZoom: { started: number; distance: number; applied: number } | undefined
+  let zoomCameraChanged = false
+  function stopAutoFrame() {
+    autoFrame = false
+    zoomMotion = undefined
+    buttonZoom = undefined
+    zoomCameraChanged = false
+  }
+  function markZoom(zoomingOut: boolean) {
+    if (!zoomingOut || viewer.scene.mode !== SceneMode.SCENE3D || !viewer.scene.screenSpaceCameraController.enableInputs) {
+      stopAutoFrame()
+      return
+    }
+    autoFrame = false
+    buttonZoom = undefined
+    zoomMotion ??= { position: Cartesian3.clone(viewer.camera.positionWC), adjusting: false }
+  }
+  function frameGlobeDuringZoom(elapsed: number) {
+    const { camera, scene } = viewer
+    const { frustum } = camera
+    if (scene.mode !== SceneMode.SCENE3D || camera.positionCartographic.height < 100_000
+      || !(frustum instanceof PerspectiveFrustum)) return false
+    const { canvas } = scene
+    const { aspectRatio, fovy } = frustum
+    if (!canvas.clientWidth || !canvas.clientHeight || !aspectRatio || !fovy) return false
+
+    const destination = Cartesian3.clone(camera.positionWC)
+    const distance = Cartesian3.magnitude(destination)
+    const towardEarth = Cartesian3.divideByScalar(destination, -distance, new Cartesian3())
+    const angularRadius = Math.asin(Math.min(1, Ellipsoid.WGS84.maximumRadius / distance))
+    const halfHeight = Math.tan(fovy / 2)
+    const fit = Math.atan(0.9 * halfHeight * Math.min(1, aspectRatio))
+    // Fade the regional framing allowance out as the globe fits the shorter edge.
+    const regionalWeight = Math.max(0, Math.min(1, (angularRadius / fit - 1) / 0.5))
+    if (regionalWeight === 1 && camera.pickEllipsoid(new Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 3))) return false
+    const limit = Math.max(0, angularRadius - Math.atan(halfHeight / 3))
+      * regionalWeight ** 2 * (3 - 2 * regionalWeight)
+    const direction = camera.directionWC
+    const up = camera.upWC
+    const offset = Cartesian3.angleBetween(direction, towardEarth)
+    const correction = offset - limit
+    if (correction <= 1e-6) return false
+    const cross = Cartesian3.cross(direction, towardEarth, new Cartesian3())
+    const axis = Cartesian3.magnitudeSquared(cross) > 1e-16 ? Cartesian3.normalize(cross, cross) : up
+    // Keep part of the globe in view even when a single zoom step is very large.
+    const visibleLimit = angularRadius + Math.atan(0.6 * halfHeight * Math.min(1, aspectRatio))
+    const turn = correction < Math.PI / 900 ? correction
+      : Math.max(offset - visibleLimit, correction * (1 - Math.exp(-elapsed / 45)))
+    const rotation = Matrix3.fromQuaternion(Quaternion.fromAxisAngle(axis, turn))
+    camera.setView({ destination, orientation: {
+      direction: Matrix3.multiplyByVector(rotation, direction, new Cartesian3()),
+      up: Matrix3.multiplyByVector(rotation, up, new Cartesian3()),
+    } })
+    scene.requestRender()
+    return true
+  }
+
+  function updateZoomFrame() {
+    const motion = zoomMotion
+    if (!motion) return
+    const now = performance.now()
+    if (buttonZoom) {
+      const progress = Math.min(1, (now - buttonZoom.started) / 220)
+      const distance = buttonZoom.distance * (1 - (1 - progress) ** 2)
+      viewer.camera.zoomOut(distance - buttonZoom.applied)
+      buttonZoom.applied = distance
+      if (progress === 1) buttonZoom = undefined
+      viewer.scene.requestRender()
+    }
+    const position = viewer.camera.positionWC
+    if (Cartesian3.distance(motion.position, position) > 0.01 || motion.adjusting) {
+      Cartesian3.clone(position, motion.position)
+      motion.adjusting = frameGlobeDuringZoom(Math.min(40, now - (motion.updated ?? now - 16)))
+      motion.updated = now
+    }
+    if (zoomCameraChanged) {
+      zoomCameraChanged = false
+      navigation()
+    }
+  }
+  function onWheel(event: WheelEvent) {
+    if (event.deltaY) markZoom(event.deltaY > 0)
+  }
+  // Cesium applies wheel, pinch and inertia before postUpdate, then draws the frame.
+  const navigationCleanup = [viewer.scene.postUpdate.addEventListener(updateZoomFrame),
+    viewer.camera.changed.addEventListener(() => { if (zoomMotion) zoomCameraChanged = true; else navigation() }),
+    viewer.camera.moveEnd.addEventListener(() => {
+      if (buttonZoom || zoomMotion?.adjusting) return
+      zoomMotion = undefined
+      zoomCameraChanged = false
+      navigation(true)
+      refreshViewports()
+    }),
     viewer.scene.morphComplete.addEventListener(() => { navigation(true); refreshViewports() })]
   function setCamera(camera: CameraState) {
     if (!alive || !validCamera(camera)) return false
-    autoFrame = false
+    stopAutoFrame()
     if (camera.scene_mode === '2d') viewer.scene.morphTo2D(0)
     else if (viewer.scene.mode !== SceneMode.SCENE3D) viewer.scene.morphTo3D(0)
     viewer.camera.setView({ destination: Cartesian3.fromDegrees(camera.longitude, camera.latitude, camera.height),
@@ -570,10 +682,9 @@ export function createMapController(
     return true
   }
   function north() { setCamera({ ...getCamera(), heading: 0, roll: 0 }) }
-  function stopAutoFrame() { autoFrame = false }
   function clearPointer() { pointerPosition = undefined; navigation() }
   viewer.scene.canvas.addEventListener?.('pointerdown', stopAutoFrame)
-  viewer.scene.canvas.addEventListener?.('wheel', stopAutoFrame)
+  viewer.scene.canvas.addEventListener?.('wheel', onWheel)
   viewer.scene.canvas.addEventListener?.('mouseleave', clearPointer)
 
   function cancelPointPicking() {
@@ -609,7 +720,7 @@ export function createMapController(
 
   function goToPoint(point: MapPoint) {
     if (!alive) return
-    autoFrame = false
+    stopAutoFrame()
     cancelAreaSelection()
     pointPicking = undefined
     showPoint(point)
@@ -698,7 +809,7 @@ export function createMapController(
   function goToRegion(region: RegionTarget) {
     if (!alive) return
     cancelAreaSelection()
-    autoFrame = false
+    stopAutoFrame()
     homeRegion = region
     homeResource = undefined
     cancelPointPicking()
@@ -738,6 +849,75 @@ export function createMapController(
 
   function entryCurrent(layer: MapLayer, entry: Entry) {
     return alive && entries.get(layer) === entry && entry.version === 0
+  }
+  // Keep terrain samples for when terrain is displayed again.
+  const tileTerrainHeights = new Map<string, Promise<number>>()
+  async function refreshTilesPlacement(layer: MapLayer, entry: Entry) {
+    const tileset = entry.resource
+    if (!(tileset instanceof Cesium3DTileset) || !entryCurrent(layer, entry)) return
+    const { tiles_height_offset_m: offset, tiles_ground_anchor: manual, tiles_align_to_terrain: align } = tilesPlacement(layer, true)
+    const anchor = align ? manual ?? layer.tilesModelOrigin : null
+    layer.tilesTerrainNotice = align && !anchor ? '无法识别模型原点，可改用手动锚点。当前使用原始高度加手动偏移。' : ''
+    if (!offset && !anchor && !entry.tilesPlacement) return
+    const placement = entry.tilesPlacement ??= {
+      original: Matrix4.clone(tileset.modelMatrix),
+      center: Cartographic.fromCartesian(tileset.boundingSphere.center),
+      revision: 0,
+      aligned: false,
+    }
+    const revision = ++placement.revision
+    const current = () => terrainEnabled && entryCurrent(layer, entry) && placement.revision === revision
+    const point = anchor ? Cartographic.fromDegrees(anchor.longitude, anchor.latitude) : placement.center
+    const apply = (delta: number) => {
+      if (point && delta) {
+        const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(point)
+        const translation = Matrix4.fromTranslation(Cartesian3.multiplyByScalar(up, delta, up))
+        tileset.modelMatrix = Matrix4.multiply(translation, placement.original, translation)
+      } else tileset.modelMatrix = placement.original
+      viewer.scene.requestRender()
+    }
+    if (!anchor) {
+      placement.aligned = false
+      apply(offset)
+      return
+    }
+    if (!terrainEnabled) {
+      apply(offset - anchor.height)
+      placement.aligned = true
+      return
+    }
+    if (!placement.aligned) apply(offset)
+    await basemapReady
+    if (!current()) return
+    const report = (reason: string) => {
+      layer.tilesTerrainNotice = `${reason}，${placement.aligned ? '已保留上次校正高度' : '当前使用原始高度加手动偏移'}。`
+      if (manual) onNotice(`${layer.name ?? '3D Tiles'}：${layer.tilesTerrainNotice}`)
+    }
+    if (!worldTerrain) {
+      report('地形服务不可用')
+      return
+    }
+    layer.tilesTerrainNotice = '正在采样地形…'
+    const key = `${anchor.longitude},${anchor.latitude}`
+    let sample = tileTerrainHeights.get(key)
+    if (!sample) {
+      sample = sampleTerrainMostDetailed(worldTerrain, [Cartographic.fromDegrees(anchor.longitude, anchor.latitude)], true)
+        .then(([result]) => {
+          if (!result || !Number.isFinite(result.height)) throw new Error('地形高程缺失')
+          return result.height
+        })
+      tileTerrainHeights.set(key, sample)
+      sample.catch(() => tileTerrainHeights.delete(key))
+    }
+    try {
+      const height = await sample
+      if (!current()) return
+      apply(height - anchor.height + offset)
+      placement.aligned = true
+      layer.tilesTerrainNotice = ''
+    } catch {
+      if (current()) report('地形采样失败')
+    }
   }
   /** Places white models on the active terrain, sampling again if terrain changes meanwhile. */
   async function placeBuildings(buildings: BuildingPlacement, current: () => boolean) {
@@ -793,10 +973,15 @@ export function createMapController(
     await Promise.all([...entries].map(([layer, entry]) => refreshEntryBuildings(layer, entry)))
   }
   async function setTerrain(enabled: boolean) {
+    const changed = terrainEnabled !== enabled
     terrainEnabled = enabled
-    await basemapReady
+    if (enabled) await basemapReady
     if (!alive || terrainEnabled !== enabled) return
-    if (applyTerrain()) await refreshBuildingHeights()
+    const surfaceChanged = applyTerrain()
+    await Promise.all([
+      surfaceChanged && refreshBuildingHeights(),
+      changed && Promise.all([...entries].map(([layer, entry]) => refreshTilesPlacement(layer, entry))),
+    ])
   }
 
   function disposeResource(resource: Resource) {
@@ -922,6 +1107,8 @@ export function createMapController(
     layer.loadPhase = ''
     layer.traceId = ''
     layer.errorCode = ''
+    layer.tilesModelOrigin = undefined
+    layer.tilesTerrainNotice = ''
     if (layer.id === 'basemap') appearance(layer)
     if (alive) viewer.scene.requestRender()
   }
@@ -1182,6 +1369,7 @@ export function createMapController(
           pending.destroy()
           return
         }
+        layer.tilesModelOrigin = tilesetOrigin(pending.root?.transform)
         viewer.scene.primitives.add(pending)
         entry.cleanup.push(pending.tileFailed.addEventListener((error) => {
           if (current()) {
@@ -1213,6 +1401,7 @@ export function createMapController(
       appearance(layer)
       // Terrain may have switched while the data source was being inserted.
       if (entry.buildings && entry.buildings.placed !== viewer.terrainProvider) void refreshEntryBuildings(layer, entry)
+      if (layer.type === '3dtiles') void refreshTilesPlacement(layer, entry)
       if (layer.id === 'campus-buildings' && layer.builtin && homeRegion?.sampleKey
         && (!layer.campus || layer.campus === homeRegion.sampleKey)) homeResource = pending
       if (autoFrame && (!layer.builtin || layer.id === 'campus-buildings')) {
@@ -1236,6 +1425,7 @@ export function createMapController(
     const entry = entries.get(layer)
     const resource = entry?.resource
     if (!resource || !alive) return
+    stopAutoFrame()
     try {
       if (entry.viewport && entry.bounds) {
         const bounds = entry.bounds
@@ -1264,6 +1454,12 @@ export function createMapController(
   }
 
   const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
+  // Cesium 1.146 emits distance and angle/height motion, unlike its declared event shape.
+  handler.setInputAction((event: ScreenSpaceEventHandler.TwoPointMotionEvent | { distance: { startPosition: Cartesian2; endPosition: Cartesian2 } }) => {
+    if (!('distance' in event)) return
+    const change = event.distance.endPosition.y - event.distance.startPosition.y
+    if (change) markZoom(change < 0)
+  }, ScreenSpaceEventType.PINCH_MOVE)
   handler.setInputAction((event: { endPosition: Cartesian2 }) => {
     if (!alive) return
     if (areaMode === 'box' && boxStart) {
@@ -1437,22 +1633,24 @@ export function createMapController(
   }, ScreenSpaceEventType.LEFT_UP)
 
   function zoom(direction: number) {
-    autoFrame = false
+    const remaining = buttonZoom ? buttonZoom.distance - buttonZoom.applied : 0
+    markZoom(direction < 0)
     const distance = Math.max(
       viewer.camera.positionCartographic.height * 0.4,
       30,
     )
     if (direction > 0) viewer.camera.zoomIn(distance)
+    else if (zoomMotion) buttonZoom = { started: performance.now(), distance: remaining + distance, applied: 0 }
     else viewer.camera.zoomOut(distance)
     viewer.scene.requestRender()
   }
   function setMode(twoD: boolean) {
-    autoFrame = false
+    stopAutoFrame()
     if (twoD) viewer.scene.morphTo2D(0.6)
     else viewer.scene.morphTo3D(0.6)
   }
   function tilt() {
-    autoFrame = false
+    stopAutoFrame()
     if (viewer.scene.mode !== SceneMode.SCENE3D) return
     const center = new Cartesian2(
       viewer.scene.canvas.clientWidth / 2,
@@ -1480,6 +1678,7 @@ export function createMapController(
   }
   function destroy() {
     if (!alive) return
+    stopAutoFrame()
     cancelAreaSelection()
     highlightObjects(null, [])
     cancelPointPicking()
@@ -1493,7 +1692,7 @@ export function createMapController(
     for (const entry of entries.values()) { entry.version++; entry.abort.abort(); entry.viewAbort?.abort(); for (const cleanup of entry.cleanup) cleanup() }
     for (const cleanup of navigationCleanup) cleanup()
     viewer.scene.canvas.removeEventListener?.('pointerdown', stopAutoFrame)
-    viewer.scene.canvas.removeEventListener?.('wheel', stopAutoFrame)
+    viewer.scene.canvas.removeEventListener?.('wheel', onWheel)
     viewer.scene.canvas.removeEventListener?.('mouseleave', clearPointer)
     entries.clear()
     handler.destroy()
@@ -1507,6 +1706,11 @@ export function createMapController(
       }
     },
     load,
+    async setTilesPlacement(layer: MapLayer, value: TilesPlacement) {
+      Object.assign(layer, tilesPlacement(value))
+      const entry = entries.get(layer)
+      if (entry) await refreshTilesPlacement(layer, entry)
+    },
     setRoadMaxLevel(layer: MapLayer, level: number) {
       layer.road_max_level = Math.max(1, Math.min(4, Math.trunc(level)))
       const entry = entries.get(layer)

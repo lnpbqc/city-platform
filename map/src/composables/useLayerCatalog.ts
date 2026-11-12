@@ -1,12 +1,15 @@
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getLayerCatalog, deleteLayer, saveCatalogMapState } from '../api.ts'
 import {
   mapLayer,
   samples,
   samplesForCampus,
+  sameTilesPlacement,
+  tilesPlacement,
   type MapLayer,
   type LayerRecord,
   type LayerMapState,
+  type TilesPlacement,
 } from '../types.ts'
 import type { CampusKey } from '../campuses'
 import { defaultCampus } from '../campuses.ts'
@@ -24,11 +27,13 @@ export function useLayerCatalog(
   const catalogError = ref('')
   const deleting = ref('')
   const revision = ref(0)
-  const mapStateErrors = ref<Record<string, string>>({})
+  const stateErrors = ref<Record<string, string>>({})
   const ordering = ref(false)
   const orderError = ref('')
   type PendingState = {
-    desired: LayerMapState
+    id: string
+    campus?: CampusKey
+    desired: Partial<LayerMapState>
     dirty: boolean
     saving: boolean
     timer?: ReturnType<typeof setTimeout>
@@ -40,8 +45,17 @@ export function useLayerCatalog(
   let catalogLoaded = false
   let requestVersion = 0
   let catalogRequest: AbortController | undefined
-  async function flushState(id: string) {
-    const pending = pendingStates.get(id)
+  const placementKey = (id: string, key: CampusKey) => `${id}/${key}`
+  const mapStateErrors = computed(() => Object.fromEntries(layers.value.flatMap(layer => {
+    const error = stateErrors.value[layer.id] ?? stateErrors.value[placementKey(layer.id, layer.campus ?? campus)]
+    return error ? [[layer.id, error]] : []
+  })))
+  const unsavedState = (key: string) => {
+    const pending = pendingStates.get(key)
+    return pending && (pending.saving || pending.dirty || pending.timer) ? pending.desired : undefined
+  }
+  async function flushState(key: string) {
+    const pending = pendingStates.get(key)
     if (!pending || pending.saving || !pending.dirty) return
     clearTimeout(pending.timer)
     pending.timer = undefined
@@ -49,49 +63,56 @@ export function useLayerCatalog(
     pending.dirty = false
     let failed = false
     try {
-      await saveCatalogMapState(id, { ...pending.desired }, campus)
-      if (!disposed && pendingStates.get(id) === pending) delete mapStateErrors.value[id]
+      await saveCatalogMapState(pending.id, { ...pending.desired }, pending.campus ?? campus)
+      if (!disposed && pendingStates.get(key) === pending) delete stateErrors.value[key]
     } catch (cause) {
       failed = true
       pending.dirty = true
-      if (!disposed && pendingStates.get(id) === pending)
-        mapStateErrors.value[id] = cause instanceof Error ? cause.message : '无法保存地图状态'
+      if (!disposed && pendingStates.get(key) === pending)
+        stateErrors.value[key] = cause instanceof Error ? cause.message : '无法保存地图状态'
     } finally {
       pending.saving = false
-      if (!failed && pendingStates.get(id) === pending && pending.dirty && !pending.timer)
-        void flushState(id)
+      if (!failed && pendingStates.get(key) === pending && pending.dirty && !pending.timer)
+        void flushState(key)
     }
   }
-  function persistState(layer: MapLayer, state: LayerMapState, debounce = false) {
+  function persistState(layer: MapLayer, state: Partial<LayerMapState>, debounce = false, placementCampus?: CampusKey) {
     Object.assign(layer, state)
     if (layer.builtin && !catalogLoaded) return
-    let pending = pendingStates.get(layer.id)
+    const key = placementCampus ? placementKey(layer.id, placementCampus) : layer.id
+    let pending = pendingStates.get(key)
     if (!pending) {
-      pending = { desired: state, dirty: true, saving: false }
-      pendingStates.set(layer.id, pending)
+      pending = { id: layer.id, campus: placementCampus, desired: state, dirty: true, saving: false }
+      pendingStates.set(key, pending)
     }
     pending.desired = state
     pending.dirty = true
     clearTimeout(pending.timer)
     pending.timer = undefined
-    delete mapStateErrors.value[layer.id]
+    delete stateErrors.value[key]
     if (debounce) pending.timer = setTimeout(() => {
       pending.timer = undefined
-      void flushState(layer.id)
+      void flushState(key)
     }, 300)
-    else void flushState(layer.id)
+    else void flushState(key)
   }
   function stateFor(layer: MapLayer, attached = layer.map_attached ?? layer.attached): LayerMapState {
-    return { map_attached: attached, map_visible: layer.visible, map_opacity: layer.opacity, road_max_level: layer.road_max_level ?? 2 }
+    return { map_attached: attached, map_visible: layer.visible, map_opacity: layer.opacity, road_max_level: layer.road_max_level ?? 2,
+      ...(layer.type === '3dtiles' && !layer.builtin ? tilesPlacement(layer) : {}) }
   }
   function forgetState(id: string) {
-    clearTimeout(pendingStates.get(id)?.timer)
-    pendingStates.delete(id)
-    delete mapStateErrors.value[id]
+    for (const [key, pending] of pendingStates) {
+      if (pending.id !== id) continue
+      clearTimeout(pending.timer)
+      pendingStates.delete(key)
+      delete stateErrors.value[key]
+    }
   }
   function retryMapState(layer: MapLayer) {
-    delete mapStateErrors.value[layer.id]
-    void flushState(layer.id)
+    for (const key of [layer.id, placementKey(layer.id, layer.campus ?? campus)]) {
+      delete stateErrors.value[key]
+      void flushState(key)
+    }
   }
   function loadResource(layer: MapLayer, visible: boolean) {
     const existing = loadingLayers.get(layer.id)
@@ -139,6 +160,11 @@ export function useLayerCatalog(
     layer.road_max_level = value
     getController()?.setRoadMaxLevel(layer, value)
     persistState(layer, stateFor(layer))
+  }
+  function changeTilesPlacement(layer: MapLayer, value: TilesPlacement) {
+    if (layer.builtin) persistState(layer, tilesPlacement(value), false, layer.campus ?? campus)
+    else persistState(layer, { ...stateFor(layer), ...tilesPlacement(value) })
+    void getController()?.setTilesPlacement(layer, value)
   }
   function flushPending() {
     for (const id of pendingStates.keys()) void flushState(id)
@@ -196,12 +222,15 @@ export function useLayerCatalog(
               persistState(layer, stateFor(layer, false))
             }
           }
-          const pending = pendingStates.get(record.id)
-          const unsaved = pending && (pending.saving || pending.dirty || pending.timer)
+          const unsaved = unsavedState(record.id)
+          const unsavedPlacement = unsavedState(placementKey(record.id, requestedCampus))
           const { attached: _attached, status: _status, error: _error, visible: _visible, opacity: _opacity, ...metadata } = mapped
           const previousRoadLevel = layer.road_max_level ?? 2
-          Object.assign(layer, metadata, unsaved ? pending.desired : {})
+          const previousPlacement = tilesPlacement(layer)
+          Object.assign(layer, metadata, unsaved, unsavedPlacement)
           if (previousRoadLevel !== (layer.road_max_level ?? 2)) getController()?.setRoadMaxLevel(layer, layer.road_max_level ?? 2)
+          if (layer.type === '3dtiles' && !sameTilesPlacement(previousPlacement, layer))
+            void getController()?.setTilesPlacement(layer, layer)
           if (record.map_attached !== undefined || unsaved) {
             layer.visible = layer.map_visible ?? true
             layer.opacity = layer.map_opacity ?? 1
@@ -225,7 +254,10 @@ export function useLayerCatalog(
           for (const record of samplesForCampus(requestedCampus)) {
             const layer = layers.value.find((item) => item.builtin && item.id === record.id)
             if (!layer) continue
-            if (layer.url !== record.url) getController()?.remove(layer)
+            if (layer.url !== record.url) {
+              getController()?.remove(layer)
+              if (record.type === '3dtiles') Object.assign(layer, tilesPlacement(record))
+            }
             Object.assign(layer, record)
             layer.map_attached ??= record.id !== 'demo-buildings'
           }
@@ -252,8 +284,7 @@ export function useLayerCatalog(
         persistState(layer, stateFor(layer, false))
         notify('登记已更新，数据地址或类型已变化，请重新加入地图')
       } else notify('图层登记已保存')
-      const pending = pendingStates.get(layer.id)
-      Object.assign(layer, record, pending && (pending.saving || pending.dirty) ? pending.desired : {})
+      Object.assign(layer, record, unsavedState(layer.id))
     } else {
       layers.value.push(mapLayer(record))
       notify('图层登记已保存，可按需加入地图')
@@ -305,6 +336,7 @@ export function useLayerCatalog(
     removeFromMap,
     changeOpacity,
     changeRoadMaxLevel,
+    changeTilesPlacement,
     retryMapState,
     switchCampus,
     refreshCatalog,

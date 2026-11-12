@@ -12,7 +12,25 @@ export interface RenderDescriptor {
   source_expires_at?: string | null
 }
 export type LayerKind = 'geojson' | '3dtiles'
-export interface LayerRecord {
+export interface TilesGroundAnchor { longitude: number; latitude: number; height: number }
+export interface TilesPlacement {
+  tiles_height_offset_m?: number
+  tiles_ground_anchor?: TilesGroundAnchor | null
+  tiles_align_to_terrain?: boolean | null
+}
+export const tilesPlacement = (state: TilesPlacement, defaultAlign: boolean | null = null): Required<TilesPlacement> => ({
+  tiles_height_offset_m: state.tiles_height_offset_m ?? 0,
+  tiles_ground_anchor: state.tiles_ground_anchor ? { ...state.tiles_ground_anchor } : null,
+  tiles_align_to_terrain: state.tiles_align_to_terrain ?? defaultAlign,
+})
+export function sameTilesPlacement(left: TilesPlacement, right: TilesPlacement) {
+  const a = left.tiles_ground_anchor, b = right.tiles_ground_anchor
+  return (left.tiles_height_offset_m ?? 0) === (right.tiles_height_offset_m ?? 0)
+    && (left.tiles_align_to_terrain ?? true) === (right.tiles_align_to_terrain ?? true)
+    && a?.longitude === b?.longitude && a?.latitude === b?.latitude && a?.height === b?.height
+}
+
+export interface LayerRecord extends TilesPlacement {
   id: string
   name: string
   category: string
@@ -29,7 +47,7 @@ export interface LayerRecord {
   road_max_level?: number
 }
 export type LayerInput = Omit<LayerRecord, 'id' | 'created_at' | 'asset_id' | 'asset_version' | 'asset_source_kind' | keyof LayerMapState>
-export interface LayerMapState {
+export interface LayerMapState extends TilesPlacement {
   map_attached: boolean
   map_visible: boolean
   map_opacity: number
@@ -136,7 +154,7 @@ export interface LayerCatalogRecord extends Omit<LayerRecord, 'type' | 'url'> {
   url: string | null
   asset: { asset_id: string; version: string } | null
   builtin: boolean
-  campus: string | null
+  campus: CampusKey | null
   static: boolean
   orderable: boolean
   object_count: number | null
@@ -145,6 +163,8 @@ export interface LayerCatalogRecord extends Omit<LayerRecord, 'type' | 'url'> {
   order: number
 }
 export interface MapLayer extends LayerRecord {
+  tilesModelOrigin?: TilesGroundAnchor | null
+  tilesTerrainNotice?: string
   render?: RenderDescriptor | null
   builtin: boolean
   attached: boolean
@@ -158,7 +178,7 @@ export interface MapLayer extends LayerRecord {
   legend?: LayerCatalogRecord['legend']
   order?: number
   orderable?: boolean
-  campus?: string | null
+  campus?: CampusKey | null
   static?: boolean
   progress?: number | null
   loadPhase?: string
@@ -254,6 +274,7 @@ export function samplesForCampus(key: CampusKey): LayerRecord[] {
   const campus = campuses.find((item) => item.key === key)!
   return sampleTemplates.map((record) => ({
     ...record,
+    campus: key,
     url: record.url.replace('/samples/', `/samples/${key}/`),
     source: `${campus.shortName} · ${record.source}`,
   }))
@@ -272,6 +293,7 @@ export function mapLayer(record: LayerRecord | LayerCatalogRecord, builtin = fal
     visible: record.map_visible ?? true,
     opacity: record.map_opacity ?? 1,
     road_max_level: record.road_max_level ?? 2,
+    ...(record.type === '3dtiles' ? tilesPlacement(record) : {}),
     status: 'idle',
     error: '',
     color:

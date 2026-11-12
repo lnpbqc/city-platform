@@ -87,6 +87,7 @@ const {
   removeFromMap,
   changeOpacity,
   changeRoadMaxLevel,
+  changeTilesPlacement,
   retryMapState,
   ordering,
   orderError,
@@ -344,6 +345,7 @@ addressChanged()
       @remove="removeFromMap"
       @opacity="changeOpacity"
       @road-max-level="changeRoadMaxLevel"
+      @tiles-placement="changeTilesPlacement"
       @retry-map-state="retryMapState"
       @move="moveLayer"
       @campus="changeCampus"

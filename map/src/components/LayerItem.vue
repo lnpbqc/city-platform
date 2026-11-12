@@ -13,9 +13,10 @@ import {
   ArrowDown,
 } from '@lucide/vue'
 import { fetchLayerDownload, layerDownload } from '../layerDownload'
-import type { MapLayer } from '../types'
+import type { MapLayer, TilesPlacement } from '../types'
 import { objectCountLabel } from '../layerTree'
 import RenderStatus from './RenderStatus.vue'
+import TilesHeightSettings from './TilesHeightSettings.vue'
 const props = defineProps<{ layer: MapLayer; canMoveUp?: boolean; canMoveDown?: boolean; ordering?: boolean }>()
 const downloadTarget = computed(() => layerDownload(props.layer))
 const downloading = ref(false)
@@ -49,6 +50,7 @@ const emit = defineEmits<{
   remove: []
   opacity: [value: number]
   roadMaxLevel: [value: number]
+  tilesPlacement: [value: TilesPlacement]
   move: [direction: number]
 }>()
 function changeOpacity(event: Event) {
@@ -200,6 +202,7 @@ function changeOpacity(event: Event) {
         <option :value="4">第 4 级 · 增加服务道路/步行等</option>
       </select>
     </label>
+    <TilesHeightSettings v-if="layer.type === '3dtiles'" :placement="layer" @save="emit('tilesPlacement', $event)" />
     <p v-if="layer.source" class="layer-source" :title="layer.source">
       {{ layer.source }}
     </p>

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MapCanvas from './MapCanvas.vue'
 import TimeAxis from './TimeAxis.vue'
 import { useTemporalLayers } from '../composables/useTemporalLayers'
-import { mapLayer, type MapLayer } from '../types'
+import { mapLayer, sameTilesPlacement, tilesPlacement, type MapLayer } from '../types'
 import type { MapController } from '../mapController'
 import type { CameraState, NavigationReading } from '../mapNavigation'
 import type { TemporalContext } from '../temporalTypes'
@@ -42,11 +42,13 @@ async function syncLayers() {
     if (!alive || current !== version) return
     layer.visible = source.visible; layer.opacity = source.opacity; layer.order = source.order
     layer.static = source.static; layer.unit = source.unit; layer.legend = source.legend; layer.color = source.color
+    if (layer.type === '3dtiles' && !sameTilesPlacement(layer, source))
+      void controller?.setTilesPlacement(layer, source)
     controller?.appearance(layer)
   }))
   if (alive && current === version) { controller?.syncOrder(layers.value); temporal.paint() }
 }
-watch(() => JSON.stringify(sources.value.map(layer => [sourceKey(layer), layer.visible, layer.opacity, layer.order, layer.static, layer.unit, layer.legend])), syncLayers)
+watch(() => JSON.stringify(sources.value.map(layer => [sourceKey(layer), layer.visible, layer.opacity, layer.order, layer.static, layer.unit, layer.legend, tilesPlacement(layer)])), syncLayers)
 watch(() => props.recovery, async () => { await syncLayers(); await temporal.refreshAvailability(); await temporal.refresh() })
 function ready(value: MapController) {
   controller = value

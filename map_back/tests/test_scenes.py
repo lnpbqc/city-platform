@@ -12,7 +12,7 @@ from app.models import Asset, AssetVersion, NetworkVersion, Scene, SceneAssetRef
 from app.networks import publish_network
 from sqlalchemy import update
 from sqlalchemy.orm import Session
-from test_layers import GEO, upload as upload_layer
+from test_layers import GEO, TILESET, upload as upload_layer, zip_data
 
 
 def upload(client):
@@ -30,6 +30,58 @@ def draft():
 def layer_state(layer):
     return {"layer_id": layer["id"], "asset": {"asset_id": layer["asset_id"], "version": layer["asset_version"]},
             "map_attached": True, "map_visible": False, "map_opacity": 0.4, "road_max_level": 2, "order": 3}
+
+
+def test_tiles_height_settings_persist_and_full_scene_pins_placement(client):
+    archive = zip_data({"tileset.json": json.dumps(TILESET), "nested/content.glb": b"model"})
+    layer = upload_layer(client, archive, "3dtiles", "city.zip").json()
+    assert layer["tiles_height_offset_m"] == 0 and layer["tiles_ground_anchor"] is None
+    assert layer["tiles_align_to_terrain"] is None
+    endpoint = f"/api/layers/catalog/{layer['id']}/map-state"
+    placement = {"tiles_height_offset_m": -2.5, "tiles_align_to_terrain": True,
+                 "tiles_ground_anchor": {"longitude": 113.36, "latitude": 23.04, "height": 30}}
+    assert client.patch(endpoint, json={**placement, "tiles_ground_anchor": {"longitude": 181, "latitude": 23, "height": 30}}).status_code == 422
+    assert client.patch(endpoint, json={"tiles_height_offset_m": None}).status_code == 422
+    updated = client.patch(endpoint, json=placement)
+    assert updated.status_code == 200, updated.text
+    assert {key: updated.json()[key] for key in placement} == placement
+    assert client.patch(endpoint, json={"map_visible": False}).json()["tiles_ground_anchor"] == placement["tiles_ground_anchor"]
+    scene = client.post("/api/scenes", json={**draft(), "layers": [{**layer_state(layer), **placement}]})
+    assert scene.status_code == 201, scene.text
+    scene_id = scene.json()["id"]
+    cleared = client.patch(f"/api/layers/{layer['id']}/map-state",
+                           json={"tiles_ground_anchor": None, "tiles_align_to_terrain": False})
+    assert cleared.json()["tiles_ground_anchor"] is None
+    with TestClient(app) as restarted:
+        saved = restarted.get(f"/api/scenes/{scene_id}").json()["layers"][0]
+        assert {key: saved[key] for key in placement} == placement
+        assert restarted.get("/api/layers").json()[0]["tiles_height_offset_m"] == -2.5
+        assert restarted.get("/api/layers").json()[0]["tiles_align_to_terrain"] is False
+    auto = {"tiles_align_to_terrain": True, "tiles_ground_anchor": None, "tiles_height_offset_m": 0}
+    scene = client.post("/api/scenes", json={**draft(), "layers": [{**layer_state(layer), **auto}]})
+    assert scene.status_code == 201, scene.text
+    assert {key: scene.json()["layers"][0][key] for key in auto} == auto
+    copied_legacy = client.post("/api/scenes", json={**draft(), "layers": [layer_state(layer)]})
+    assert copied_legacy.status_code == 201, copied_legacy.text
+    assert copied_legacy.json()["layers"][0]["tiles_align_to_terrain"] is False
+
+
+def test_builtin_tiles_placement_follows_its_campus_asset(client):
+    url = "/api/layers/catalog/demo-buildings/map-state"
+    anchor = {"longitude": 113.36, "latitude": 23.04, "height": 12}
+    saved = client.patch(url, params={"campus": "university-town"}, json={
+        "tiles_height_offset_m": 3, "tiles_ground_anchor": anchor, "tiles_align_to_terrain": False,
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["tiles_ground_anchor"] == anchor
+    other = client.patch(url, params={"campus": "huangpu"}, json={"tiles_height_offset_m": -1})
+    assert other.json()["tiles_ground_anchor"] is None
+    assert other.json()["tiles_align_to_terrain"] is None
+    assert other.json()["tiles_height_offset_m"] == -1
+    rows = client.get("/api/layers/catalog", params={"campus": "university-town"}).json()
+    first = next(row for row in rows if row["id"] == "demo-buildings")
+    assert first["tiles_ground_anchor"] == anchor and first["tiles_height_offset_m"] == 3
+    assert first["tiles_align_to_terrain"] is False
 
 
 def test_create_get_restart_and_full_config_restore(client):

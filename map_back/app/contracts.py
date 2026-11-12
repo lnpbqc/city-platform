@@ -127,6 +127,13 @@ class LegendItem(BaseModel):
     value: str | float | None = None
 
 
+class TilesGroundAnchor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False, strict=True)
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False, strict=True)
+    height: float = Field(allow_inf_nan=False, strict=True)
+
+
 class LayerCatalogOutput(BaseModel):
     render: dict | None = None
     id: str
@@ -147,6 +154,9 @@ class LayerCatalogOutput(BaseModel):
     map_visible: bool = True
     map_opacity: float = Field(default=1, ge=0, le=1, allow_inf_nan=False)
     road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
+    tiles_height_offset_m: float = Field(default=0, allow_inf_nan=False, strict=True)
+    tiles_ground_anchor: TilesGroundAnchor | None = None
+    tiles_align_to_terrain: bool | None = Field(default=None, strict=True)
     order: int = Field(default=0, ge=0)
 
 
@@ -170,6 +180,9 @@ class SceneLayerState(BaseModel):
     map_visible: bool
     map_opacity: float = Field(ge=0, le=1, allow_inf_nan=False)
     road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
+    tiles_height_offset_m: float = Field(default=0, allow_inf_nan=False, strict=True)
+    tiles_ground_anchor: TilesGroundAnchor | None = None
+    tiles_align_to_terrain: bool | None = Field(default=None, strict=True)
     order: int = Field(ge=0)
 
     @model_serializer(mode='wrap')
@@ -178,6 +191,11 @@ class SceneLayerState(BaseModel):
         for key in ('name', 'category'):
             if result.get(key) is None:
                 result.pop(key, None)
+        if self.tiles_align_to_terrain is None:
+            result.pop("tiles_align_to_terrain", None)
+            if self.tiles_height_offset_m == 0 and self.tiles_ground_anchor is None:
+                result.pop("tiles_height_offset_m", None)
+                result.pop("tiles_ground_anchor", None)
         return result
 
     @field_validator("layer_id")
