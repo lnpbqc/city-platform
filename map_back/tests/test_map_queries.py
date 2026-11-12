@@ -104,16 +104,17 @@ def test_viewport_budgets_and_weight_precedence(client, monkeypatch):
     assert result['truncated'] is True and result['features'] == []
 
 
-def test_line_display_is_simplified_without_changing_original(client, monkeypatch):
+def test_road_display_keeps_clipped_vertices_without_changing_original(client, monkeypatch):
     from app import map_queries
     coordinates = [[121.4 + index * 0.001, 25] for index in range(201)]
     feature = {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coordinates}, 'properties': {}}
     layer = upload(client, [feature], category='道路')
-    body = {**reference(layer), 'bbox': [121.45, 24.9, 121.55, 25.1], 'width': 640, 'height': 480, 'meters_per_pixel': .5}
+    body = {**reference(layer), 'bbox': [121.45, 24.9, 121.55, 25.1], 'width': 640, 'height': 480,
+            'meters_per_pixel': .5, 'road_max_level': 4}
     result = client.post('/api/map/viewport', json=body).json()
     assert len(result['features']) == 1
     rendered = result['features'][0]
-    assert len(rendered['geometry']['coordinates']) == 2
+    assert rendered['geometry']['coordinates'] == [[121.45, 25]] + [point for point in coordinates if 121.45 < point[0] < 121.55] + [[121.55, 25]]
     assert rendered['geometry']['coordinates'][0][0] >= 121.45
     identity = rendered['id']
     assert client.get('/api/objects/' + identity).json()['geometry']['coordinates'] == coordinates
@@ -158,3 +159,12 @@ def test_viewport_counts_real_intersections_before_feature_budget(client, monkey
     result = client.post('/api/map/viewport', json={**reference(layer), 'bbox': [1.5, 1.5, 2.5, 2.5], 'width': 640, 'height': 480, 'meters_per_pixel': .5}).json()
     assert [feature['properties']['name'] for feature in result['features']] == ['inside']
     assert result['truncated'] is False
+
+
+def test_nonroad_line_display_still_simplifies(client):
+    coordinates = [[.01 + index * .001, .01] for index in range(51)]
+    layer = upload(client, [{'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coordinates},
+                             'properties': {}}], category='专题')
+    result = client.post('/api/map/viewport', json={**reference(layer), 'bbox': [0, 0, .1, .1],
+                         'width': 800, 'height': 600, 'meters_per_pixel': 2}).json()
+    assert result['features'][0]['geometry']['coordinates'] == [coordinates[0], coordinates[-1]]

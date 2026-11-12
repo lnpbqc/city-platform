@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .assets import lock_catalog, published_files
 from .builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_asset_id
 from .models import Asset, AssetVersion, ObjectIndex, SpatialObject
-from .geojson_stream import features, check_cancel
+from .geojson_stream import members, check_cancel
 from .spatial import area_m2, parse_geometry, representative_coordinates
 
 
@@ -50,7 +50,7 @@ def _record(asset, version, ordinal, geometry, properties, kind, name):
             "area_m2": area_m2(geometry), "west": envelope[0], "south": envelope[1], "east": envelope[2], "north": envelope[3]}
 
 
-def _records(asset: Asset, version: AssetVersion, cancel=None):
+def _records(asset: Asset, version: AssetVersion, cancel=None, *, snapshot=None):
     if asset.type == "3dtiles":
         yield _record(asset, version, -1, None, {}, "model", asset.name or asset.original_name)
         return
@@ -67,7 +67,12 @@ def _records(asset: Asset, version: AssetVersion, cancel=None):
         raise ValueError("入口内容与已发布版本校验和不一致")
     default_kind = next(({"campus-buildings": "building", "demo-roads": "road", "demo-points": "point", "demo-areas": "area"}.get(spec["id"])
                          for campus in CAMPUS_KEYS for spec in BUILTIN_LAYERS if builtin_asset_id(campus, spec["id"]) == asset.id), None)
-    for ordinal, feature in enumerate(features(root / entry, cancel)):
+    ordinal = 0
+    for key, feature in members(root / entry, cancel):
+        if key is not None:
+            if snapshot:
+                snapshot.member(key, feature)
+            continue
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise ValueError("索引条目必须是Feature")
         properties = {} if feature.get("properties") is None else feature["properties"]
@@ -80,7 +85,11 @@ def _records(asset: Asset, version: AssetVersion, cancel=None):
         geometric_kind = {"Point": "point", "MultiPoint": "point", "LineString": "line", "MultiLineString": "line", "Polygon": "area", "MultiPolygon": "area"}.get((geometry or {}).get("type"), "unknown")
         kind = native_kind if isinstance(native_kind, str) and native_kind.strip() else default_kind or geometric_kind
         name = properties.get("name", properties.get("名称"))
-        yield _record(asset, version, ordinal, geometry, properties, kind, name if isinstance(name, str) else None)
+        record = _record(asset, version, ordinal, geometry, properties, kind, name if isinstance(name, str) else None)
+        if snapshot:
+            record.update(snapshot.feature(feature))
+        yield record
+        ordinal += 1
 
 
 def index_asset(session: Session, asset: Asset, version: AssetVersion | None = None, *, cancel=None):
@@ -88,6 +97,16 @@ def index_asset(session: Session, asset: Asset, version: AssetVersion | None = N
     if version is None:
         return None
     existing = session.get(ObjectIndex, (asset.id, version.version))
+    if asset.type == "geojson":
+        from .geojson_snapshot import ready_snapshot
+        if ready_snapshot(session, asset.id, version.version):
+            if existing is None:
+                existing = ObjectIndex(asset_id=asset.id, asset_version=version.version, status="ready", error="")
+                session.add(existing)
+            else:
+                existing.status, existing.error = "ready", ""
+            session.flush()
+            return existing
     if existing is not None:
         return existing
     status, error = "unavailable", "该资产类型未提供本地对象索引"
@@ -96,8 +115,10 @@ def index_asset(session: Session, asset: Asset, version: AssetVersion | None = N
     elif asset.type in ("geojson", "3dtiles") and asset.status == "active":
         try:
             with session.begin_nested():
+                from .geojson_snapshot import SnapshotWriter
+                snapshot = SnapshotWriter(session, asset.id, version.version, cancel) if asset.type == "geojson" else None
                 batch = []
-                for record in _records(asset, version, cancel):
+                for record in _records(asset, version, cancel, snapshot=snapshot):
                     batch.append(record)
                     if len(batch) == 500:
                         check_cancel(cancel)
@@ -105,6 +126,8 @@ def index_asset(session: Session, asset: Asset, version: AssetVersion | None = N
                         batch.clear()
                 if batch:
                     session.execute(insert(SpatialObject), batch)
+                if snapshot:
+                    snapshot.complete()
             status, error = "ready", ""
         except (OSError, ValueError, TypeError, KeyError) as cause:
             status, error = "invalid", str(cause)[:1000]

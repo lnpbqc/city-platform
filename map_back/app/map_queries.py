@@ -38,6 +38,7 @@ class ViewportInput(LayerReference):
     bbox: list[float] = Field(min_length=4, max_length=4)
     width: int = Field(ge=1, le=16384)
     height: int = Field(ge=1, le=16384)
+    road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
     meters_per_pixel: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
     @model_validator(mode='after')
@@ -102,9 +103,49 @@ def light_output(record, layer_id=None):
 
 
 class RoadPickInput(LayerReference):
-    object_ids: list[str] = Field(min_length=1, max_length=2000)
+    object_ids: list[str] = Field(default_factory=list, max_length=2000)
+    display_group_id: str | None = Field(default=None, min_length=1, max_length=200)
+    render_key: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
     longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
     latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def pick_source(self):
+        if self.object_ids:
+            if self.display_group_id is not None or self.render_key is not None:
+                raise ValueError('来源路段与显示道路组须二选一')
+        elif self.display_group_id is None or self.render_key is None:
+            raise ValueError('需要来源路段或显示道路组及切片版本')
+        return self
+
+
+class RoadGroupsInput(LayerReference):
+    render_key: str = Field(pattern=r'^[a-f0-9]{64}$')
+    object_ids: list[str] = Field(min_length=1, max_length=2000)
+
+
+@router.post('/road-groups')
+def selected_road_groups(body: RoadGroupsInput, session: SessionDep):
+    from .render_models import RenderJob
+    from .rendering import RENDER_DIR
+    validate_reference(session, body)
+    job = session.get(RenderJob, body.render_key)
+    if not job or job.status != 'succeeded' or (job.asset_id, job.version) != (body.asset_id, body.version):
+        raise ApiProblem(422, 'VALIDATION_ERROR', '显示产物不属于当前资产版本')
+    remaining, groups = set(body.object_ids), []
+    try:
+        with (RENDER_DIR / job.key / 'road_sources.jsonl').open(encoding='utf8') as source:
+            for line in source:
+                row = json.loads(line)
+                matches = remaining.intersection(row['source_object_ids'])
+                if matches:
+                    groups.append({'group_id': row['group_id'], 'object_ids': sorted(matches)})
+                    remaining.difference_update(matches)
+                if not remaining:
+                    break
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ApiProblem(409, 'RENDER_UNAVAILABLE', '显示道路来源映射不可用') from error
+    return {'groups': groups}
 
 
 def meters_per_pixel(body):
@@ -138,7 +179,11 @@ def road_batches(groups):
         yield batch
 
 
-def road_features(session, body, windows, mpp, mask, tolerance):
+def explicit_road(properties):
+    return 'highway' in properties or ('fclass' in properties and classification(properties) in RANK)
+
+
+def road_features(session, body, windows, mpp, mask, *, explicit_only=False):
     degrees, segments = Counter(), {}
     for row in candidates(session, body.asset_id, body.version, windows, properties=True, endpoints=True):
         if row.geometry_type not in ('LineString', 'MultiLineString'):
@@ -146,8 +191,8 @@ def road_features(session, body, windows, mpp, mask, tolerance):
         endpoints = tuple(tuple(point) for pair in json.loads(row.endpoints) for point in pair)
         degrees.update(endpoints)
         properties = json.loads(row.properties)
-        rank = road_rank(properties, mpp)
-        if rank is not None:
+        rank = road_rank(properties, mpp, body.road_max_level)
+        if rank is not None and (not explicit_only or explicit_road(properties)):
             key = signature({'id': row.id, 'properties': properties})
             segments[row.id] = (rank, key, endpoints if row.geometry_type == 'LineString' else ())
 
@@ -176,7 +221,12 @@ def road_features(session, body, windows, mpp, mask, tolerance):
             if clipped.is_empty or clipped.geom_type not in ('LineString', 'MultiLineString'):
                 continue
             feature = feature_for(representative)
-            feature['geometry'] = mapping(clipped.simplify(tolerance, preserve_topology=True))
+            geometry = mapping(clipped)
+            lines = [geometry['coordinates']] if clipped.geom_type == 'LineString' else geometry['coordinates']
+            # Only exact consecutive duplicates may be removed; keep every bend.
+            cleaned = [[point for index, point in enumerate(line) if index == 0 or point != line[index - 1]]
+                       for line in lines]
+            feature['geometry'] = {**geometry, 'coordinates': cleaned[0] if clipped.geom_type == 'LineString' else cleaned}
             feature['__object']['source_object_ids'] = group
             feature['__display'] = {'road_class': classification(representative.properties), 'road_rank': segments[representative.id][0]}
             yield feature
@@ -191,7 +241,7 @@ def viewport(body: ViewportInput, session: SessionDep):
     tolerance = max(span/body.width,(body.bbox[3]-body.bbox[1])/body.height)*.75
     truncated = False
     if category == '道路':
-        display = road_features(session, body, windows, mpp, mask, tolerance)
+        display = road_features(session, body, windows, mpp, mask)
     elif category == 'POI':
         from .poi_style import poi_style
         west,south,east,north = body.bbox
@@ -218,8 +268,12 @@ def viewport(body: ViewportInput, session: SessionDep):
                 yield feature
         display = selected_pois()
     else:
-        display = (feature_for(load_display(session,row.id),row.weight)
-                   for row in candidates(session,body.asset_id,body.version,windows))
+        def generic_features():
+            yield from road_features(session, body, windows, mpp, mask, explicit_only=True)
+            for row in candidates(session,body.asset_id,body.version,windows,properties=True,endpoints=True):
+                if row.geometry_type == 'Point' or not explicit_road(json.loads(row.properties)):
+                    yield feature_for(load_display(session,row.id),row.weight)
+        display = generic_features()
     features,vertex_count,byte_count = [],0,128
     for feature in display:
         if feature is None:
@@ -228,13 +282,7 @@ def viewport(body: ViewportInput, session: SessionDep):
         geometry = feature['geometry']
         if not geometry:
             continue
-        if category != '道路' and geometry['type'] != 'Point':
-            # Explicit highway data in a generic layer uses the same scale rules.
-            if 'highway' in feature['properties'] or classification(feature['properties']) in RANK and 'fclass' in feature['properties']:
-                rank = road_rank(feature['properties'],mpp)
-                if rank is None or geometry['type'] not in ('LineString','MultiLineString'):
-                    continue
-                feature['__display'] = {'road_class':classification(feature['properties']),'road_rank':rank}
+        if '__display' not in feature and geometry['type'] != 'Point':
             clipped = shape(geometry).intersection(mask).simplify(tolerance,preserve_topology=True)
             if clipped.is_empty:
                 continue
@@ -254,17 +302,45 @@ def viewport(body: ViewportInput, session: SessionDep):
     return {'type':'FeatureCollection','features':features,'truncated':truncated}
 
 
+def road_source_ids(session, body):
+    if body.object_ids:
+        return set(body.object_ids)
+    from .render_models import RenderJob
+    from .rendering import RENDER_DIR
+    job = session.get(RenderJob, body.render_key)
+    if not job or job.asset_id != body.asset_id or job.version != body.version or job.status != 'succeeded':
+        raise ApiProblem(422, 'VALIDATION_ERROR', '显示道路组不属于当前图层资产版本')
+    try:
+        with (RENDER_DIR / job.key / 'road_sources.jsonl').open(encoding='utf8') as source:
+            for line in source:
+                group = json.loads(line)
+                if group['group_id'] == body.display_group_id:
+                    identities = set(group['source_object_ids'])
+                    if identities:
+                        return identities
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ApiProblem(409, 'RENDER_UNAVAILABLE', '显示道路来源映射不可用') from error
+    raise ApiProblem(422, 'VALIDATION_ERROR', '显示道路组不存在')
+
+
 @router.post('/road-pick')
 def road_pick(body: RoadPickInput, session: SessionDep):
     validate_reference(session,body)
-    identities = set(body.object_ids)
-    rows = session.scalars(select(SpatialObject).where(SpatialObject.id.in_(identities),
-        SpatialObject.asset_id==body.asset_id,SpatialObject.asset_version==body.version)).all()
-    if len(rows) != len(identities) or any(not row.geometry or row.geometry['type'] not in ('LineString','MultiLineString') for row in rows):
-        raise ApiProblem(422,'VALIDATION_ERROR','来源路段不属于当前图层资产版本')
+    identities = sorted(road_source_ids(session, body))
     projection = Transformer.from_crs('EPSG:4326',CRS.from_proj4(f'+proj=aeqd +lat_0={body.latitude} +lon_0={body.longitude} +datum=WGS84'),always_xy=True)
     origin = Point(0,0)
-    nearest = min(rows,key=lambda row:(transform(shape(row.geometry),projection.transform,interleaved=False).distance(origin),row.id))
+    nearest, nearest_key = None, None
+    # Groups can exceed the legacy 2,000-ID request bound; keep geometry reads bounded.
+    for offset in range(0, len(identities), 256):
+        batch = identities[offset:offset + 256]
+        rows = session.scalars(select(SpatialObject).where(SpatialObject.id.in_(batch),
+            SpatialObject.asset_id==body.asset_id,SpatialObject.asset_version==body.version)).all()
+        if len(rows) != len(batch) or any(not row.geometry or row.geometry['type'] not in ('LineString','MultiLineString') for row in rows):
+            raise ApiProblem(422,'VALIDATION_ERROR','来源路段不属于当前图层资产版本')
+        for row in rows:
+            key = (transform(shape(row.geometry),projection.transform,interleaved=False).distance(origin),row.id)
+            if nearest_key is None or key < nearest_key:
+                nearest, nearest_key = row, key
     from .object_queries import _output
     return _output(nearest,{},preferred_layer=body.layer_id)
 

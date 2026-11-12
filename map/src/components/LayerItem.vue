@@ -15,6 +15,7 @@ import {
 import { fetchLayerDownload, layerDownload } from '../layerDownload'
 import type { MapLayer } from '../types'
 import { objectCountLabel } from '../layerTree'
+import RenderStatus from './RenderStatus.vue'
 const props = defineProps<{ layer: MapLayer; canMoveUp?: boolean; canMoveDown?: boolean; ordering?: boolean }>()
 const downloadTarget = computed(() => layerDownload(props.layer))
 const downloading = ref(false)
@@ -47,6 +48,7 @@ const emit = defineEmits<{
   locate: []
   remove: []
   opacity: [value: number]
+  roadMaxLevel: [value: number]
   move: [direction: number]
 }>()
 function changeOpacity(event: Event) {
@@ -189,9 +191,19 @@ function changeOpacity(event: Event) {
         @input="changeOpacity"
       /><output>{{ Math.round(layer.opacity * 100) }}%</output>
     </div>
+    <label v-if="layer.category === '道路' || layer.category === '线状网络' || layer.id === 'demo-roads'" class="road-level-control">
+      道路显示到
+      <select :value="layer.road_max_level ?? 2" :aria-label="`道路显示到 ${layer.name}`" @change="emit('roadMaxLevel', Number(($event.target as HTMLSelectElement).value))">
+        <option :value="1">第 1 级 · 高速/快速路/主干路</option>
+        <option :value="2">第 2 级 · 增加次干路/三级道路</option>
+        <option :value="3">第 3 级 · 增加住宅街道/普通街道</option>
+        <option :value="4">第 4 级 · 增加服务道路/步行等</option>
+      </select>
+    </label>
     <p v-if="layer.source" class="layer-source" :title="layer.source">
       {{ layer.source }}
     </p>
+    <RenderStatus :render="layer.render" :asset-id="layer.asset_id" :version="layer.asset_version" :category="layer.category" @updated="layer.render = $event" />
     <p v-if="layer.error" class="layer-error">{{ layer.error }}</p>
     <p v-if="downloadError" class="layer-error" role="alert">
       {{ downloadError }}
@@ -328,6 +340,8 @@ function changeOpacity(event: Event) {
 .layer-actions a {
   display: inline-flex;
 }
+.road-level-control { display: grid; gap: 4px; margin-top: 8px; font-size: 11px; }
+.road-level-control select { width: 100%; min-width: 0; font: inherit; }
 .opacity-control {
   display: flex;
   align-items: center;

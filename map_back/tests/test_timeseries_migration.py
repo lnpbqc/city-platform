@@ -34,19 +34,21 @@ from test_scenes import draft, layer_state, upload
 
 
 legacy_tables = None
+legacy_columns = {}
 
 
 def rows():
     global legacy_tables
     with sqlite3.connect(DATABASE_URL.removeprefix("sqlite:///")) as connection:
         if legacy_tables is None:
-            legacy_tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('alembic_version','time_series_snapshots')")]
+            legacy_tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('alembic_version','time_series_snapshots')")]
+            for table in legacy_tables:
+                legacy_columns[table] = [row[1] for row in connection.execute('PRAGMA table_info("' + table + '")')]
         tables = legacy_tables
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         result = {}
         for table in tables:
-            columns = [row[1] for row in connection.execute('PRAGMA table_info("' + table + '")')
-                       if not (table == "bookmarks" and row[1] == "state")]
+            columns = legacy_columns[table]
             fields = ','.join('"' + column + '"' for column in columns)
             result[table] = sorted(connection.execute('SELECT ' + fields + ' FROM "' + table + '"').fetchall(), key=repr)
         return result
@@ -59,11 +61,11 @@ def fingerprints(root):
 
 try:
     config = Config(str(Path("alembic.ini").resolve()))
-    command.upgrade(config, "0010_runs")
+    command.upgrade(config, "head")
     with SessionLocal() as session:
         ensure_networks(session)
         session.commit()
-    # No context manager: prepare genuine 0010 data without invoking the new lifespan.
+    # Populate through current APIs, then downgrade to the historical schema.
     client = TestClient(app)
     try:
         layer_response = upload(client)
@@ -81,6 +83,7 @@ try:
                                ("legacy-region", "迁移收藏", "region", "guangzhou", "2026-10-20 00:00:00"))
     finally:
         client.close()
+    command.downgrade(config, "0010_runs")
     before = rows()
     files_before = fingerprints(FILES_DIR)
     samples_before = fingerprints(SAMPLES_DIR)

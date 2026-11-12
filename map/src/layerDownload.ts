@@ -2,6 +2,9 @@ import type { MapLayer } from './types'
 
 export function layerDownload(layer: MapLayer) {
   const filename = `${layer.name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') || '图层'}.${layer.type === '3dtiles' ? 'zip' : 'geojson'}`
+  if (layer.type === 'geojson' && layer.asset_id && layer.asset_version && layer.render?.source_state === 'expired')
+    return { url: `/api/assets/${encodeURIComponent(layer.asset_id)}/versions/${encodeURIComponent(layer.asset_version)}/geojson`,
+      filename, label: '原文件已到期，导出 GeoJSON', external: false }
   const source = new URL(layer.url, 'http://127.0.0.1:5173')
   const managed = source.pathname.startsWith('/data-files/') &&
     ['localhost', '127.0.0.1', '[::1]'].includes(source.hostname) &&

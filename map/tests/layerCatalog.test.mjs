@@ -75,6 +75,7 @@ function setup(options = {}) {
       }
       layer.status = 'ready'
     },
+    setRoadMaxLevel(layer, value) { layer.road_max_level = value },
     appearance(layer) {
       calls.appearances.push({ id: layer.id, visible: layer.visible, opacity: layer.opacity })
     },
@@ -665,4 +666,23 @@ test('order failure preserves the current order and can be retried; 3D cannot be
   await catalog.moveLayer(first, -1)
   assert.equal(saves.length, count)
   app.unmount()
+})
+
+
+test('road ceiling defaults to two and survives a saved catalog refresh and remount', async () => {
+  records = [{ ...record, category: '道路', map_attached: true }]
+  const first = setup()
+  await flush()
+  const layer = first.catalog.layers.value[0]
+  assert.equal(layer.road_max_level, 2)
+  first.catalog.changeRoadMaxLevel(layer, 4)
+  await flush()
+  assert.equal(saves.at(-1).road_max_level, 4)
+  await first.catalog.refreshCatalog()
+  assert.equal(first.catalog.layers.value[0].road_max_level, 4)
+  first.app.unmount()
+  const second = setup()
+  await flush()
+  assert.equal(second.catalog.layers.value[0].road_max_level, 4)
+  second.app.unmount()
 })

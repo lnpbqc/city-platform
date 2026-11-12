@@ -35,6 +35,7 @@ class LayerOutput(LayerInput):
     map_attached: bool
     map_visible: bool
     map_opacity: float
+    road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
 
     @field_validator("created_at")
     @classmethod
@@ -48,7 +49,9 @@ class LayerMapStateInput(BaseModel):
     map_visible: bool | None = None
     map_opacity: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
-    @field_validator("map_attached", "map_visible", "map_opacity")
+    road_max_level: int | None = Field(default=None, ge=1, le=4, strict=True)
+
+    @field_validator("map_attached", "map_visible", "map_opacity", "road_max_level")
     @classmethod
     def not_null(cls, value):
         if value is None:
@@ -175,6 +178,7 @@ class AssetFile(BaseModel):
 
 
 class AssetOutput(BaseModel):
+    render: dict | None = None
     id: str
     original_name: str | None
     type: Literal["geojson", "3dtiles", "network", "unknown"]

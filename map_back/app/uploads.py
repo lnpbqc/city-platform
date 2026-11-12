@@ -9,9 +9,9 @@ from fastapi import HTTPException, UploadFile
 from .spatial import parse_geometry
 
 GEOJSON_LIMIT = 1024 * 1024 * 1024
-ZIP_LIMIT = 512 * 1024 * 1024
-EXPANDED_LIMIT = 2 * 1024 * 1024 * 1024
-FILE_LIMIT = 1_000_000
+ZIP_LIMIT = 10 * 1024 * 1024 * 1024
+EXPANDED_LIMIT = 20 * 1024 * 1024 * 1024
+FILE_LIMIT = 10_000_000
 
 
 def invalid(message: str):

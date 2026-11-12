@@ -233,8 +233,13 @@ watch(
         <span>对象 <strong>{{ stats.object_count }}</strong> 个</span>
         <span>运行 <strong>{{ stats.run_count }}</strong> 次</span>
         <span
-          >本地容量 <strong>{{ bytes(stats.total_byte_size) }}</strong></span
+          >源资产容量 <strong>{{ bytes(stats.total_byte_size) }}</strong></span
         >
+        <template v-if="stats.storage">
+          <span>显示产物 <strong>{{ bytes(stats.storage.render_bytes) }}</strong></span>
+          <span>数据库（含索引）<strong>{{ bytes(stats.storage.database_bytes) }}</strong></span>
+          <span>临时空间 <strong>{{ bytes(stats.storage.temporary_bytes) }}</strong></span>
+        </template>
         <span
           >最近 7 天新增
           <strong>{{ stats.assets_added_last_7_days }}</strong> 份</span

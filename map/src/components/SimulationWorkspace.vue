@@ -32,7 +32,7 @@ let controller: MapController | undefined
 const currentLayers = (): SceneLayerState[] => props.layers.filter(layer => layer.id === 'basemap' || layer.asset_id && layer.asset_version).map((layer, index) => ({
   layer_id: layer.id, asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
   name: layer.name, category: layer.category,
-  map_attached: layer.attached || !!layer.map_attached, map_visible: layer.visible, map_opacity: layer.opacity, order: layer.order ?? index,
+  map_attached: layer.attached || !!layer.map_attached, map_visible: layer.visible, map_opacity: layer.opacity, road_max_level: layer.road_max_level ?? 2, order: layer.order ?? index,
 }))
 const simulation = useSimulation(() => controller?.getCamera() ?? initialCamera, currentLayers)
 const { scenes, networks, draft, sceneId, sceneVersion, network, run, result, snapshot, loading, saving, submitting, error,
@@ -121,7 +121,7 @@ async function syncLayers(prepared: MapLayer[] = []) {
     if (existing) {
       if (existing.status === 'error') await controller?.load(existing)
       if (!alive || version !== layerVersion) return
-      existing.visible = state.map_visible; existing.opacity = state.map_opacity; existing.order = state.order
+      existing.visible = state.map_visible; existing.opacity = state.map_opacity; controller?.setRoadMaxLevel(existing, state.road_max_level ?? 2); existing.order = state.order
       controller?.appearance(existing)
       return
     }
@@ -133,7 +133,7 @@ async function syncLayers(prepared: MapLayer[] = []) {
       const current = mapLayers.value.at(-1)!
       await controller.load(current)
       if (!alive || version !== layerVersion) return
-      current.visible = state.map_visible; current.opacity = state.map_opacity
+      current.visible = state.map_visible; current.opacity = state.map_opacity; controller?.setRoadMaxLevel(current, state.road_max_level ?? 2)
       controller.appearance(current)
     } catch (cause) { if (alive && version === layerVersion) mapError.value = String(cause) }
   }))
@@ -270,7 +270,7 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
         <div class="section-heading"><h2>阻断边</h2><span>{{ draft.blocked_edges.length }} / {{ network?.edges.length ?? 0 }}</span></div>
         <p class="hint">点击地图道路或勾选列表，使用相同的边ID。</p>
         <ul class="edge-list"><li v-for="edge in network?.edges ?? []" :key="edge.id"><label><input type="checkbox" :checked="draft.blocked_edges.includes(edge.id)" :aria-label="`阻断 ${edge.id}`" @change="editEdge(edge.id)"><span>{{ edge.id }}</span><small>{{ number(edge.length_m) }} m</small></label></li></ul>
-        <details class="scene-layers"><summary>固定图层与状态 · {{ draft.layers.length }}</summary><div v-for="layer in draft.layers" :key="layer.layer_id" class="scene-layer"><label><input v-model="layer.map_attached" type="checkbox" :aria-label="`加入场景 ${layerName(layer.layer_id)}`">{{ layerName(layer.layer_id) }}<small>{{ layer.asset?.version ?? '底图' }}</small></label><div v-if="layer.map_attached" class="scene-layer-controls"><label><input v-model="layer.map_visible" type="checkbox" :aria-label="`显示场景 ${layerName(layer.layer_id)}`">显示</label><input v-model.number="layer.map_opacity" type="range" min="0" max="1" step="0.05" :aria-label="`场景透明度 ${layerName(layer.layer_id)}`"><span>{{ Math.round(layer.map_opacity * 100) }}%</span></div></div></details>
+        <details class="scene-layers"><summary>固定图层与状态 · {{ draft.layers.length }}</summary><div v-for="layer in draft.layers" :key="layer.layer_id" class="scene-layer"><label><input v-model="layer.map_attached" type="checkbox" :aria-label="`加入场景 ${layerName(layer.layer_id)}`">{{ layerName(layer.layer_id) }}<small>{{ layer.asset?.version ?? '底图' }}</small></label><div v-if="layer.map_attached" class="scene-layer-controls"><label><input v-model="layer.map_visible" type="checkbox" :aria-label="`显示场景 ${layerName(layer.layer_id)}`">显示</label><input v-model.number="layer.map_opacity" type="range" min="0" max="1" step="0.05" :aria-label="`场景透明度 ${layerName(layer.layer_id)}`"><span>{{ Math.round(layer.map_opacity * 100) }}%</span><label v-if="layer.category === '道路' || layer.category === '线状网络'">道路显示到<select :value="layer.road_max_level ?? 2" :aria-label="`场景道路显示到 ${layerName(layer.layer_id)}`" @change="layer.road_max_level = Number(($event.target as HTMLSelectElement).value)"><option v-for="level in 4" :key="level" :value="level">第 {{ level }} 级</option></select></label></div></div></details>
       </fieldset>
       <div class="save-actions"><button class="secondary-button" :disabled="configurationLocked" @click="save()"><Save :size="14" />{{ saving ? '保存中…' : sceneId ? '保存场景' : '创建场景' }}</button><button v-if="sceneId" class="text-button" :disabled="configurationLocked" @click="save(true)">另存为</button><span v-if="sceneId">v{{ sceneVersion }}</span></div>
       <p v-if="historical" class="hint">历史快照 · 场景 v{{ run?.scene_version }}。从历史编辑会创建新场景草稿。</p>

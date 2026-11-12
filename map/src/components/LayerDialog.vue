@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   X,
   UploadCloud,
@@ -7,94 +7,115 @@ import {
   LoaderCircle,
   FileArchive,
   FileJson,
-} from '@lucide/vue'
-import { ApiError, registerAsset, saveLayer, uploadLayer } from '../api'
-import type { LayerInput, LayerKind, LayerRecord } from '../types'
-import { poiFile } from '../poi'
-import { categoryOptions } from '../layerTree'
+} from "@lucide/vue";
+import { ApiError, registerAsset, saveLayer, uploadLayer } from "../api";
+import type { LayerInput, LayerKind, LayerRecord } from "../types";
+import { poiFile } from "../poi";
+import { categoryOptions } from "../layerTree";
 
-const props = defineProps<{ editing?: LayerRecord; initial?: LayerInput; categories?: string[] }>()
-const emit = defineEmits<{ close: []; saved: [record: LayerRecord] }>()
-const initial = props.editing ?? props.initial
-const mode = ref<'upload' | 'url'>(initial ? 'url' : 'upload')
-const name = ref(initial?.name ?? '')
-const categoryChoice = ref(initial?.category ?? '自定义图层')
-const newCategory = ref('')
-const category = computed(() => (categoryChoice.value === '__new_category__' ? newCategory.value : categoryChoice.value).trim())
-const availableCategories = computed(() => categoryOptions([...(props.categories ?? []).map(category => ({ category })), { category: initial?.category ?? '自定义图层' }]))
-const kind = ref<LayerKind>(initial?.type ?? 'geojson')
-const url = ref(initial?.url ?? '')
-const source = ref(initial?.source ?? '')
-const coordinateDescription = ref('')
-const file = ref<File | null>(null)
-const emptyPoi = ref(false)
-const createEmptyPoi = computed(() => mode.value === 'upload' && kind.value === 'geojson' && category.value === 'POI' && emptyPoi.value)
-const busy = ref(false)
-const error = ref('')
-const notice = ref('')
-const progress = ref(0)
-const phase = ref<'uploading' | 'validating' | ''>('')
-let controller: AbortController | null = null
-let alive = true
-const dialog = ref<HTMLElement | null>(null)
-const limit = computed(() => (kind.value === 'geojson' ? 1024 : 512))
-let previousFocus: HTMLElement | null = null
+const props = defineProps<{
+  editing?: LayerRecord;
+  initial?: LayerInput;
+  categories?: string[];
+}>();
+const emit = defineEmits<{ close: []; saved: [record: LayerRecord] }>();
+const initial = props.editing ?? props.initial;
+const mode = ref<"upload" | "url">(initial ? "url" : "upload");
+const name = ref(initial?.name ?? "");
+const categoryChoice = ref(initial?.category ?? "自定义图层");
+const newCategory = ref("");
+const category = computed(() =>
+  (categoryChoice.value === "__new_category__"
+    ? newCategory.value
+    : categoryChoice.value
+  ).trim(),
+);
+const availableCategories = computed(() =>
+  categoryOptions([
+    ...(props.categories ?? []).map((category) => ({ category })),
+    { category: initial?.category ?? "自定义图层" },
+  ]),
+);
+const kind = ref<LayerKind>(initial?.type ?? "geojson");
+const url = ref(initial?.url ?? "");
+const source = ref(initial?.source ?? "");
+const coordinateDescription = ref("");
+const file = ref<File | null>(null);
+const emptyPoi = ref(false);
+const createEmptyPoi = computed(
+  () =>
+    mode.value === "upload" &&
+    kind.value === "geojson" &&
+    category.value === "POI" &&
+    emptyPoi.value,
+);
+const busy = ref(false);
+const error = ref("");
+const notice = ref("");
+const progress = ref(0);
+const phase = ref<"uploading" | "validating" | "">("");
+let controller: AbortController | null = null;
+let alive = true;
+const dialog = ref<HTMLElement | null>(null);
+const limit = computed(() => (kind.value === "geojson" ? 1024 : 10 * 1024));
+let previousFocus: HTMLElement | null = null;
 
 function selectFile(event: Event) {
-  const chosen = (event.target as HTMLInputElement).files?.[0] ?? null
-  file.value = chosen
+  const chosen = (event.target as HTMLInputElement).files?.[0] ?? null;
+  file.value = chosen;
   if (chosen && !name.value)
-    name.value = chosen.name.replace(/\.(zip|geojson|json)$/i, '')
+    name.value = chosen.name.replace(/\.(zip|geojson|json)$/i, "");
   error.value =
     chosen && chosen.size > limit.value * 1024 * 1024
       ? `文件超过 ${limit.value} MB 上限`
-      : ''
+      : "";
 }
 async function submit() {
-  if (busy.value) return
-  error.value = ''
-  notice.value = ''
+  if (busy.value) return;
+  error.value = "";
+  notice.value = "";
   if (!category.value || category.value.length > 80) {
-    error.value = '请输入 1 至 80 字的分类名称'
-    return
+    error.value = "请输入 1 至 80 字的分类名称";
+    return;
   }
   if (
-    mode.value === 'upload' &&
-    !createEmptyPoi.value && (!file.value || file.value.size > limit.value * 1024 * 1024)
+    mode.value === "upload" &&
+    !createEmptyPoi.value &&
+    (!file.value || file.value.size > limit.value * 1024 * 1024)
   ) {
     error.value = !file.value
-      ? '请选择数据文件'
-      : `文件超过 ${limit.value} MB 上限`
-    return
+      ? "请选择数据文件"
+      : `文件超过 ${limit.value} MB 上限`;
+    return;
   }
-  busy.value = true
-  progress.value = 0
+  busy.value = true;
+  progress.value = 0;
   try {
-    let record: LayerRecord
-    if (mode.value === 'upload') {
-      const data = new FormData()
-      data.set('file', createEmptyPoi.value ? poiFile() : file.value!)
-      data.set('name', name.value.trim())
-      data.set('category', category.value.trim())
-      data.set('type', kind.value)
-      data.set('source', source.value.trim())
-      data.set('coordinate_description', coordinateDescription.value.trim())
-      controller = new AbortController()
-      phase.value = 'uploading'
+    let record: LayerRecord;
+    if (mode.value === "upload") {
+      const data = new FormData();
+      data.set("file", createEmptyPoi.value ? poiFile() : file.value!);
+      data.set("name", name.value.trim());
+      data.set("category", category.value.trim());
+      data.set("type", kind.value);
+      data.set("source", source.value.trim());
+      data.set("coordinate_description", coordinateDescription.value.trim());
+      controller = new AbortController();
+      phase.value = "uploading";
       record = await uploadLayer(data, {
         signal: controller.signal,
         onProgress: (loaded, total) => {
           progress.value = total
             ? Math.min(100, Math.round((loaded / total) * 100))
-            : 0
+            : 0;
         },
         onUploaded: () => {
-          progress.value = 100
-          phase.value = 'validating'
+          progress.value = 100;
+          phase.value = "validating";
         },
-      })
+      });
     } else {
-      let location = url.value.trim()
+      let location = url.value.trim();
       if (!props.editing && !props.initial && /^https?:\/\//i.test(location)) {
         try {
           const asset = await registerAsset({
@@ -103,14 +124,16 @@ async function submit() {
             location,
             source: source.value.trim(),
             coordinate_description: coordinateDescription.value.trim(),
-          })
-          location = asset.entry_url!
+          });
+          location = asset.entry_url!;
         } catch (cause) {
-          if (!(
-            cause instanceof ApiError &&
-            cause.code === 'ASSET_ALREADY_REGISTERED'
-          ))
-            throw cause
+          if (
+            !(
+              cause instanceof ApiError &&
+              cause.code === "ASSET_ALREADY_REGISTERED"
+            )
+          )
+            throw cause;
         }
       }
       record = await saveLayer(
@@ -122,56 +145,56 @@ async function submit() {
           source: source.value.trim(),
         },
         props.editing?.id,
-      )
+      );
     }
-    if (alive) emit('saved', record)
+    if (alive) emit("saved", record);
   } catch (cause) {
-    if (cause instanceof Error && cause.name === 'AbortError')
-      notice.value = '上传已取消'
+    if (cause instanceof Error && cause.name === "AbortError")
+      notice.value = "上传已取消";
     else
       error.value =
         cause instanceof Error
           ? cause.message
-          : '保存失败，请确认后端服务已启动'
+          : "保存失败，请确认后端服务已启动";
   } finally {
-    busy.value = false
-    phase.value = ''
-    controller = null
+    busy.value = false;
+    phase.value = "";
+    controller = null;
   }
 }
 function onKey(event: KeyboardEvent) {
-  if (event.key === 'Escape' && !busy.value) emit('close')
-  if (event.key === 'Tab' && dialog.value) {
+  if (event.key === "Escape" && !busy.value) emit("close");
+  if (event.key === "Tab" && dialog.value) {
     const elements = [
       ...dialog.value.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled)',
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled)",
       ),
-    ]
+    ];
     const first = elements[0],
-      last = elements.at(-1)
+      last = elements.at(-1);
     if (document.activeElement === dialog.value) {
-      event.preventDefault()
-      ;(event.shiftKey ? last : first)?.focus()
+      event.preventDefault();
+      (event.shiftKey ? last : first)?.focus();
     } else if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault()
-      last?.focus()
+      event.preventDefault();
+      last?.focus();
     } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first?.focus()
+      event.preventDefault();
+      first?.focus();
     }
   }
 }
 onMounted(() => {
-  previousFocus = document.activeElement as HTMLElement
-  dialog.value?.focus()
-  document.addEventListener('keydown', onKey)
-})
+  previousFocus = document.activeElement as HTMLElement;
+  dialog.value?.focus();
+  document.addEventListener("keydown", onKey);
+});
 onBeforeUnmount(() => {
-  alive = false
-  controller?.abort()
-  document.removeEventListener('keydown', onKey)
-  previousFocus?.focus()
-})
+  alive = false;
+  controller?.abort();
+  document.removeEventListener("keydown", onKey);
+  previousFocus?.focus();
+});
 </script>
 
 <template>
@@ -188,7 +211,7 @@ onBeforeUnmount(() => {
         <div>
           <span class="eyebrow">DATA CONNECTION</span>
           <h2 id="dialog-title">
-            {{ editing ? '编辑图层登记' : '添加数据图层' }}
+            {{ editing ? "编辑图层登记" : "添加数据图层" }}
           </h2>
         </div>
         <button
@@ -231,20 +254,25 @@ onBeforeUnmount(() => {
               </select></label
             >
           </div>
-          <label v-if="mode === 'upload' && kind === 'geojson' && category === 'POI'">
-            <span><input v-model="emptyPoi" type="checkbox" /> 创建空 POI 图层</span>
+          <label
+            v-if="mode === 'upload' && kind === 'geojson' && category === 'POI'"
+          >
+            <span
+              ><input v-model="emptyPoi" type="checkbox" /> 创建空 POI
+              图层</span
+            >
           </label>
           <label v-if="mode === 'upload' && !createEmptyPoi" class="upload-area"
             ><component
               :is="kind === 'geojson' ? FileJson : FileArchive"
               :size="30"
               :stroke-width="1.5" /><strong>{{
-              file?.name || '点击选择数据文件'
+              file?.name || "点击选择数据文件"
             }}</strong
             ><span>{{
-              kind === 'geojson'
-                ? 'WGS84 GeoJSON，最大 1 GiB（1,073,741,824 字节）'
-                : '包含 tileset.json 的 ZIP，最大 512 MiB'
+              kind === "geojson"
+                ? "WGS84 GeoJSON，最大 1 GiB（1,073,741,824 字节）"
+                : "包含 tileset.json 的 ZIP，最大 10 Gib"
             }}</span
             ><input
               :key="kind"
@@ -265,12 +293,28 @@ onBeforeUnmount(() => {
           >
           <div class="form-row">
             <label
-              >分类<select v-model="categoryChoice" aria-label="图层分类" required>
-                <option v-for="item in availableCategories" :key="item" :value="item">{{ item }}</option>
+              >分类<select
+                v-model="categoryChoice"
+                aria-label="图层分类"
+                required
+              >
+                <option
+                  v-for="item in availableCategories"
+                  :key="item"
+                  :value="item"
+                >
+                  {{ item }}
+                </option>
                 <option value="__new_category__">新建分类…</option>
               </select>
-              <input v-if="categoryChoice === '__new_category__'" v-model.trim="newCategory" aria-label="新分类名称" placeholder="输入新分类名称" required maxlength="80" />
-            </label
+              <input
+                v-if="categoryChoice === '__new_category__'"
+                v-model.trim="newCategory"
+                aria-label="新分类名称"
+                placeholder="输入新分类名称"
+                required
+                maxlength="80"
+              /> </label
             ><label
               >来源说明<input
                 v-model="source"
@@ -299,32 +343,33 @@ onBeforeUnmount(() => {
             aria-label="上传传输进度"
           ></progress>
           <span>{{
-            phase === 'uploading'
+            phase === "uploading"
               ? `正在传输 ${progress}%`
-              : '传输完成 100%，正在校验与发布'
+              : "传输完成 100%，正在校验与发布"
           }}</span>
           <button type="button" @click="controller?.abort()">取消上传</button>
         </div>
         <p v-if="mode === 'upload' && kind === '3dtiles'" class="form-hint">
-          支持已地理配准的 3D Tiles。ZIP 解压总量不超过 2 GiB，归档条目不超过 1,000,000 项（含目录）。
+          支持已地理配准的 3D Tiles。ZIP 解压总量不超过 20 GiB，归档条目不超过
+          10,000,000 项（含目录）。
         </p>
         <footer class="dialog-footer">
           <span>{{
             busy
-              ? phase === 'validating'
-                ? '正在校验与发布…'
-                : '正在保存…'
-              : '保存后留在管理页，可按需加入地图'
+              ? phase === "validating"
+                ? "正在校验与发布…"
+                : "正在保存…"
+              : "保存后留在管理页，可按需加入地图"
           }}</span
           ><button class="primary-button" type="submit" :disabled="busy">
             <LoaderCircle v-if="busy" :size="16" class="spin" />{{
               busy
-                ? '正在保存'
+                ? "正在保存"
                 : editing
-                  ? '保存修改'
-                  : mode === 'upload'
-                    ? '上传并登记'
-                    : '保存登记'
+                  ? "保存修改"
+                  : mode === "upload"
+                    ? "上传并登记"
+                    : "保存登记"
             }}
           </button>
         </footer>
@@ -401,7 +446,7 @@ onBeforeUnmount(() => {
   color: var(--blue);
 }
 .dialog-tabs button.active:after {
-  content: '';
+  content: "";
   position: absolute;
   bottom: -1px;
   height: 2px;
@@ -425,7 +470,7 @@ onBeforeUnmount(() => {
   color: #687b93;
   min-width: 0;
 }
-.data-dialog input:not([type='file']),
+.data-dialog input:not([type="file"]),
 .data-dialog select {
   width: 100%;
   height: 38px;

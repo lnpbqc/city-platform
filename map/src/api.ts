@@ -5,12 +5,12 @@ import type { TemporalContext, TimeLayerQuery, TimeSeriesQuery, TimeSeriesRecord
 import { publishApiEvent } from './apiEvents.ts'
 import type { MapLayerReference, MapViewportResult, NearbyPoi } from './types'
 
-export const getMapViewport = (body: MapLayerReference & { bbox: [number, number, number, number]; width: number; height: number; meters_per_pixel?: number }, signal?: AbortSignal) =>
+export const getMapViewport = (body: MapLayerReference & { bbox: [number, number, number, number]; width: number; height: number; meters_per_pixel?: number; road_max_level?: number }, signal?: AbortSignal) =>
   request<MapViewportResult>('/api/map/viewport', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
 export const getNearbyPois = (body: { layers: MapLayerReference[]; longitude: number; latitude: number; radius_m?: number; limit?: number }, signal?: AbortSignal) =>
   request<{ items: NearbyPoi[]; unavailable_layers: string[] }>('/api/map/nearby', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
 export const getMapObject = (id: string, signal?: AbortSignal) => request<ObjectRecord>(`/api/map/objects/${encodeURIComponent(id)}`, { signal })
-export const pickMapRoad = (body: MapLayerReference & { object_ids: string[]; longitude: number; latitude: number }, signal?: AbortSignal) =>
+export const pickMapRoad = (body: MapLayerReference & { object_ids?: string[]; display_group_id?: string; render_key?: string; longitude: number; latitude: number }, signal?: AbortSignal) =>
   request<ObjectRecord>('/api/map/road-pick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
 export const savePoiFeature = (id: string, body: { asset_id: string; version: string; operation: 'add' | 'update' | 'delete'; object_id?: string; feature?: import('./poi').PoiFeature }) =>
   request<LayerRecord>(`/api/layers/${encodeURIComponent(id)}/poi-features`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -169,11 +169,23 @@ export const getAssetPage = (query: AssetQuery = {}) => {
   }
   return request<Page<AssetRecord>>(`/api/assets?${params}`)
 }
-export const getStats = () => request<StatsOverview>('/api/stats/overview')
+export const getStats = async (includeStorage = false) => {
+  const overview = await request<StatsOverview>('/api/stats/overview')
+  if (includeStorage) overview.storage = await request<StatsOverview['storage']>('/api/stats/storage').catch(() => null)
+  return overview
+}
 export const getAssetVersions = (id: string) =>
   request<AssetVersionRecord[]>(`/api/assets/${encodeURIComponent(id)}/versions`)
 export const getAssetVersion = (id: string, version: string, signal?: AbortSignal) =>
   request<AssetVersionRecord>(`/api/assets/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}`, { signal })
+export const getRenderStatus = (id: string, version: string, category: string, signal?: AbortSignal) =>
+  request<import('./types').RenderDescriptor | null>(`/api/assets/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/render?category=${encodeURIComponent(category)}`, { signal })
+export const getRoadGroups = (body: { layer_id: string; asset_id: string; version: string; render_key: string; object_ids: string[]; campus?: string }, signal?: AbortSignal) =>
+  request<{ groups: { group_id: string; object_ids: string[] }[] }>('/api/map/road-groups', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
+  })
+export const retryRender = (id: string, version: string, category = '') =>
+  request<import('./types').RenderDescriptor>(`/api/assets/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/render/retry?category=${encodeURIComponent(category)}`, { method: 'POST' })
 export const registerAsset = (body: AssetRegisterInput) =>
   request<AssetVersionRecord>('/api/assets/register', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

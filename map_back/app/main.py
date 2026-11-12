@@ -40,19 +40,25 @@ from .routing import MODEL_VERSION
 from .runs import router as runs_router
 from .run_worker import run_queue
 from .timeseries import ensure_timeseries, router as timeseries_router
+from .render_api import router as render_router
+from .rendering import enqueue, render_queue, recover_retention
+from .source_files import SourceFiles
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    await run_in_threadpool(recover_retention)
     with SessionLocal() as session:
         await run_in_threadpool(initialize_catalog, session)
         await run_in_threadpool(ensure_timeseries, session)
         await run_in_threadpool(ensure_networks, session)
         session.commit()
     await run_in_threadpool(run_queue.acquire)
+    await run_in_threadpool(render_queue.acquire)
     try:
         yield
     finally:
+        await run_in_threadpool(render_queue.release)
         await run_in_threadpool(run_queue.release)
 
 
@@ -61,8 +67,8 @@ app.add_exception_handler(StarletteHTTPException, http_error)
 app.add_exception_handler(RequestValidationError, validation_error)
 app.add_exception_handler(Exception, unexpected_error)
 app.add_middleware(TraceMiddleware)
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:4173", "http://localhost:4173"], allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type", "If-Match", "Idempotency-Key"], expose_headers=["X-Trace-ID", "ETag"])
-app.mount("/data-files", StaticFiles(directory=FILES_DIR), name="data-files")
+app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:4173", "http://localhost:4173"], allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type", "If-Match", "If-None-Match", "Range", "Idempotency-Key"], expose_headers=["X-Trace-ID", "ETag", "Accept-Ranges", "Content-Range", "Content-Length"])
+app.mount("/data-files", SourceFiles(directory=FILES_DIR), name="data-files")
 app.mount("/samples", StaticFiles(directory=SAMPLES_DIR), name="samples")
 app.include_router(asset_catalog_router)
 app.include_router(asset_queries_router)
@@ -73,6 +79,7 @@ app.include_router(networks_router)
 app.include_router(scenes_router)
 app.include_router(runs_router)
 app.include_router(timeseries_router)
+app.include_router(render_router)
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
@@ -105,6 +112,8 @@ def create_layer(body: LayerInput, session: SessionDep):
         if session.info.get("upload") and (not state or state.status != "ready"):
             raise HTTPException(422, state.error if state else "对象索引建立失败")
     session.add(layer)
+    if layer.asset_id:
+        enqueue(session, layer.asset_id, layer.asset_version, layer.category)
     from .geojson_stream import check_cancel
     check_cancel(None)
     if callback := session.info.get("before_publish"):
@@ -286,6 +295,7 @@ def _publish_asset(session, body, identity, published, filename, type, coordinat
             if not state or state.status != "ready":
                 raise HTTPException(422, state.error if state else "对象索引建立失败")
             layer.asset_id, layer.asset_version, layer.url = asset.id, asset.current_version, body.url
+            enqueue(session, layer.asset_id, layer.asset_version, layer.category)
             layer.orderable = layer_orderable(session, layer)
             session.flush()
             result = LayerOutput.model_validate(layer)

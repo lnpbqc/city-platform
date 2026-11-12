@@ -1371,3 +1371,141 @@ test('unindexed tile highlighting restores its original color before tile conten
   assert.equal(picks.at(-1), null)
   controller.destroy()
 })
+
+
+test('road ceiling changes reload the same viewport, abort older levels and ignore late data', async t => {
+  const { controller, layer } = setup()
+  t.after(() => controller.destroy())
+  Object.assign(layer, { id: 'roads', name: 'Roads', category: '道路', source: '', asset_id: 'asset', asset_version: '1',
+    object_count: 10, builtin: true, url: '/data-files/asset/data.geojson' })
+  const requests = []
+  const stale = deferred()
+  const response = id => Response.json({ type: 'FeatureCollection', features: [{ type: 'Feature', id,
+    geometry: { type: 'LineString', coordinates: [[113, 23], [113.01, 23]] }, properties: { highway: 'primary' },
+    __object: { object_id: id, feature_index: 0, asset: { asset_id: 'asset', version: '1' }, weight: 0 } }], truncated: false })
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+    requests.push({ body: JSON.parse(options.body), signal: options.signal })
+    return requests.length === 2 ? stale.promise : response(requests.length === 1 ? 'initial' : 'latest')
+  })
+  t.mock.method(GeoJsonDataSource, 'load', async data => { geoSource = data; return new GeoJsonDataSource() })
+  await controller.load(layer)
+  assert.equal(requests[0].body.road_max_level, 2)
+  const initial = [...viewer.resources][0]
+  // Catalog persistence assigns the field before asking the controller to refresh.
+  layer.road_max_level = 3
+  controller.setRoadMaxLevel(layer, 3)
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].body.road_max_level, 3)
+  assert.deepEqual(requests[1].body.bbox, requests[0].body.bbox)
+  assert.ok(viewer.resources.has(initial), 'retain existing roads until replacement is ready')
+  controller.setRoadMaxLevel(layer, 1)
+  assert.equal(requests.length, 3)
+  assert.equal(requests[1].signal.aborted, true)
+  assert.equal(requests[2].body.road_max_level, 1)
+  await flush()
+  stale.resolve(response('stale-level-three'))
+  await flush()
+  assert.equal(geoSource.features[0].id, 'latest')
+  assert.ok(!viewer.resources.has(initial))
+  viewer.camera.moveEnd.fire()
+  assert.equal(requests.length, 3, 'the current viewport and level remain deduplicated')
+})
+
+test('grouped tile roads pick original segments using the fixed render key', async t => {
+  const { controller, layer, picks } = setup()
+  const previousWorker = globalThis.Worker
+  t.after(() => { controller.destroy(); globalThis.Worker = previousWorker })
+  Object.assign(layer, { id: 'roads', name: 'Roads', category: '道路', source: '', asset_id: 'asset', asset_version: '1',
+    object_count: 2, builtin: true, url: '/data-files/asset/data.geojson',
+    render: { status: 'succeeded', recipe: 'geojson-v2', profile: 'roads', key: 'a'.repeat(64), url: '/archive.pmtiles' } })
+  let pickBody, hideBackground = false, selectedResource, selectedFeature
+  const tileData = () => hideBackground ? {type:'FeatureCollection',features:[],truncated:false} : ({
+    type: 'FeatureCollection', features: [{ type: 'Feature', id: 'displaygroup',
+      geometry: { type: 'LineString', coordinates: [[113,23],[113.02,23]] },
+      properties: { highway: 'primary', display_group_id: 'road-group-one' },
+      __object: { object_id: 'displaygroup', feature_index: 0, asset: { asset_id: 'asset', version: '1' }, weight: 0 },
+      __display: { road_class: 'primary', road_rank: 0 } }], truncated: false })
+  globalThis.Worker = class {
+    postMessage(message) {
+      if (!message.cancel) queueMicrotask(() => this.onmessage?.({ data: { id: message.id, data: tileData() } }))
+    }
+    terminate() {}
+  }
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+    if (url === '/api/map/road-groups') return Response.json({ groups: [{ group_id: 'road-group-one', object_ids: JSON.parse(options.body).object_ids }] })
+    if (url === '/api/map/road-pick') {
+      pickBody = JSON.parse(options.body)
+      return Response.json({ object_id: 'original-segment', asset: { asset_id: 'asset', version: '1' }, name: 'Road', type: 'line',
+        properties: { highway: 'primary' }, geometry: { type: 'LineString', coordinates: [[113,23],[113.02,23]] } })
+    }
+    assert.fail(`Unexpected request: ${url}`)
+  })
+  const entity = Object.assign(new Noop(), { id: 'displaygroup', polyline: {}, properties: { getValue: () => ({ highway: 'primary' }) } })
+  const data = new GeoJsonDataSource()
+  data.entities.values = [entity]; data.entities.contains = candidate => candidate === entity
+  t.mock.method(GeoJsonDataSource, 'load', async feature => {
+    if (feature.type === 'Feature') {
+      selectedFeature = feature; selectedResource = new GeoJsonDataSource(); return selectedResource
+    }
+    return feature.features.length ? data : new GeoJsonDataSource()
+  })
+  await controller.load(layer)
+  controller.highlightObjects(layer.id, ['original-segment'])
+  await flush()
+  assert.equal(entity.polyline.width.getValue(), 6, 'bulk selection resolves nonrepresentative source segments')
+  controller.highlightObjects(null, [])
+  viewer.camera.pickEllipsoid = () => ({ longitude: 113.019, latitude: 23 })
+  viewer.scene.pick = () => ({ id: entity })
+  click({ position: new Cartesian2(400,300) })
+  await flush()
+  assert.deepEqual(pickBody, { layer_id: 'roads', asset_id: 'asset', version: '1',
+    display_group_id: 'road-group-one', render_key: 'a'.repeat(64), longitude: 113.019, latitude: 23 })
+  assert.equal(picks.at(-1).objectId, 'original-segment')
+  assert.equal(entity.polyline.width.getValue(), 6, 'the original nonrepresentative segment highlights its group')
+  assert.equal(selectedFeature.id, 'original-segment')
+  assert.deepEqual(selectedFeature.geometry.coordinates, [[113,23],[113.02,23]])
+  assert.ok(viewer.resources.has(selectedResource))
+  hideBackground = true
+  controller.setRoadMaxLevel(layer, 1)
+  await flush()
+  assert.ok(!viewer.resources.has(data), 'filtered background is replaced')
+  assert.ok(viewer.resources.has(selectedResource), 'the exact original selected segment survives level filtering')
+  layer.visible = false
+  controller.appearance(layer)
+  assert.ok(!viewer.resources.has(selectedResource), 'hiding the layer clears the selected overlay')
+})
+
+for (const reason of ['obsolete-recipe', 'tile-budget']) {
+  test(`road geometry uses faithful viewport data after ${reason}`, async t => {
+    const { controller, layer } = setup()
+    const previousWorker = globalThis.Worker
+    t.after(() => { controller.destroy(); if (previousWorker === undefined) delete globalThis.Worker; else globalThis.Worker = previousWorker })
+    Object.assign(layer, { id: 'roads', name: 'Roads', category: '道路', source: '', asset_id: 'asset', asset_version: '1',
+      object_count: 1, builtin: true, url: '/data-files/asset/data.geojson',
+      render: { status: 'succeeded', profile: 'roads', recipe: reason === 'obsolete-recipe' ? 'geojson-v1' : 'geojson-v2',
+        key: 'a'.repeat(64), url: '/archive.pmtiles' } })
+    let workers = 0, views = 0
+    globalThis.Worker = class {
+      constructor() { workers++ }
+      postMessage(message) { if (!message.cancel) queueMicrotask(() => this.onmessage?.({ data: { id: message.id, error: '道路瓦片超出保真显示预算' } })) }
+      terminate() {}
+    }
+    const coordinates = [[113,23],[113.01,23.01],[113.02,23]]
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+      if (url.includes('/api/assets/')) return Response.json({ status: 'ready', entry_url: layer.url })
+      assert.equal(url, '/api/map/viewport'); views++
+      assert.equal(JSON.parse(options.body).road_max_level, 2)
+      return Response.json({ type: 'FeatureCollection', features: [{ type: 'Feature', id: 'original',
+        geometry: { type: 'LineString', coordinates }, properties: { highway: 'primary' },
+        __object: { object_id: 'original', feature_index: 0, asset: { asset_id: 'asset', version: '1' }, weight: 0 },
+        __display: { road_rank: 0 } }], truncated: false })
+    })
+    t.mock.method(GeoJsonDataSource, 'load', async data => { geoSource = data; return new GeoJsonDataSource() })
+    await controller.load(layer)
+    assert.equal(views, 1)
+    assert.equal(workers, reason === 'obsolete-recipe' ? 0 : 1)
+    assert.deepEqual(geoSource.features[0].geometry.coordinates, coordinates)
+  })
+}

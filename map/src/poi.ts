@@ -77,6 +77,17 @@ export function poiGlyph(category: string) {
 export const roadLevel = (properties: Record<string, unknown>) =>
   propertyText(properties, 'highway', 'level', '等级', '等級', 'fclass')
 
+export function roadDisplayLevel(properties: Record<string, unknown>) {
+  const groups = [
+    ['motorway', 'trunk', 'primary', 'motorway_link', 'trunk_link', 'primary_link'],
+    ['secondary', 'tertiary', 'secondary_link', 'tertiary_link'],
+    ['residential', 'unclassified', 'living_street'],
+    ['service', 'footway', 'cycleway', 'path', 'steps', 'pedestrian', 'track', 'busway', 'corridor'],
+  ]
+  const index = groups.findIndex(group => group.includes(roadLevel(properties) || 'unclassified'))
+  return index < 0 ? Infinity : index + 1
+}
+
 export function roadWidth(level: string) {
   if (/^(motorway|trunk|primary)(?:_link)?$|高速|主干/.test(level)) return 6
   if (/^(secondary|tertiary)(?:_link)?$|次干/.test(level)) return 4
@@ -85,7 +96,8 @@ export function roadWidth(level: string) {
 }
 
 export const editablePoi = (layer: MapLayer) => layer.category === 'POI' && layer.type === 'geojson' &&
-  !layer.builtin && layer.url.startsWith('/data-files/') && !!layer.asset_id && !!layer.asset_version
+  !layer.builtin && layer.asset_source_kind !== 'external' &&
+  (layer.url.startsWith('/data-files/') || layer.url.startsWith('/api/assets/')) && !!layer.asset_id && !!layer.asset_version
 
 export const poiFile = (data: PoiData = { type: 'FeatureCollection', features: [] }) =>
   new File([JSON.stringify(data)], 'poi.geojson', { type: 'application/geo+json' })

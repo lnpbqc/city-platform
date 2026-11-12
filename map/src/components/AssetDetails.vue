@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { X, LoaderCircle, RefreshCw } from '@lucide/vue'
 import type { AssetDetail } from '../types'
 import AssetReferences from './AssetReferences.vue'
+import RenderStatus from './RenderStatus.vue'
 
 defineProps<{ asset: AssetDetail | null; busy: boolean; error: string }>()
 const emit = defineEmits<{ close: []; retry: []; scene: [id: string] }>()
@@ -83,6 +84,12 @@ onBeforeUnmount(() => {
           {{ asset.name || asset.original_name || '历史文件 · 原始名称未知' }}
         </h3>
         <p class="asset-id">资产 ID：{{ asset.id }}</p>
+        <RenderStatus :render="asset.render" :asset-id="asset.id" :version="asset.current_version" @updated="asset.render = $event" />
+        <p v-if="asset.type === 'geojson' && asset.source_kind !== 'external' && asset.current_version">
+          <a v-if="asset.render?.source_state !== 'expired'" :href="`/api/assets/${encodeURIComponent(asset.id)}/download`">下载上传原文件</a>
+          <span v-else>上传原文件已到期清理</span>
+          · <a :href="`/api/assets/${encodeURIComponent(asset.id)}/versions/${encodeURIComponent(asset.current_version)}/geojson`">导出 GeoJSON</a>
+        </p>
         <dl>
           <div>
             <dt>数据入口</dt>

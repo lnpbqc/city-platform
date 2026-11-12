@@ -18,7 +18,7 @@ from app.database import SessionLocal, engine
 from app.main import app
 
 config = Config('alembic.ini')
-command.upgrade(config, '0012_workspace_bookmarks')
+command.upgrade(config, 'head')
 try:
     client = TestClient(app)
     uploaded = client.post('/api/layers/upload', data={'name':'old','type':'geojson','category':'POI'},
@@ -26,6 +26,8 @@ try:
         'geometry':{'type':'Point','coordinates':[121.5,25]},'properties':{}}]}))})
     assert uploaded.status_code == 201, uploaded.text
     layer = uploaded.json()
+    # Seed with current APIs, then exercise the genuine pre-RTree schema.
+    command.downgrade(config, '0012_workspace_bookmarks')
     with SessionLocal() as session:
         original = session.execute(text('SELECT id,geometry,properties FROM spatial_objects')).all()
     command.upgrade(config, 'head')

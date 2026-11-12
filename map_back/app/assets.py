@@ -156,7 +156,12 @@ def asset_for_url(session: Session, url: str, kind: str):
         files = inventory(FILES_DIR, identity)
     except (OSError, ValueError) as error:
         raise HTTPException(422, f"本地文件资产不可用：{error}") from error
-    if relative not in {item["path"] for item in files}:
+    from .rendering import expired_source
+    from .geojson_snapshot import ready_snapshot
+    expired_entry = (kind == 'geojson' and asset.type == kind and local_parts(asset.entry_url) == parts
+                     and expired_source(session, asset.id, asset.current_version)
+                     and ready_snapshot(session, asset.id, asset.current_version))
+    if relative not in {item["path"] for item in files} and not expired_entry:
         raise HTTPException(422, "本地文件不存在")
     if asset.type != kind:
         raise HTTPException(422, "图层类型与文件资产类型不一致")
@@ -196,6 +201,9 @@ def ensure_initial_version(session: Session, asset: Asset):
                                byte_size=asset.byte_size, file_count=asset.file_count,
                                created_at=asset.uploaded_at or asset.discovered_at)
         session.add(version)
+    from .rendering import expired_source
+    if expired_source(session, asset.id, version.version):
+        return version
     if asset.source_kind != "external" and asset.status == "active":
         root, files, entry = published_files(asset, version.entry_url)
         metadata = build_metadata(root, files, entry, asset.type, include_bounds=version.sha256 is None)
@@ -226,12 +234,19 @@ def external_registration_key(url: str):
 
 
 def version_record(asset: Asset, version: AssetVersion):
+    from .database import SessionLocal
+    from .rendering import describe, expired_source
+    with SessionLocal() as lookup:
+        render = describe(lookup, asset.id, version.version)
+        expired = expired_source(lookup, asset.id, version.version)
     created_at = version.created_at
     external = asset.source_kind == "external"
     return {"asset_id": asset.id, "version": version.version,
             "name": asset.name or asset.original_name or asset.id, "type": asset.type,
             "source_kind": asset.source_kind, "protected": asset.protected, "source": asset.source,
-            "coordinate_description": asset.coordinate_description, "entry_url": version.entry_url,
+            "coordinate_description": asset.coordinate_description,
+            "entry_url": f'/api/assets/{asset.id}/versions/{version.version}/geojson' if expired else version.entry_url,
+            "render": render,
             "byte_size": None if external else sum(item["size"] for item in version.file_manifest) if version.file_manifest is not None else version.byte_size,
             "file_count": None if external else len(version.file_manifest) if version.file_manifest is not None else version.file_count,
             "sha256": version.sha256, "file_checksums": version.file_manifest or [], "bounds": version.bounds,
@@ -248,9 +263,12 @@ def bind_asset_version(session: Session, layer: Layer, asset_id: str | None, rep
 
 
 def asset_record(session: Session, asset: Asset, detail=False, inspect_files=True):
+    from .rendering import describe, expired_source
     fields = ("id", "original_name", "type", "entry_url", "byte_size", "file_count", "uploaded_at", "discovered_at", "status", "error", "current_version", "source_kind", "protected", "name", "source", "coordinate_description")
     result = {key: getattr(asset, key) for key in fields}
     version = session.get(AssetVersion, (asset.id, asset.current_version))
+    expired = expired_source(session, asset.id, asset.current_version)
+    result['render'] = describe(session, asset.id, asset.current_version)
     result.update(sha256=version.sha256 if version else None, bounds=version.bounds if version else None)
     files = []
     if asset.source_kind == "external":
@@ -259,7 +277,7 @@ def asset_record(session: Session, asset: Asset, detail=False, inspect_files=Tru
         try:
             _, files, entry = published_files(asset)
             result.update(byte_size=sum(item["size"] for item in files), file_count=len(files))
-            if entry and entry not in {item["path"] for item in files}:
+            if entry and entry not in {item["path"] for item in files} and not expired:
                 result.update(status="missing", error="图层入口文件缺失")
         except FileNotFoundError:
             result.update(status="missing", error="发布目录或文件缺失", byte_size=0, file_count=0)
@@ -274,6 +292,7 @@ def asset_record(session: Session, asset: Asset, detail=False, inspect_files=Tru
 
 
 def reconcile(session: Session):
+    from .rendering import expired_source
     lock_catalog(session)
     reject_link(STORAGE_DIR)
     reject_link(FILES_DIR)
@@ -297,7 +316,7 @@ def reconcile(session: Session):
             asset.file_count = len(files)
             asset.status, asset.error = "active", ""
             parts = local_parts(asset.entry_url) if asset.entry_url else None
-            if parts and parts[1] not in {item["path"] for item in files}:
+            if parts and parts[1] not in {item["path"] for item in files} and not expired_source(session, asset.id, asset.current_version):
                 asset.status, asset.error = "missing", "图层入口文件缺失"
         except (OSError, ValueError) as error:
             asset.status, asset.error = "unsafe", str(error)[:1000]
@@ -349,6 +368,7 @@ def delete_asset(session: Session, identity: str):
 def prepare_download(session: Session, identity: str):
     # Snapshot into non-public temporary storage before releasing the deletion lock.
     with _deletion_lock:
+        lock_catalog(session)
         asset = session.get(Asset, identity)
         if asset is None:
             raise HTTPException(404, "文件资产不存在")
@@ -356,6 +376,9 @@ def prepare_download(session: Session, identity: str):
             raise HTTPException(409, "文件资产不可用或正在删除，不能下载")
         if asset.source_kind == "external":
             raise ApiProblem(409, "EXTERNAL_ASSET", "外部资产请打开数据源，后端不代理下载")
+        from .rendering import expired_source
+        if expired_source(session, asset.id, asset.current_version):
+            raise ApiProblem(410, 'SOURCE_EXPIRED', '上传原文件已到期清理，请使用导出 GeoJSON')
         temporary = None
         try:
             root, files, entry = published_files(asset)
@@ -398,6 +421,7 @@ def prepare_download(session: Session, identity: str):
                                     break
                 if not matches:
                     raise ApiProblem(409, "ASSET_CONTENT_CHANGED", "下载快照与发布版本校验和不一致")
+            session.rollback()
             return target, filename, media_type, temporary
         except Exception as error:
             if temporary:
@@ -429,6 +453,9 @@ def _delete_asset(session: Session, identity: str):
     # From this commit onwards create/update reject references to this asset.
     staging = STORAGE_DIR / "deleting"
     try:
+        from .rendering import cancel_asset
+        cancel_asset(session, identity)
+        session.commit()
         reject_link(STORAGE_DIR)
         staging.mkdir(exist_ok=True)
         reject_link(staging)

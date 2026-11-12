@@ -86,6 +86,7 @@ const {
   joinLayer,
   removeFromMap,
   changeOpacity,
+  changeRoadMaxLevel,
   retryMapState,
   ordering,
   orderError,
@@ -342,6 +343,7 @@ addressChanged()
       @load="joinLayer"
       @remove="removeFromMap"
       @opacity="changeOpacity"
+      @road-max-level="changeRoadMaxLevel"
       @retry-map-state="retryMapState"
       @move="moveLayer"
       @campus="changeCampus"

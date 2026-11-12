@@ -1,3 +1,16 @@
+export interface RenderDescriptor {
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  key?: string
+  url?: string | null
+  profile?: string
+  recipe?: string
+  manifest?: { bounds: number[]; minzoom: number; maxzoom: number; source_layer: string; contains_roads?: boolean } | null
+  stage?: string
+  error?: string | null
+  byte_size?: number | null
+  source_state?: string
+  source_expires_at?: string | null
+}
 export type LayerKind = 'geojson' | '3dtiles'
 export interface LayerRecord {
   id: string
@@ -13,12 +26,14 @@ export interface LayerRecord {
   map_attached?: boolean
   map_visible?: boolean
   map_opacity?: number
+  road_max_level?: number
 }
 export type LayerInput = Omit<LayerRecord, 'id' | 'created_at' | 'asset_id' | 'asset_version' | 'asset_source_kind' | keyof LayerMapState>
 export interface LayerMapState {
   map_attached: boolean
   map_visible: boolean
   map_opacity: number
+  road_max_level: number
 }
 export interface Bookmark {
   id: string
@@ -38,6 +53,7 @@ export type AssetReference =
   | { type?: 'layer'; id: string; name: string }
   | { type: 'scene' | 'run'; id: string; name: string; version: number; asset_version: string }
 export interface AssetRecord {
+  render?: RenderDescriptor | null
   id: string
   original_name: string | null
   type: LayerKind | 'network' | 'unknown'
@@ -81,6 +97,7 @@ export interface AssetQuery {
 }
 export type AssetFilters = Omit<AssetQuery, 'page' | 'page_size'>
 export interface StatsOverview {
+  storage?: { source_bytes: number; render_bytes: number; database_bytes: number; temporary_bytes: number } | null
   asset_count: number
   object_count: number
   run_count: number
@@ -96,6 +113,7 @@ export interface AssetRegisterInput {
   coordinate_description?: string
 }
 export interface AssetVersionRecord {
+  render?: RenderDescriptor | null
   asset_id: string
   version: string
   name: string
@@ -113,6 +131,7 @@ export interface AssetVersionRecord {
   created_at: string
 }
 export interface LayerCatalogRecord extends Omit<LayerRecord, 'type' | 'url'> {
+  render?: RenderDescriptor | null
   type: LayerKind | 'basemap'
   url: string | null
   asset: { asset_id: string; version: string } | null
@@ -126,6 +145,7 @@ export interface LayerCatalogRecord extends Omit<LayerRecord, 'type' | 'url'> {
   order: number
 }
 export interface MapLayer extends LayerRecord {
+  render?: RenderDescriptor | null
   builtin: boolean
   attached: boolean
   visible: boolean
@@ -251,6 +271,7 @@ export function mapLayer(record: LayerRecord | LayerCatalogRecord, builtin = fal
     attached: false,
     visible: record.map_visible ?? true,
     opacity: record.map_opacity ?? 1,
+    road_max_level: record.road_max_level ?? 2,
     status: 'idle',
     error: '',
     color:

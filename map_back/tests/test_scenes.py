@@ -29,7 +29,7 @@ def draft():
 
 def layer_state(layer):
     return {"layer_id": layer["id"], "asset": {"asset_id": layer["asset_id"], "version": layer["asset_version"]},
-            "map_attached": True, "map_visible": False, "map_opacity": 0.4, "order": 3}
+            "map_attached": True, "map_visible": False, "map_opacity": 0.4, "road_max_level": 2, "order": 3}
 
 
 def test_create_get_restart_and_full_config_restore(client):

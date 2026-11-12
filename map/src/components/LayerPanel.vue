@@ -33,6 +33,7 @@ const emit = defineEmits<{
   locate: [layer: MapLayer]
   remove: [layer: MapLayer]
   opacity: [layer: MapLayer, value: number]
+  roadMaxLevel: [layer: MapLayer, value: number]
   move: [layer: MapLayer, direction: number]
 }>()
 const search = ref('')
@@ -141,6 +142,7 @@ function toggleGroup(category: string) {
             @locate="emit('locate', layer)"
             @remove="emit('remove', layer)"
             @opacity="emit('opacity', layer, $event)"
+            @road-max-level="emit('roadMaxLevel', layer, $event)"
             @move="emit('move', layer, $event)"
           />
         </div>

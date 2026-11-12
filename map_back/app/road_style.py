@@ -12,10 +12,10 @@ def classification(properties):
     return str(properties.get('highway') or properties.get('fclass') or 'unclassified').lower()
 
 
-def road_rank(properties, mpp):
+def road_rank(properties, mpp, road_max_level=2):
     rank = RANK.get(classification(properties))
     allowed = 0 if mpp > 20 else 1 if mpp > 5 else 2 if mpp > 1 else 3
-    return rank if rank is not None and rank <= allowed else None
+    return rank if rank is not None and rank <= min(allowed, road_max_level - 1) else None
 
 
 def signature(feature):

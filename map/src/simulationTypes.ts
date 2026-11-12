@@ -9,6 +9,7 @@ export interface SceneLayerState {
   map_attached: boolean
   map_visible: boolean
   map_opacity: number
+  road_max_level?: number
   order: number
 }
 export interface SceneInput {

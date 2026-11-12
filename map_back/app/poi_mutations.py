@@ -6,9 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from .geojson_stream import members
+from .geojson_snapshot import ensure_snapshot, iter_members
 from .models import Layer, Asset, SpatialObject
-from .assets import published_files
 from .errors import ApiProblem
 
 
@@ -44,13 +43,14 @@ def rewrite(session: Session, layer_id: str, change: PoiChange, target: Path):
             raise HTTPException(422, 'POI 图层只接受 WGS84 Point 要素')
     geometry_changed = change.operation != 'update' or (
         (original_geometry or {}).get('coordinates') != change.feature['geometry'].get('coordinates'))
-    root, _, entry = published_files(asset, layer.url)
+    if not ensure_snapshot(session, change.asset_id, change.version):
+        raise HTTPException(422, '完整 GeoJSON 快照尚未就绪')
     encode = lambda value: json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
     count, found = 0, False
     with target.open('w', encoding='utf8') as output, TemporaryFile(mode="w+", encoding="utf8") as extras:
         output.write('{"type":"FeatureCollection","features":[')
         ordinal = 0
-        for key, value in members(root / entry):
+        for key, value in iter_members(session, change.asset_id, change.version):
             if key is not None:
                 if key != 'type' and (key != 'bbox' or not geometry_changed):
                     extras.write(',' + encode(key) + ':' + encode(value))

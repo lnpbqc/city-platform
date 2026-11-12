@@ -82,7 +82,7 @@ export function useLayerCatalog(
     else void flushState(layer.id)
   }
   function stateFor(layer: MapLayer, attached = layer.map_attached ?? layer.attached): LayerMapState {
-    return { map_attached: attached, map_visible: layer.visible, map_opacity: layer.opacity }
+    return { map_attached: attached, map_visible: layer.visible, map_opacity: layer.opacity, road_max_level: layer.road_max_level ?? 2 }
   }
   function forgetState(id: string) {
     clearTimeout(pendingStates.get(id)?.timer)
@@ -134,6 +134,11 @@ export function useLayerCatalog(
     layer.opacity = value
     getController()?.appearance(layer)
     persistState(layer, stateFor(layer), true)
+  }
+  function changeRoadMaxLevel(layer: MapLayer, value: number) {
+    layer.road_max_level = value
+    getController()?.setRoadMaxLevel(layer, value)
+    persistState(layer, stateFor(layer))
   }
   function flushPending() {
     for (const id of pendingStates.keys()) void flushState(id)
@@ -194,7 +199,9 @@ export function useLayerCatalog(
           const pending = pendingStates.get(record.id)
           const unsaved = pending && (pending.saving || pending.dirty || pending.timer)
           const { attached: _attached, status: _status, error: _error, visible: _visible, opacity: _opacity, ...metadata } = mapped
+          const previousRoadLevel = layer.road_max_level ?? 2
           Object.assign(layer, metadata, unsaved ? pending.desired : {})
+          if (previousRoadLevel !== (layer.road_max_level ?? 2)) getController()?.setRoadMaxLevel(layer, layer.road_max_level ?? 2)
           if (record.map_attached !== undefined || unsaved) {
             layer.visible = layer.map_visible ?? true
             layer.opacity = layer.map_opacity ?? 1
@@ -297,6 +304,7 @@ export function useLayerCatalog(
     joinLayer,
     removeFromMap,
     changeOpacity,
+    changeRoadMaxLevel,
     retryMapState,
     switchCampus,
     refreshCatalog,

@@ -123,7 +123,7 @@ GeoJSON 对象 ID 由资产 ID、版本和原始 Feature 序号生成 UUID5；�
 {"layer_id":"实际图层ID","asset_id":"实际资产ID","version":"1.0.0","campus":"university-town","bbox":[113.3,23.0,113.4,23.1],"width":1280,"height":720}
 ```
 
-`bbox` 按西、南、东、北排列，支持跨日期变更线；`width/height` 为 1 至 16,384 的画布像素尺寸。可选 `meters_per_pixel` 为正有限地面米/像素，缺省按视野范围估算。响应为 `FeatureCollection`，另含 `truncated`。每个 Feature 的 `id` 为原始对象 UUID，`__object` 包含 `object_id/feature_index/asset/weight`，`properties` 保留原属性。显示序号不得用于重新生成对象 ID。单次每图层最多 2,000 个要素、100,000 个顶点、10 MiB；`truncated=true` 时客户端提示放大。线面裁剪与简化仅用于显示，原始几何可由原对象接口读取。
+`bbox` 按西、南、东、北排列，支持跨日期变更线；`width/height` 为 1 至 16,384 的画布像素尺寸。可选 `meters_per_pixel` 为正有限地面米/像素，缺省按视野范围估算。响应为 `FeatureCollection`，另含 `truncated`。每个 Feature 的 `id` 为原始对象 UUID，`__object` 包含 `object_id/feature_index/asset/weight`，`properties` 保留原属性。显示序号不得用于重新生成对象 ID。单次每图层最多 2,000 个要素、100,000 个顶点、10 MiB；`truncated=true` 时客户端提示放大。道路仅裁剪及清理完全重复坐标，保留所有转折；普通非道路线面继续允许显示简化，原始几何可由原对象接口读取。
 
 道路先按比例尺筛选。名称、编号和桥隧层级等属性兼容的二度连接线段组成显示线组，再按等级用完整线组应用预算。放不下的线组整组省略，并返回 `truncated: true`。其 `id` 为代表来源对象 UUID，`__object.source_object_ids` 列出原始分段，`__display.road_class/road_rank` 提供制图等级。`POST /api/map/road-pick` 接收同一图层引用、`object_ids`（最多 2,000 项）及 `longitude/latitude`，返回距离点击位置最近的原始对象和原始几何。分析路网仍使用原始分段。
 
@@ -227,3 +227,26 @@ POI 先按中文类别、有效名称和比例尺确定背景显示资格，再�
 已捕获场景保留的旧图层绑定可通过 `layer_id/asset_id/version` 查询对象与时序，服务核对该场景的图层及资产引用；没有对应引用的错绑仍返回 422。
 
 前端链接参数包括 `scene/v/run/t/resolution/camera/compare_t/compare_resolution`，位于 URL 查询部分，页面由 hash 指定。生成链接使用 UTC；读取无时区 t 时按北京时间解释，传给后端前转换为带时区时间。链接解析及生成见 [workspaceState.ts](../map/src/workspaceState.ts)。
+
+## 完整 GeoJSON、显示归档与原文件保留
+
+本地 GeoJSON 上传成功后，完整快照与对象索引在同一事务提交。完整快照保存原始几何、属性、要素 `id`、外来成员及集合元数据，并保留 `properties=null` 与空对象的区别。对象身份由资产、固定版本和原始 `feature_index` 决定，不随视野筛选或显示抽稀改变。
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/assets/{asset_id}/versions/{version}/geojson` | 按原始索引顺序、固定批次流式导出完整快照，返回 `application/geo+json` 和下载文件名 `data.geojson` |
+| `GET /internal/render-source/{asset_id}/{version}` | 供切片服务读取相同版本输入，须携带 `Authorization: Bearer {CITY_TILE_TOKEN}`；每个要素临时增加 `__object={object_id,feature_index}` |
+| `GET /api/assets/{asset_id}/versions/{version}/render` | 返回显示任务描述，无任务时返回 null；可通过 `category` 选择显示配置 |
+| `POST /api/assets/{asset_id}/versions/{version}/render/retry` | 重试失败或已取消任务；可传 `category`，不适用的版本返回 409 `RENDER_NOT_APPLICABLE` |
+| `POST /api/assets/{asset_id}/versions/{version}/render/cancel` | 取消排队或执行中的显示任务，地图继续使用当前视野接口 |
+| `GET /api/render-files/{key}/map.pmtiles` | 下载已发布 PMTiles，支持 Range 和 ETag；归档整体不使用 gzip 编码 |
+| `POST /api/map/road-groups` | 接收图层引用、`render_key` 和最多 2,000 个原始 `object_ids`，返回对应的 `groups=[{group_id,object_ids}]`；用于框选原始路段后高亮合并显示线，校验资产版本归属 |
+| `GET /api/stats/storage` | 返回源文件、显示产物、数据库和临时文件的物理空间分项，与事务一致的目录统计分开读取 |
+
+导出保留 GeoJSON 语义，不保证与上传文件字节一致。内部输入的 `__object` 仅用于传输对象身份；原要素中同名的用户数据仍保留在完整快照及公开导出中。未知或不可用版本返回 404 `ASSET_VERSION_NOT_FOUND`，尚无已验证完整快照返回 409 `SNAPSHOT_UNAVAILABLE`；内部凭据缺失或错误返回 401。
+
+显示描述包含 `key/status/stage/error/profile/recipe/manifest/url/byte_size/source_state/source_expires_at`。只有 `status=succeeded` 时提供归档 URL。显示配置固定为版本化 recipe，同一来源版本、profile 和 recipe 复用任务；用户选择的道路显示等级不改变产物键。
+
+适用的本地上传普通 GeoJSON 首次成功发布显示产物后，设置七天原文件保留期。重试不延长该版本期限。清理前须确认完整快照和显示产物可用；失败、排队或迁移未验证的数据保留原文件。默认资源、外部资源、建筑拉伸、时序和 3D Tiles 不参与自动清理。
+
+清理后 `source_state=expired`。`GET /api/assets/{asset_id}/download` 返回 410 `SOURCE_EXPIRED`，完整 GeoJSON 导出、对象查询及 POI 编辑继续使用完整快照。原文件到期不将资产标记为 missing。删除资产仍受图层、场景和历史运行引用保护；成功删除会取消显示任务并清理正式产物。

@@ -59,6 +59,7 @@ class Layer(Base):
     map_attached: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     map_visible: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     map_opacity: Mapped[float] = mapped_column(Float, default=1, server_default="1")
+    road_max_level: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
     map_order: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
     orderable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -88,6 +89,7 @@ class BuiltinLayerState(Base):
     map_attached: Mapped[bool] = mapped_column(Boolean, default=True)
     map_visible: Mapped[bool] = mapped_column(Boolean, default=True)
     map_opacity: Mapped[float] = mapped_column(Float, default=1)
+    road_max_level: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
     map_order: Mapped[int] = mapped_column(Integer)
 
 
@@ -118,6 +120,8 @@ class SpatialObject(Base):
     coordinates: Mapped[list | None] = mapped_column(JSON)
     geometry: Mapped[dict | None] = mapped_column(JSON)
     properties: Mapped[dict] = mapped_column(JSON)
+    feature_members: Mapped[dict | None] = mapped_column(JSON)
+    properties_null: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     search_text: Mapped[str] = mapped_column(String)
     area_m2: Mapped[float | None] = mapped_column(Float)
     west: Mapped[float | None] = mapped_column(Float, index=True)
@@ -204,3 +208,25 @@ class RunAssetReference(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), primary_key=True)
     asset_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     asset_version: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+
+class GeoJSONSnapshot(Base):
+    __tablename__ = "geojson_snapshots"
+    __table_args__ = (ForeignKeyConstraint(["asset_id", "asset_version"], ["asset_versions.asset_id", "asset_versions.version"], ondelete="CASCADE"),)
+
+    asset_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    asset_version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    feature_count: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    validated: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class GeoJSONMember(Base):
+    __tablename__ = "geojson_members"
+    __table_args__ = (ForeignKeyConstraint(["asset_id", "asset_version"], ["geojson_snapshots.asset_id", "geojson_snapshots.asset_version"], ondelete="CASCADE"),)
+
+    asset_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    asset_version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    value: Mapped[object] = mapped_column(JSON)

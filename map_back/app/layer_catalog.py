@@ -51,13 +51,18 @@ def layer_orderable(session: Session, layer: Layer):
     if asset is None or asset.source_kind == "external" or asset.status != "active":
         return False
     try:
-        root, files, entry = published_files(asset)
-        parts = local_parts(layer.url)
-        entry = parts[1] if parts else entry
-        if entry not in {item["path"] for item in files}:
-            return False
-        from .geojson_stream import features
-        data = features(root / entry)
+        from .rendering import expired_source
+        if expired_source(session, asset.id, layer.asset_version):
+            from .geojson_snapshot import iter_members
+            data = (value for key, value in iter_members(session, asset.id, layer.asset_version) if key is None)
+        else:
+            root, files, entry = published_files(asset)
+            parts = local_parts(layer.url)
+            entry = parts[1] if parts else entry
+            if entry not in {item["path"] for item in files}:
+                return False
+            from .geojson_stream import features
+            data = features(root / entry)
         def has_z(coordinates):
             if not isinstance(coordinates, list):
                 return False
@@ -107,7 +112,7 @@ def catalog_rows(session: Session, campus: Campus):
                        "static": True, "orderable": spec["orderable"], "object_count": counts.get((asset.id, asset.current_version)) if asset else 0, "unit": spec["unit"],
                        "legend": [{"label": spec["name"], "color": spec["color"]}], "source": asset.source if asset else "底图服务",
                        "map_attached": state.map_attached, "map_visible": state.map_visible,
-                       "map_opacity": state.map_opacity, "order": state.map_order})
+                       "map_opacity": state.map_opacity, "road_max_level": state.road_max_level, "order": state.map_order})
     aliases = {"三维建筑": "建筑", "三维模型": "建筑", "线状网络": "道路"}
     for layer in session.scalars(select(Layer)):
         result.append({"id": layer.id, "name": layer.name,
@@ -116,11 +121,14 @@ def catalog_rows(session: Session, campus: Campus):
                        "url": layer.url, "builtin": False, "campus": None, "source": layer.source,
                        "static": True, "orderable": layer.orderable, "object_count": counts.get((layer.asset_id, layer.asset_version)), "unit": None, "legend": [],
                        "map_attached": layer.map_attached, "map_visible": layer.map_visible,
-                       "map_opacity": layer.map_opacity, "order": layer.map_order})
+                       "map_opacity": layer.map_opacity, "road_max_level": layer.road_max_level, "order": layer.map_order})
+    from .rendering import describe
+
     temporal = catalog_timeseries(session)
     for row in result:
         if row["asset"]:
             row.update(temporal.get((row["asset"]["asset_id"], row["asset"]["version"]), {}))
+            row["render"] = describe(session, row["asset"]["asset_id"], row["asset"]["version"], row["category"]) if row["static"] else None
     return sorted(result, key=lambda row: (row["order"], row["id"]))
 
 

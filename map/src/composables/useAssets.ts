@@ -44,7 +44,7 @@ export function useAssets() {
     statsError.value = ''
     stats.value = null
     try {
-      const result = await getStats()
+      const result = await getStats(true)
       if (alive && version === statsVersion) stats.value = result
     } catch (cause) {
       if (alive && version === statsVersion) statsError.value = failure(cause)

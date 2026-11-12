@@ -52,6 +52,7 @@ const emit = defineEmits<{
   load: [layer: MapLayer]
   remove: [layer: MapLayer]
   opacity: [layer: MapLayer, value: number]
+  roadMaxLevel: [layer: MapLayer, value: number]
   retryMapState: [layer: MapLayer]
   move: [layer: MapLayer, direction: number]
   sceneMode: [active: boolean]
@@ -393,6 +394,10 @@ function setOpacity(layer: MapLayer, value: number) {
   layer.opacity = value
   controller?.appearance(layer)
 }
+function setRoadMaxLevel(layer: MapLayer, value: number) {
+  if (!sceneLayers.value) { emit('roadMaxLevel', layer, value); return }
+  controller?.setRoadMaxLevel(layer, value)
+}
 function move(layer: MapLayer, direction: number) {
   if (!sceneLayers.value) { emit('move', layer, direction); return }
   const target = moveTarget(sceneLayers.value, layer, direction)
@@ -533,6 +538,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @locate="controller?.locate($event)"
       @remove="changeLayer($event, 'remove')"
       @opacity="setOpacity"
+      @road-max-level="setRoadMaxLevel"
       @move="move"
     />
     <RegionPicker v-if="!comparisonOpen"

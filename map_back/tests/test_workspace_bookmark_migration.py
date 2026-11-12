@@ -32,16 +32,19 @@ from test_workspace_bookmarks import workspace
 database = DATABASE_URL.removeprefix("sqlite:///")
 columns = "id,name,kind,region_id,longitude,latitude,created_at"
 legacy_tables = None
+legacy_columns = {}
 
 
 def core():
     global legacy_tables
     with sqlite3.connect(database) as connection:
         if legacy_tables is None:
-            legacy_tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('bookmarks','alembic_version')")]
+            legacy_tables = [name for name, in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('bookmarks','alembic_version')")]
+            for table in legacy_tables:
+                legacy_columns[table] = [row[1] for row in connection.execute('PRAGMA table_info("' + table + '")')]
         tables = legacy_tables
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        return {table: sorted(connection.execute('SELECT * FROM "' + table + '"').fetchall(), key=repr) for table in tables}
+        return {table: sorted(connection.execute('SELECT ' + ','.join('"' + column + '"' for column in legacy_columns[table]) + ' FROM "' + table + '"').fetchall(), key=repr) for table in tables}
 
 
 def bookmarks():
@@ -56,7 +59,7 @@ def fingerprints(root):
 
 try:
     config = Config(str(Path("alembic.ini").resolve()))
-    command.upgrade(config, "0011_timeseries")
+    command.upgrade(config, "head")
     with SessionLocal() as session:
         ensure_networks(session)
         session.commit()
@@ -77,6 +80,7 @@ try:
         run = created.json()
     finally:
         client.close()
+    command.downgrade(config, "0011_timeseries")
     before_core, before_bookmarks = core(), bookmarks()
     files_before, samples_before = fingerprints(FILES_DIR), fingerprints(SAMPLES_DIR)
     command.upgrade(config, "head")

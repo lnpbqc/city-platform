@@ -70,7 +70,7 @@ async function setup(t, options = {}) {
   const calls = { load: [], paint: [], replay: [], camera: [], temporal: [] }
   const ready = () => state.ready({ initialize: (_region, value) => calls.camera.push(value), getCamera: () => calls.camera.at(-1) ?? camera, setCamera: value => calls.camera.push(value),
     load: async item => { calls.load.push({ asset_id: item.asset_id, asset_version: item.asset_version, source_kind: item.asset_source_kind, order: item.order }); item.attached = true; item.status = 'ready' },
-    remove() {}, appearance() {}, syncOrder() {}, showTemporal: (layer, frame) => calls.temporal.push({ layer: layer.id, time: frame?.time }), showReplay: value => calls.replay.push(value), showSimulation: value => calls.paint.push(value?.asset_id ?? null) })
+    remove() {}, appearance() {}, setRoadMaxLevel(layer, value) { layer.road_max_level = value }, syncOrder() {}, showTemporal: (layer, frame) => calls.temporal.push({ layer: layer.id, time: frame?.time }), showReplay: value => calls.replay.push(value), showSimulation: value => calls.paint.push(value?.asset_id ?? null) })
   if (options.ready !== false) { ready(); await flush() }
   return { state, calls, ready, props: app._instance.props, events }
 }

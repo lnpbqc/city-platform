@@ -33,7 +33,9 @@ import type { RegionTarget } from './regions'
 import { fetchRegionBoundary, type BoundaryState } from './regionBoundary.ts'
 import { initializeBasemap } from './basemap.ts'
 import { sampleBuildingTerrain, type TerrainBounds } from './buildingTerrain.ts'
-import { ApiError, getAssetVersion, getMapViewport, pickMapRoad } from './api.ts'
+import { ApiError, getAssetVersion, getMapViewport, pickMapRoad, getRenderStatus, getRoadGroups } from './api.ts'
+import type { TileViewport } from './tileViewport'
+import type { RenderDescriptor } from './types'
 import { fetchMapGeoJSON, mapLoadError, planarGeoJSON } from './mapResource.ts'
 import { validCamera, scaleForDistance, type CameraState, type NavigationReading } from './mapNavigation.ts'
 import { objectIdentity, identifyFeatures } from './objectIdentity.ts'
@@ -41,7 +43,7 @@ import { simulationGeometry } from './simulationGeometry.ts'
 import type { NetworkRecord, RunResult } from './simulationTypes'
 import type { TimeSeriesRecord } from './temporalTypes'
 import { temporalColor } from './temporal.ts'
-import { poiCategory, poiIcon, poiName, propertyText, roadLevel } from './poi.ts'
+import { poiCategory, poiIcon, poiName, propertyText, roadLevel, roadDisplayLevel } from './poi.ts'
 import { layoutPois, type PoiAnchor } from './poiLayout.ts'
 
 type Resource = GeoJsonDataSource | Cesium3DTileset
@@ -57,6 +59,7 @@ type Entry = { version: number; resource?: Resource; abort: AbortController; cle
   bounds?: { west: number; south: number; east: number; north: number } | null
   viewportVisible?: boolean
   viewportKey?: string
+  tiles?: TileViewport; render?: RenderDescriptor | null; tileGroups?: Map<string, string>
   styles?: Map<string, MapViewportFeature['__display']>; sources?: Map<string, string[]>
 }
 
@@ -111,6 +114,8 @@ export function createMapController(
   let pointMarker: Entity | undefined
   let pointPicking: ((point: MapPoint) => void) | undefined
   let selectedOverlay: Entity | undefined
+  let selectedRoad: GeoJsonDataSource | undefined
+  let overlayVersion = 0
   let selectedOverlayLayer: string | undefined
   let selectedOverlayObject: ObjectRecord | undefined
   let pickVersion = 0
@@ -289,13 +294,45 @@ export function createMapController(
     }
     viewer.scene.requestRender()
   }
+  let roadHighlightsAbort: AbortController | undefined
+  async function resolveRoadHighlights(layer: MapLayer, entry: Entry) {
+    roadHighlightsAbort?.abort()
+    if (!entry.tileGroups?.size || !entry.render?.key || !highlightIds.size || highlightLayerId !== layer.id) return
+    const abort = new AbortController()
+    roadHighlightsAbort = abort
+    const selected = highlightIds
+    const representatives = new Map([...entry.tileGroups].map(([id, group]) => [group, id]))
+    const ids = [...selected]
+    try {
+      for (let start = 0; start < ids.length; start += 2000) {
+        const response = await getRoadGroups({ layer_id: layer.id, asset_id: layer.asset_id!, version: layer.asset_version!,
+          render_key: entry.render.key, object_ids: ids.slice(start, start + 2000), ...(layer.campus ? { campus: layer.campus } : {}) },
+          AbortSignal.any([abort.signal, entry.abort.signal]))
+        if (abort.signal.aborted || !entryCurrent(layer, entry) || highlightIds !== selected) return
+        for (const group of response.groups) {
+          const id = representatives.get(group.group_id)
+          if (id) {
+            entry.sources ??= new Map()
+            entry.sources.set(id, [...new Set([...(entry.sources.get(id) ?? [id]), ...group.object_ids])])
+          }
+        }
+        paintHighlights()
+      }
+    } catch (error) {
+      if (!abort.signal.aborted && entryCurrent(layer, entry) && highlightIds === selected)
+        onNotice(`道路选择高亮未完成：${mapLoadError(error).message}`)
+    }
+  }
   function highlightObjects(layerId: string | null, ids: string[], activeId?: string) {
+    roadHighlightsAbort?.abort()
     if (!layerId) { pickVersion++; roadPickAbort?.abort() }
-    if (selectedOverlay && (selectedOverlayLayer !== layerId || selectedOverlayObject?.object_id !== activeId)) clearSelectedOverlay()
+    if (selectedOverlayObject && (selectedOverlayLayer !== layerId || selectedOverlayObject.object_id !== activeId)) clearSelectedOverlay()
     highlightLayerId = layerId
     highlightIds = new Set(ids)
     activeObjectId = activeId
     paintHighlights()
+    const match = [...entries].find(([layer]) => layer.id === layerId)
+    if (match) void resolveRoadHighlights(...match)
     declutterPois()
   }
   function objectPage(id: string, layerId: string, pageSize = 20) {
@@ -316,6 +353,11 @@ export function createMapController(
       viewer.scene.requestRender()
       return
     }
+    if (entry.tileGroups?.size && object.geometry && ['LineString', 'MultiLineString'].includes(object.geometry.type)) {
+      await showSelectedRoad(layer, object)
+      if (selectedRoad) await viewer.flyTo(selectedRoad, { duration: 0.8 })
+      return
+    }
     const entities = entry.resource!.entities.values.filter(entity => entityObjectId(entry, entity) === object.object_id
       || entry.sources?.get(entity.id.split('_')[0]!)?.includes(object.object_id))
     if (!entities.length || !object.geometry) { onNotice('对象未提供可定位的几何。'); return }
@@ -327,10 +369,35 @@ export function createMapController(
   }
 
   function clearSelectedOverlay() {
+    overlayVersion++
     if (selectedOverlay) viewer.entities.remove(selectedOverlay)
+    if (selectedRoad) viewer.dataSources.remove(selectedRoad, true)
+    selectedRoad = undefined
     selectedOverlay = undefined
     selectedOverlayLayer = undefined
     selectedOverlayObject = undefined
+  }
+
+  async function showSelectedRoad(layer: MapLayer, object: ObjectRecord) {
+    clearSelectedOverlay()
+    const version = overlayVersion
+    selectedOverlayLayer = layer.id
+    selectedOverlayObject = object
+    let pending: GeoJsonDataSource | undefined
+    const current = () => alive && version === overlayVersion && layer.attached && layer.visible
+    try {
+      pending = await GeoJsonDataSource.load({ type: 'Feature', id: object.object_id, geometry: object.geometry, properties: {} },
+        { clampToGround: true, stroke: Color.fromCssColorString('#f59e0b'), strokeWidth: 7 })
+      if (!current()) return
+      await viewer.dataSources.add(pending)
+      if (!current()) return
+      selectedRoad = pending
+      viewer.scene.requestRender()
+    } catch (error) {
+      if (current()) onNotice(`所选路段高亮失败：${mapLoadError(error).message}`)
+    } finally {
+      if (pending && pending !== selectedRoad && alive) viewer.dataSources.remove(pending, true)
+    }
   }
 
   function showSelectedPoi(layerId: string | null, object: ObjectRecord | null) {
@@ -958,10 +1025,12 @@ export function createMapController(
   }
 
   async function refreshViewport(layer: MapLayer, entry: Entry) {
+    if (layer.static === false) entry.render = null
     const request = { layer_id: layer.id, asset_id: layer.asset_id!, version: layer.asset_version!,
       ...(layer.campus ? { campus: layer.campus } : {}), bbox: viewportBounds(), meters_per_pixel: metersPerPixel(),
-      width: Math.max(1, viewer.scene.canvas.clientWidth), height: Math.max(1, viewer.scene.canvas.clientHeight) }
-    const key = JSON.stringify(request)
+      width: Math.max(1, viewer.scene.canvas.clientWidth), height: Math.max(1, viewer.scene.canvas.clientHeight),
+      road_max_level: layer.road_max_level ?? 2 }
+    const key = JSON.stringify([request, entry.render?.key, entry.render?.status, entry.render?.url])
     if (entry.viewportKey === key && !entry.viewAbort?.signal.aborted) return
     entry.viewportKey = key
     entry.viewAbort?.abort()
@@ -973,7 +1042,25 @@ export function createMapController(
     let pending: GeoJsonDataSource | undefined
     try {
       layer.loadPhase = '正在读取当前视野'
-      const data = await getMapViewport(request, abort.signal)
+      let data: import('./types').MapViewportResult | undefined
+      let usedTiles = false
+      let tileFailure = ''
+      if (entry.render?.status === 'succeeded' && entry.render.recipe === 'geojson-v2' && entry.render.url && typeof Worker !== 'undefined') {
+        try {
+          if (!entry.tiles) {
+            const { TileViewport: Client } = await import('./tileViewport.ts')
+            if (!current()) return
+            entry.tiles = new Client()
+            entry.cleanup.push(() => entry.tiles?.destroy())
+          }
+          data = await entry.tiles.load(entry.render, { ...request, bbox: request.bbox as [number, number, number, number] }, abort.signal)
+          usedTiles = true
+        } catch (error) {
+          if (!current()) return
+          tileFailure = error instanceof Error ? error.message : '瓦片不可用'
+        }
+      }
+      data ??= await getMapViewport(request, abort.signal)
       if (!current()) return
       pending = await createGeoResource(layer, entry, data, current)
       if (!current() || !pending) return
@@ -985,11 +1072,16 @@ export function createMapController(
       entry.styles = new Map(data.features.map(feature => [feature.id, feature.__display]))
       entry.sources = new Map(data.features.filter(feature => feature.__object.source_object_ids?.length)
         .map(feature => [feature.id, feature.__object.source_object_ids!]))
+      entry.tileGroups = usedTiles ? new Map(data.features.filter(feature => typeof feature.properties.display_group_id === 'string')
+        .map(feature => [feature.id, String(feature.properties.display_group_id)])) : undefined
       if (previous) disposeResource(previous)
       layer.status = 'ready'; layer.progress = 100; layer.error = ''
       layer.loadPhase = data.truncated ? '当前视野较密，请放大地图查看更多' : '当前视野已就绪'
+      if (tileFailure) layer.loadPhase = `已使用视野数据 · ${tileFailure}`
+      else if (entry.render && entry.render.status !== 'succeeded') layer.loadPhase += ` · ${entry.render.stage || '等待切片'}`
       syncOrder([...entries.keys()])
       appearance(layer)
+      if (highlightLayerId === layer.id) void resolveRoadHighlights(layer, entry)
     } catch (error) {
       if (!current()) return
       entry.viewportKey = undefined
@@ -1031,10 +1123,27 @@ export function createMapController(
           throw new ApiError('资产版本不可用', 409, { status: version.status }, 'ASSET_UNAVAILABLE', `client-${crypto.randomUUID()}`)
         url = version.entry_url
         entry.bounds = version.bounds
+        if (layer.static !== false) {
+          const render = layer.render ?? version.render
+          const profile = layer.category === '道路' || layer.category === '线状网络' ? 'roads' : layer.category === 'POI' ? 'poi' : 'generic'
+          entry.render = render?.profile === profile ? render : null
+        }
       }
       if (layer.type === 'geojson' && layer.asset_id && layer.asset_version && layer.object_count != null
-        && (url.startsWith('/data-files/') || url.startsWith('/samples/'))) {
+        && (url.startsWith('/data-files/') || url.startsWith('/samples/') || url.startsWith('/api/assets/'))) {
         entry.viewport = true
+        if (layer.static !== false) {
+          const poll = setInterval(() => {
+            if (!current() || !layer.visible) return
+            void getRenderStatus(layer.asset_id!, layer.asset_version!, layer.category, entry.abort.signal).then(render => {
+              if (!current()) return
+              const changed = render?.key !== entry.render?.key || render?.status !== entry.render?.status || render?.url !== entry.render?.url
+              entry.render = render; layer.render = render
+              if (changed && layer.visible) void refreshViewport(layer, entry)
+            }).catch(() => { /* The existing viewport remains available during a service outage. */ })
+          }, 5000)
+          entry.cleanup.push(() => clearInterval(poll))
+        }
         await refreshViewport(layer, entry)
         if (current() && autoFrame && (!layer.builtin || layer.id === 'campus-buildings')) {
           autoFrame = false
@@ -1227,7 +1336,7 @@ export function createMapController(
       if (point) options.onGroundClick?.(point)
       return
     }
-    if (selectedOverlay && picked.id === selectedOverlay && selectedOverlayObject) {
+    if ((selectedOverlay && picked.id === selectedOverlay || selectedRoad?.entities.contains(picked.id)) && selectedOverlayObject) {
       const layer = [...entries.keys()].find(item => item.id === selectedOverlayLayer)
       if (layer) onPick({ title: selectedOverlayObject.name ?? 'POI', layerName: layer.name,
         layerId: layer.id, objectId: selectedOverlayObject.object_id, object: selectedOverlayObject,
@@ -1250,14 +1359,21 @@ export function createMapController(
       )?.[0]
       const entry = layer ? entries.get(layer) : undefined
       const sourceIds = entry?.sources?.get(entity.id.split('_')[0]!)
-      if (layer && entry && sourceIds && sourceIds.length > 1) {
+      const groupId = entry?.tileGroups?.get(entity.id.split('_')[0]!)
+      if (layer && entry && (groupId || sourceIds && sourceIds.length > 1)) {
         const point = groundPoint(event.position)
         if (!point) { onNotice('此处没有可确定的地面位置，请重新点击道路。'); return }
         roadPickAbort = new AbortController()
         void pickMapRoad({ layer_id: layer.id, asset_id: layer.asset_id!, version: layer.asset_version!,
-          ...(layer.campus ? { campus: layer.campus } : {}), object_ids: sourceIds, ...point }, roadPickAbort.signal).then(object => {
+          ...(layer.campus ? { campus: layer.campus } : {}),
+          ...(groupId ? { display_group_id: groupId, render_key: entry.render!.key } : { object_ids: sourceIds }), ...point }, roadPickAbort.signal).then(object => {
           if (!alive || requestVersion !== pickVersion || !entryCurrent(layer, entry)) return
+          const representative = entity.id.split('_')[0]!
+          const known = entry.sources?.get(representative) ?? [representative]
+          entry.sources ??= new Map()
+          entry.sources.set(representative, [...new Set([...known, object.object_id])])
           highlightObjects(layer.id, [object.object_id], object.object_id)
+          if (groupId) void showSelectedRoad(layer, object)
           onPick({ title: object.name ?? '道路', layerName: layer.name, layerId: layer.id, resourceType: layer.type,
             objectId: object.object_id, asset: object.asset, properties: object.properties, object })
         }).catch(cause => {
@@ -1391,6 +1507,22 @@ export function createMapController(
       }
     },
     load,
+    setRoadMaxLevel(layer: MapLayer, level: number) {
+      layer.road_max_level = Math.max(1, Math.min(4, Math.trunc(level)))
+      const entry = entries.get(layer)
+      if (entry?.viewport && layer.attached && layer.visible) {
+        entry.viewportKey = undefined
+        void refreshViewport(layer, entry)
+      } else if (entry?.resource instanceof GeoJsonDataSource) {
+        for (const entity of entry.resource.entities.values) {
+          if (entity.polyline) {
+            const properties = entity.properties?.getValue(viewer.clock.currentTime) ?? {}
+            entity.show = roadDisplayLevel(properties) <= layer.road_max_level
+          }
+        }
+        viewer.scene.requestRender()
+      }
+    },
     remove,
     appearance,
     highlightObjects,

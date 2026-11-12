@@ -7,7 +7,7 @@ export const captureLayers = (layers: MapLayer[]): SceneLayerState[] => layers.m
   name: layer.name,
   category: layer.category,
   asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
-  map_attached: layer.map_attached ?? layer.attached, map_visible: layer.visible, map_opacity: layer.opacity, order: layer.order ?? index,
+  map_attached: layer.map_attached ?? layer.attached, map_visible: layer.visible, map_opacity: layer.opacity, road_max_level: layer.road_max_level ?? 2, order: layer.order ?? index,
 }))
 
 export async function prepareSceneLayers(states: SceneLayerState[], catalog: MapLayer[], signal?: AbortSignal) {
@@ -22,7 +22,8 @@ export async function prepareSceneLayers(states: SceneLayerState[], catalog: Map
     const layer = mapLayer({ id: state.layer_id, name: state.name ?? metadata?.name ?? asset?.name ?? '底图', category: asset ? state.category ?? metadata?.category ?? '专题' : '底图',
       type: asset?.type === '3dtiles' ? '3dtiles' : 'geojson', url: asset?.entry_url ?? '', source: asset?.source ?? '',
       asset_id: asset?.asset_id, asset_version: asset?.version, asset_source_kind: asset?.source_kind,
-      map_attached: state.map_attached, map_visible: state.map_visible, map_opacity: state.map_opacity }, asset?.source_kind === 'default' || !asset)
+      map_attached: state.map_attached, map_visible: state.map_visible, map_opacity: state.map_opacity, road_max_level: state.road_max_level ?? 2 }, asset?.source_kind === 'default' || !asset)
+    layer.render = asset?.render
     layer.order = state.order
     if (!asset) layer.object_count = 0
     layer.static = true

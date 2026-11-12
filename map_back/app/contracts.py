@@ -54,6 +54,7 @@ class AssetRegisterInput(BaseModel):
 
 
 class AssetVersionOutput(AssetVersionRef):
+    render: dict | None = None
     name: str
     type: Literal["geojson", "3dtiles", "network", "unknown"]
     source_kind: Literal["default", "upload", "external"]
@@ -127,6 +128,7 @@ class LegendItem(BaseModel):
 
 
 class LayerCatalogOutput(BaseModel):
+    render: dict | None = None
     id: str
     name: str
     category: str
@@ -144,6 +146,7 @@ class LayerCatalogOutput(BaseModel):
     map_attached: bool = False
     map_visible: bool = True
     map_opacity: float = Field(default=1, ge=0, le=1, allow_inf_nan=False)
+    road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
     order: int = Field(default=0, ge=0)
 
 
@@ -166,6 +169,7 @@ class SceneLayerState(BaseModel):
     map_attached: bool
     map_visible: bool
     map_opacity: float = Field(ge=0, le=1, allow_inf_nan=False)
+    road_max_level: int = Field(default=2, ge=1, le=4, strict=True)
     order: int = Field(ge=0)
 
     @model_serializer(mode='wrap')

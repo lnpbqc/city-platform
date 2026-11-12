@@ -78,3 +78,9 @@ def stats_overview(session: SessionDep):
                              .where(in_catalog, Asset.status == "active", Asset.current_version == SpatialObject.asset_version))
     return {"asset_count": sum(counts.values()), "object_count": objects, "run_count": session.scalar(select(func.count()).select_from(Run)), "total_byte_size": capacity,
             "assets_by_type": counts, "assets_added_last_7_days": recent}
+
+
+@router.get('/stats/storage')
+def stats_storage():
+    from .rendering import storage_usage
+    return storage_usage()
