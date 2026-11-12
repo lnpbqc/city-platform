@@ -8,12 +8,14 @@ import pytest
 from sqlalchemy import delete, text
 from sqlalchemy.exc import IntegrityError
 
-from app import assets, runs, scenes
-from app.builtin_assets import builtin_asset_files, builtin_asset_id, ensure_builtin_assets
+from app.services import assets
+from app.services import runs
+from app.services import scenes
+from app.services.builtin_assets import builtin_asset_files, builtin_asset_id, ensure_builtin_assets
 from app.database import FILES_DIR, SessionLocal
 from app.models import AssetVersion, NetworkVersion
-from app.run_store import claim_next, finish_run
-from app.run_worker import RunQueue
+from app.services.run_store import claim_next, finish_run
+from app.services.run_worker import RunQueue
 from test_scenes import draft, layer_state, upload
 
 

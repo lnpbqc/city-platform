@@ -11,10 +11,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
 from app.models import Run
-from app.contracts import RunInputSnapshot
-from app.run_artifacts import RUNS_DIR
-from app.run_store import inputs_hash
-from app.run_worker import RunQueue
+from app.schemas.runs import RunInputSnapshot
+from app.services.run_artifacts import RUNS_DIR
+from app.services.run_store import inputs_hash
+from app.services.run_worker import RunQueue
 from test_scenes import draft, layer_state, upload
 
 
@@ -301,7 +301,7 @@ def test_success_artifacts_rebuild_without_overwriting_changed_result(client):
 
 def test_failed_database_commit_does_not_publish_success_result(queued_client, monkeypatch):
     from sqlalchemy.orm import Session
-    from app.run_store import claim_next, finish_run, recover_runs
+    from app.services.run_store import claim_next, finish_run, recover_runs
 
     run = queued_client.post("/api/runs", json=setup_run(queued_client)).json()
     identity = run["run_id"]

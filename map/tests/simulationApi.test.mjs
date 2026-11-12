@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { getScenes, getScene, saveScene, deleteScene, getNetworks, getNetwork, submitRun, getRun, getRunInput, getRunResult, cancelRun } from '../src/api.ts'
+import { getScenes, getScene, saveScene, deleteScene, getNetworks, getNetwork, submitRun, getRun, getRunInput, getRunResult, cancelRun } from '../src/api/api.ts'
 
 test('simulation APIs encode identifiers, preserve pagination and quote scene versions', async (t) => {
   const calls = []

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ionTerrainConfigured, readTerrainEnabled, saveTerrainEnabled, terrainStorageKey } from '../src/terrainSetting.ts'
+import { ionTerrainConfigured, readTerrainEnabled, saveTerrainEnabled, terrainStorageKey } from '../src/map/terrainSetting.ts'
 
 function memory() {
   const values = new Map()

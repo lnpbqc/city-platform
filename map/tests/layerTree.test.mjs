@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { layerGroups, moveTarget, objectCountLabel, categoryOptions } from '../src/layerTree.ts'
+import { layerGroups, moveTarget, objectCountLabel, categoryOptions } from '../src/layers/layerTree.ts'
 
 test('saved custom categories are reusable independent groups and legacy aliases stay compatible', () => {
   const saved = [{ id: 'a', category: '市政设施', order: 3 }, { id: 'b', category: '市政设施', order: 1 }, { id: 'c', category: '三维建筑', order: 2 }]

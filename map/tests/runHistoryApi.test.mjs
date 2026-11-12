@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ApiError, getRuns, rerunRun, downloadRun } from '../src/api.ts'
+import { ApiError, getRuns, rerunRun, downloadRun } from '../src/api/api.ts'
 
 test('history APIs encode fixed rerun and UTC filters, carry abort signals, and download actual blobs', async t => {
   const calls = [], signal = new AbortController().signal

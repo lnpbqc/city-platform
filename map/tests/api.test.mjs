@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ApiError, getLayers, getLayerCatalog, saveCatalogMapState, getAssetVersion, getObjects, getObject, selectObjects } from '../src/api.ts'
+import { ApiError, getLayers, getLayerCatalog, saveCatalogMapState, getAssetVersion, getObjects, getObject, selectObjects } from '../src/api/api.ts'
 
 test('new error envelopes preserve domain code, detail and trace in visible messages', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({

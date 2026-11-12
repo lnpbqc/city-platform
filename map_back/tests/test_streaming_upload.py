@@ -1,6 +1,6 @@
 import json
 import pytest
-from app import uploads
+from app.services import uploads
 
 
 def test_limit_is_one_gib():
@@ -10,8 +10,9 @@ def test_limit_is_one_gib():
 def test_restart_reuses_published_geometry_metadata_and_defers_checksum_verification(client, monkeypatch):
     from app.database import SessionLocal, FILES_DIR
     from app.models import Asset, AssetVersion, Layer
-    from app.layer_catalog import initialize_catalog
-    from app import assets, geojson_stream
+    from app.services.layer_catalog import initialize_catalog
+    from app.services import assets
+    from app.services import geojson_stream
     doc = {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [113, 23]}, 'properties': {}}]}
     response = client.post('/api/layers/upload', data={'name': 'restart', 'type': 'geojson'}, files={'file': ('restart.geojson', json.dumps(doc))})
     assert response.status_code == 201, response.text
@@ -37,7 +38,7 @@ def test_restart_reuses_published_geometry_metadata_and_defers_checksum_verifica
 
 
 def test_stream_bom_tail_and_crs(tmp_path):
-    from app.geojson_stream import features
+    from app.services.geojson_stream import features
     path = tmp_path / 'data.geojson'
     path.write_text('\ufeff{"features":[],"type":"FeatureCollection"}', encoding='utf8')
     assert list(features(path)) == []
@@ -89,7 +90,7 @@ def test_receive_exact_limit_and_one_extra_byte():
 
 
 def test_stream_foreign_feature_member_and_cancellation(tmp_path):
-    from app.geojson_stream import features
+    from app.services.geojson_stream import features
     path = tmp_path / 'p.geojson'
     path.write_text('{"type":"FeatureCollection","feature":"foreign","features":[]}', encoding='utf8')
     assert list(features(path)) == []
@@ -112,18 +113,18 @@ def test_upload_never_reads_whole_geojson(client, monkeypatch):
 
 def test_invalid_index_is_not_published(client, monkeypatch):
     from types import SimpleNamespace
-    from app import main
-    before = set(main.FILES_DIR.iterdir())
-    monkeypatch.setattr(main, 'index_asset', lambda *args, **kwargs: SimpleNamespace(status='invalid', error='broken index'))
+    from app.services import layers
+    before = set(layers.FILES_DIR.iterdir())
+    monkeypatch.setattr(layers, 'index_asset', lambda *args, **kwargs: SimpleNamespace(status='invalid', error='broken index'))
     result = client.post('/api/layers/upload', data={'name':'broken','type':'geojson'},
                          files={'file':('p.geojson','{"type":"FeatureCollection","features":[]}', 'application/json')})
     assert result.status_code == 422
-    assert set(main.FILES_DIR.iterdir()) == before
+    assert set(layers.FILES_DIR.iterdir()) == before
     assert not client.get('/api/layers').json()
 
 
 def test_metadata_streams_dateline_features(tmp_path):
-    from app.asset_metadata import build_metadata
+    from app.services.asset_metadata import build_metadata
     path = tmp_path / 'p.geojson'
     path.write_text(json.dumps({'type':'FeatureCollection','features':[
         {'type':'Feature','properties':{},'geometry':{'type':'Point','coordinates':[longitude,20]}}

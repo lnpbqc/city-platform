@@ -21,7 +21,7 @@ beforeEach(() => {
   detailRequest = async id => object(id)
   areaRequest = async query => pageOf([], query)
 })
-mock.module('../src/api.ts', {
+mock.module('../src/api/api.ts', {
   exports: {
     getObjects: (query, signal) => { listCalls.push({ ...query, signal }); return listRequest(query, signal) },
     getObject: (id, signal, temporal) => { detailCalls.push({ id, signal, temporal }); return detailRequest(id, signal, temporal) },

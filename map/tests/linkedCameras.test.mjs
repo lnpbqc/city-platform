@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { linkedCameras, matchingCameras } from '../src/linkedCameras.ts'
+import { linkedCameras, matchingCameras } from '../src/map/linkedCameras.ts'
 
 const initial = { longitude: 113, latitude: 23, height: 900, heading: 0.2, pitch: -0.9, roll: 0, scene_mode: '3d' }
 test('camera linking synchronizes either side once and prevents synchronous or delayed feedback', () => {

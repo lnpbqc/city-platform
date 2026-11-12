@@ -32,7 +32,7 @@ const event = () => {
   return { addEventListener(fn) { listeners.add(fn); return () => listeners.delete(fn) }, fire(...args) { for (const fn of listeners) fn(...args) } }
 }
 let terrainBounds, terrainGate, terrainStarted, terrainError, terrainSamples
-mock.module('../src/buildingTerrain.ts', {
+mock.module('../src/map/buildingTerrain.ts', {
   exports: {
     sampleBuildingTerrain: async (polygons, terrain) => {
       terrainSamples.push(terrain)
@@ -48,7 +48,7 @@ const flatTerrain = { name: 'ellipsoid' }
 const worldTerrain = { name: 'world', bounds: { minimum: 2, maximum: 30 } }
 let basemapTerrain
 let tilesSamples, sampleTilesHeight
-mock.module('../src/basemap.ts', {
+mock.module('../src/map/basemap.ts', {
   exports: { initializeBasemap: async () => basemapTerrain },
 })
 class GeoJsonDataSource {
@@ -286,7 +286,7 @@ mock.module('cesium', {
     BoundingSphere,
   },
 })
-const { createMapController } = await import('../src/mapController.ts')
+const { createMapController } = await import('../src/map/mapController.ts')
 
 test('basemap imagery and labels share visibility, opacity, removal and reattachment', async () => {
   const { controller } = setup()

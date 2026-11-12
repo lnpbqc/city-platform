@@ -7,7 +7,7 @@ from threading import Thread
 
 import httpx
 
-from app import run_worker
+from app.services import run_worker
 from test_run_processes import alive, wait_for
 from test_runs import setup_run, wait_terminal
 
@@ -25,8 +25,8 @@ def test_service_crash_kills_child_then_recovers_running_and_queued(monkeypatch,
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     pid_file = tmp_path / "active-calculation.txt"
-    child_script = "import os,sys,time;from pathlib import Path;from app.parent_lifetime import watch_parent;watch_parent();Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)"
-    service_script = "import sys,uvicorn;from app import run_worker;from app.main import app;run_worker.PROCESS_ARGS=['-c',sys.argv[1],sys.argv[2]];uvicorn.run(app,host='127.0.0.1',port=int(sys.argv[3]),log_level='error')"
+    child_script = "import os,sys,time;from pathlib import Path;from app.services.parent_lifetime import watch_parent;watch_parent();Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)"
+    service_script = "import sys,uvicorn;from app.services import run_worker;from app.main import app;run_worker.PROCESS_ARGS=['-c',sys.argv[1],sys.argv[2]];uvicorn.run(app,host='127.0.0.1',port=int(sys.argv[3]),log_level='error')"
     monkeypatch.setattr(run_worker, "PROCESS_ARGS", ["-c", service_script, child_script, str(pid_file), str(port)])
     processes = []
     readers = []

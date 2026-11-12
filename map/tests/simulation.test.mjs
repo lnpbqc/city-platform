@@ -31,7 +31,7 @@ beforeEach(() => {
     submit: async () => record(), rerun: async () => record(), run: async () => record('running'), input: async () => snapshot(), result: async () => result(), cancel: async () => record('cancelled'),
   }
 })
-mock.module('../src/api.ts', { exports: {
+mock.module('../src/api/api.ts', { exports: {
   ApiError,
   getScenes: (query, signal) => { calls.catalogs.push({ kind: 'scenes', signal }); return handlers.scenes(query, signal) },
   getNetworks: (query, signal) => { calls.catalogs.push({ kind: 'networks', signal }); return handlers.networks(query, signal) },

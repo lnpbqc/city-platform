@@ -18,7 +18,7 @@ beforeEach(() => {
   globalThis.ShadowRoot = class {}
   globalThis.document = Object.assign(new Document(), { activeElement: null })
 })
-mock.module('../src/api.ts', { exports: {
+mock.module('../src/api/api.ts', { exports: {
   ApiError: class extends Error {},
   getScenes: async () => ({ items: [], total: 4 }),
   getAssetPage: query => { calls.pages.push({ ...query }); return list(query) },
@@ -27,7 +27,7 @@ mock.module('../src/api.ts', { exports: {
   deleteAsset: async () => { calls.writes++ }, reconcileAssets: async () => { calls.writes++; return { discovered: 0 } },
 } })
 
-const filename = new URL('../src/components/DataManagerView.vue', import.meta.url)
+const filename = new URL('../src/views/DataManagerView.vue', import.meta.url)
 const descriptor = parse(await readFile(filename, 'utf8')).descriptor
 const script = compileScript(descriptor, { id: 'data-manager-test' })
 const template = compileTemplate({ source: descriptor.template.content, filename: filename.pathname, id: 'data-manager-test', compilerOptions: { bindingMetadata: script.bindings } })
@@ -38,7 +38,7 @@ compiled = compiled.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/
   if (specifier === 'vue') return `import ${binding} from '${import.meta.resolve('vue')}';`
   if (specifier === '@lucide/vue') return `const ${binding.replace(/\bas\b/g, ':')} = new Proxy({}, { get: () => ({ render: () => null }) });`
   if (specifier.endsWith('.vue')) return `const ${binding} = { render: () => null };`
-  return `import ${binding} from '${new URL('../src/' + specifier.slice(3) + '.ts', import.meta.url).href}';`
+  return `import ${binding} from '${new URL(specifier + '.ts', new URL('../src/views/DataManagerView.vue', import.meta.url)).href}';`
 })
 const component = (await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'))).default
 

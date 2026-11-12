@@ -7,29 +7,29 @@ import {
   ref,
   watch,
 } from 'vue'
-import WorkspaceHeader from './components/WorkspaceHeader.vue'
-import DataManagerView from './components/DataManagerView.vue'
-import LayerDialog from './components/LayerDialog.vue'
-import LayerChooser from './components/LayerChooser.vue'
-import HelpPanel from './components/HelpPanel.vue'
-import WorkspaceFeedback from './components/WorkspaceFeedback.vue'
-import WorkspaceBookmarks from './components/WorkspaceBookmarks.vue'
-import RequestDiagnostics from './components/RequestDiagnostics.vue'
+import WorkspaceHeader from './components/common/WorkspaceHeader.vue'
+import DataManagerView from './views/DataManagerView.vue'
+import LayerDialog from './components/layers/LayerDialog.vue'
+import LayerChooser from './components/layers/LayerChooser.vue'
+import HelpPanel from './components/common/HelpPanel.vue'
+import WorkspaceFeedback from './components/common/WorkspaceFeedback.vue'
+import WorkspaceBookmarks from './components/common/WorkspaceBookmarks.vue'
+import RequestDiagnostics from './components/common/RequestDiagnostics.vue'
 import { useConnection } from './composables/useConnection'
-import { getScene, saveScene } from './api'
-import type { SceneRecord } from './simulationTypes'
-import { mapViewURL, readWorkspaceAddress, workspaceError, workspaceParams, workspaceURL, type WorkspaceAddress, type WorkspaceCapture, type WorkspaceState } from './workspaceState'
+import { getScene, saveScene } from './api/api'
+import type { SceneRecord } from './simulation/simulationTypes'
+import { mapViewURL, readWorkspaceAddress, workspaceError, workspaceParams, workspaceURL, type WorkspaceAddress, type WorkspaceCapture, type WorkspaceState } from './router/workspaceState'
 import { useLayerCatalog } from './composables/useLayerCatalog'
-import { readWorkspacePage, type WorkspacePage } from './workspaceRoute'
-import type { MapView } from './mapNavigation'
-import type { MapController } from './mapController'
-import type { AssetRecord, LayerInput, LayerRecord, MapLayer } from './types'
-import { defaultCampus, type CampusKey } from './campuses'
+import { readWorkspacePage, type WorkspacePage } from './router/workspaceRoute'
+import type { MapView } from './map/mapNavigation'
+import type { MapController } from './map/mapController'
+import type { AssetRecord, LayerInput, LayerRecord, MapLayer } from './layers/types'
+import { defaultCampus, type CampusKey } from './map/campuses'
 
 const MapWorkspace = defineAsyncComponent(
-  () => import('./components/MapWorkspace.vue'),
+  () => import('./views/MapWorkspace.vue'),
 )
-const SimulationWorkspace = defineAsyncComponent(() => import('./components/SimulationWorkspace.vue'))
+const SimulationWorkspace = defineAsyncComponent(() => import('./views/SimulationWorkspace.vue'))
 const page = ref(readWorkspacePage(window.location.hash))
 const mapVisited = ref(page.value === 'map')
 const simulationVisited = ref(page.value === 'simulation')

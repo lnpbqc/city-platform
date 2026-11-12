@@ -1,8 +1,8 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { ApiError, cancelRun, getNetwork, getNetworks, getRun, getRunInput, getRunResult, getScene, getScenes, saveScene, submitRun, rerunRun } from '../api.ts'
-import type { CameraState } from '../mapNavigation'
-import type { Page } from '../types'
-import type { NetworkRecord, RunInput, RunRecord, RunResult, RunSnapshot, SceneInput, SceneLayerState, SceneRecord } from '../simulationTypes'
+import { ApiError, cancelRun, getNetwork, getNetworks, getRun, getRunInput, getRunResult, getScene, getScenes, saveScene, submitRun, rerunRun } from '../api/api.ts'
+import type { CameraState } from '../map/mapNavigation'
+import type { Page } from '../layers/types'
+import type { NetworkRecord, RunInput, RunRecord, RunResult, RunSnapshot, SceneInput, SceneLayerState, SceneRecord } from '../simulation/simulationTypes'
 
 const storageKey = 'city.simulation.scene.v1'
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value))

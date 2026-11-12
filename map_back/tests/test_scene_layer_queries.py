@@ -4,7 +4,7 @@ import pytest
 
 from app.database import SessionLocal
 from app.models import Asset, AssetVersion, Layer
-from app.object_index import index_asset
+from app.services.object_index import index_asset
 from test_objects import uploaded
 from test_scenes import draft, layer_state
 from test_timeseries import TIMES, custom_snapshot

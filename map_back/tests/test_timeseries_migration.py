@@ -24,12 +24,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 sys.path.insert(0, str(Path("tests").resolve()))
-from app.builtin_assets import SAMPLES_DIR
+from app.services.builtin_assets import SAMPLES_DIR
 from app.database import DATABASE_URL, FILES_DIR, SessionLocal, engine
 from app.main import app
 from app.models import TimeSeriesSnapshot
-from app.networks import ensure_networks
-from app.run_worker import RunQueue
+from app.services.networks import ensure_networks
+from app.services.run_worker import RunQueue
 from test_scenes import draft, layer_state, upload
 
 

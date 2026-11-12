@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from app.database import SessionLocal
 from app.models import Run
-from app.run_artifacts import RUNS_DIR
+from app.services.run_artifacts import RUNS_DIR
 from test_runs import paused_queue, queued_client, setup_run, wait_terminal
 from test_scenes import draft, layer_state, upload
 

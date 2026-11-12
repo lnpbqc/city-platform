@@ -3,11 +3,12 @@ import json
 import pytest
 from sqlalchemy import delete, select
 
-from app.assets import published_files
+from app.services.assets import published_files
 from app.database import SessionLocal
-from app.geojson_snapshot import ensure_snapshot, iter_export, ready_snapshot
+from app.services.geojson_snapshot import ensure_snapshot, iter_export, ready_snapshot
 from app.models import Asset, GeoJSONSnapshot, ObjectIndex, SpatialObject
-from app.poi_mutations import PoiChange, rewrite
+from app.schemas.poi import PoiChange
+from app.services.poi_mutations import rewrite
 from test_layers import upload
 
 
@@ -46,7 +47,7 @@ def test_source_removal_keeps_semantic_export_stable_identity_and_poi_edit(clien
         assert changed['features'][0]['foreign'] == original['features'][0]['foreign']
         assert changed['features'][0]['id'] == '重复' and 'bbox' not in changed
         assert changed['features'][1:] == original['features'][1:]
-        from app.object_index import index_asset
+        from app.services.object_index import index_asset
         session.execute(delete(ObjectIndex).where(ObjectIndex.asset_id == aid))
         assert index_asset(session, session.get(Asset, aid)).status == 'ready'
 
@@ -82,7 +83,7 @@ def test_legacy_mismatch_never_marks_snapshot_ready(client):
 
 
 def test_export_uses_fixed_keyset_batches(client, monkeypatch):
-    from app import geojson_snapshot
+    from app.services import geojson_snapshot
     monkeypatch.setattr(geojson_snapshot, 'BATCH_SIZE', 2)
     original = document(7)
     layer = upload(client, json.dumps(original).encode()).json()
@@ -106,8 +107,8 @@ def test_stream_keeps_read_snapshot_when_asset_deleted_between_batches(client):
 
 
 def test_canonical_reader_honors_poi_disconnect_cancellation(client):
-    from app.geojson_snapshot import iter_members
-    from app.geojson_stream import cancellation
+    from app.services.geojson_snapshot import iter_members
+    from app.services.geojson_stream import cancellation
     layer = upload(client, json.dumps(document()).encode()).json()
     def cancelled():
         raise RuntimeError('disconnected')

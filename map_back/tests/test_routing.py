@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from app.contracts import NetworkOutput
+from app.schemas.networks import NetworkOutput
 from app.errors import ApiProblem
-from app.routing import MODEL_VERSION, calculate_routes
+from app.services.routing import MODEL_VERSION, calculate_routes
 
 
 def sample():

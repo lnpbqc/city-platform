@@ -26,7 +26,7 @@ beforeEach(() => {
   globalThis.window = { localStorage: { getItem: () => null, setItem() {}, removeItem() {} } }
   globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} }
 })
-mock.module('../src/api.ts', { exports: {
+mock.module('../src/api/api.ts', { exports: {
   ApiError: class extends Error { constructor(message, status, detail, code, traceId) { super(`${message} ${code ?? ''} ${traceId ?? ''}`); this.status = status; this.code = code } },
   getScenes: async query => { ++catalogReads; return catalogHandler(query) },
   getNetworks: async query => ({ ...query, total: 1, items: [network] }),
@@ -46,13 +46,13 @@ mock.module('../src/api.ts', { exports: {
 } })
 
 // Exercise the real SFC setup and watchers without a browser or WebGL context.
-const source = await readFile(new URL('../src/components/SimulationWorkspace.vue', import.meta.url), 'utf8')
+const source = await readFile(new URL('../src/views/SimulationWorkspace.vue', import.meta.url), 'utf8')
 let compiled = stripTypeScriptTypes(compileScript(parse(source).descriptor, { id: 'simulation-workspace-test' }).content, { mode: 'transform' })
 compiled = compiled.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g, (statement, binding, quote, specifier) => {
   if (specifier === 'vue') return `import ${binding} from '${import.meta.resolve('vue')}';`
   if (specifier === '@lucide/vue') return `const ${binding.replace(/\bas\b/g, ':')} = new Proxy({}, { get: () => ({}) });`
   if (specifier.endsWith('.vue')) return `const ${binding} = {};`
-  return `import ${binding} from '${new URL('../src/' + specifier.slice(3) + '.ts', import.meta.url).href}';`
+  return `import ${binding} from '${new URL(specifier + '.ts', new URL('../src/views/SimulationWorkspace.vue', import.meta.url)).href}';`
 })
 const component = (await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'))).default
 component.render = () => null
@@ -127,7 +127,7 @@ test('restored scene loads its pinned asset version and preserves source kind an
 })
 
 test('map captures model placement and the simulation restores it from the pinned scene', async t => {
-  const { captureLayers, prepareSceneLayers } = await import('../src/sceneLayers.ts')
+  const { captureLayers, prepareSceneLayers } = await import('../src/simulation/sceneLayers.ts')
   const anchor = { longitude: 113.36, latitude: 23.04, height: 25 }
   const [captured] = captureLayers([{ id: layer.layer_id, type: '3dtiles', asset_id: 'area', asset_version: '1.0.0',
     attached: true, visible: true, opacity: 0.4, order: 2, tiles_height_offset_m: -3, tiles_ground_anchor: anchor }])

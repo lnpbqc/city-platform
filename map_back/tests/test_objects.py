@@ -52,7 +52,7 @@ def test_objects_have_stable_unique_ids_pagination_details_and_real_properties(c
 
 
 def test_unbounded_list_paginates_in_database_without_materializing_selection(client, monkeypatch):
-    from app import object_queries
+    from app.services import object_queries
     layer = uploaded(client)
     def no_full_selection(*args, **kwargs):
         raise AssertionError('unbounded list must not load all matching IDs')

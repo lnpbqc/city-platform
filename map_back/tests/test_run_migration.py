@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path("tests").resolve()))
 from app.database import DATABASE_URL, engine
 from app.main import app
-from app.run_worker import RunQueue
+from app.services.run_worker import RunQueue
 from test_scenes import draft, layer_state, upload
 
 

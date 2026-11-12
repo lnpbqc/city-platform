@@ -1,4 +1,4 @@
-from app.poi_style import poi_style
+from app.services.poi_style import poi_style
 
 
 def test_semantics_and_scale_eligibility():

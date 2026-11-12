@@ -4,9 +4,9 @@ import { readFile } from 'node:fs/promises'
 import { parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
-import * as poi from '../src/poi.ts'
+import * as poi from '../src/map/poi.ts'
 
-const source = await readFile(new URL('../src/components/MapWorkspace.vue', import.meta.url), 'utf8')
+const source = await readFile(new URL('../src/views/MapWorkspace.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
 const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -40,19 +40,19 @@ function setup(options = {}) {
   }
   const scope = vue.effectScope()
   const panel = scope.run(() => create(name => {
-    if (name === '../api') return { getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
+    if (name === '../api/api') return { getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: hook => hooks.push(hook) }
     if (name === '../composables/useObjects') return { useObjects: () => objects }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
-    if (name === '../linkedCameras') return { linkedCameras: () => () => {} }
-    if (name === '../poi') return poi
-    if (name === '../sceneLayers') return {
+    if (name === '../map/linkedCameras') return { linkedCameras: () => () => {} }
+    if (name === '../map/poi') return poi
+    if (name === '../simulation/sceneLayers') return {
       captureLayers: layers => layers.map(layer => ({ layer_id: layer.id, asset: { asset_id: layer.asset_id, version: layer.asset_version }, map_attached: layer.attached, map_visible: layer.visible, map_opacity: layer.opacity })),
       prepareSceneLayers: options.prepare ?? (async states => states.map(state => ({ id: state.layer_id, asset_id: state.asset.asset_id, asset_version: state.asset.version, map_attached: state.map_attached, visible: state.map_visible, opacity: state.map_opacity, order: state.order, attached: false }))),
     }
-    if (name === '../layerTree') return {}
-    if (name === '../mapNavigation') return { readMapView: () => null }
-    if (name === '../regions') return { demoRegion: {} }
+    if (name === '../layers/layerTree') return {}
+    if (name === '../map/mapNavigation') return { readMapView: () => null }
+    if (name === '../map/regions') return { demoRegion: {} }
     if (name.endsWith('.vue')) return {}
     throw new Error(`Unexpected workspace dependency: ${name}`)
   }, () => props, () => (...args) => events.push(args), () => {}, {}, { localStorage: {}, removeEventListener() {} }, { removeEventListener() {} }))

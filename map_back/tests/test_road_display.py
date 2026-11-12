@@ -12,7 +12,7 @@ def view(client, layer, mpp, **values):
 
 
 def test_roads_filter_before_budget_and_preserve_originals(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     layer = upload(client, [road('小路', [[.01,.01],[.02,.01]], 'footway'), road('主路', [[.01,.02],[.02,.02]])], '道路')
     monkeypatch.setattr(map_queries, 'MAX_FEATURES', 1)
     result = view(client, layer, 30)
@@ -24,7 +24,7 @@ def test_roads_filter_before_budget_and_preserve_originals(client, monkeypatch):
 
 
 def test_road_bbox_false_positive_does_not_consume_budget(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     layer = upload(client,[road('外侧主路',[[0,0],[0,.1],[.1,.1]]),
                            road('视野次路',[[.04,.05],[.06,.05]],'secondary')],'道路')
     monkeypatch.setattr(map_queries,'MAX_FEATURES',1)
@@ -33,7 +33,7 @@ def test_road_bbox_false_positive_does_not_consume_budget(client, monkeypatch):
 
 
 def test_feature_budget_selects_whole_road_before_side_streets(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     layer = upload(client, [road('主路', [[.01,.01],[.02,.01]]),
                             road('主路', [[.02,.01],[.03,.01]]),
                             road('次路', [[.01,.02],[.02,.02]], 'secondary')], '道路')
@@ -157,9 +157,9 @@ def test_road_level_scene_legacy_default_and_explicit_snapshot(client):
 def test_tile_road_group_pick_matches_original_and_checks_version(client, monkeypatch, tmp_path):
     import json
     from datetime import datetime
-    from app import rendering
+    from app.services import rendering
     from app.database import SessionLocal
-    from app.render_models import RenderJob
+    from app.models.render import RenderJob
     layer = upload(client, [road('road', [[.01,.01],[.02,.01]]), road('road', [[.02,.01],[.03,.01]])], '道路')
     sources = client.get('/api/objects', params={'layer_id': layer['id']}).json()['items']
     identities = [item['object_id'] for item in sources]
@@ -207,7 +207,7 @@ def test_road_bends_survive_wide_camera_bbox_at_fixed_scale(client):
 
 
 def test_generic_roads_join_before_feature_and_vertex_budgets(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     secondary = road('次路', [[.01,.02],[.02,.02]], 'secondary', importance=100)
     first = road('主路', [[.01,.01],[.015,.011],[.02,.01]])
     second = road('主路', [[.02,.01],[.025,.009],[.03,.01]])

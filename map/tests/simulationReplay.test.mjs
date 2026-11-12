@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { replayTimeline, replayPosition, replayStep } from '../src/simulationReplay.ts'
+import { replayTimeline, replayPosition, replayStep } from '../src/simulation/simulationReplay.ts'
 
 const network = { nodes: [{ id: 'S', coordinates: [113, 23] }, { id: 'A', coordinates: [113.002, 23] }, { id: 'T', coordinates: [113.004, 23.002] }],
   edges: [{ id: 'S-A', source: 'S', target: 'A', length_m: 200, speed_mps: 10 },

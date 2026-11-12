@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { layoutPois } from '../src/poiLayout.ts'
-import { poiCategory, poiIcon, poiName } from '../src/poi.ts'
+import { layoutPois } from '../src/map/poiLayout.ts'
+import { poiCategory, poiIcon, poiName } from '../src/map/poi.ts'
 
 const item = (id, x, y, text = id, weight = 0, priority = 0) => ({ id, x, y, text, weight, priority })
 test('categories normalize Chinese and OSM tags and icons use distinct Lucide pictograms', () => {

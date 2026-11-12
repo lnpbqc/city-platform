@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
-from app import object_queries
+from app.services import object_queries
 from app.main import app
 from app.models import Asset
 

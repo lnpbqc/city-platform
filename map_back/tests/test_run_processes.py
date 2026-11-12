@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from app import run_worker
+from app.services import run_worker
 from test_runs import setup_run, wait_terminal
 
 
@@ -104,8 +104,8 @@ def test_unexpected_model_process_error_is_sanitized(monkeypatch, client):
 
 def test_child_exits_when_parent_is_killed(monkeypatch, tmp_path):
     pid_file = tmp_path / "owned-child.txt"
-    child_script = "import os,sys,time;from pathlib import Path;from app.parent_lifetime import watch_parent;watch_parent();Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)"
-    parent_script = "import sys,time;from app import run_worker;run_worker.PROCESS_ARGS=['-c',sys.argv[1],sys.argv[2]];run_worker.spawn_computation();time.sleep(30)"
+    child_script = "import os,sys,time;from pathlib import Path;from app.services.parent_lifetime import watch_parent;watch_parent();Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)"
+    parent_script = "import sys,time;from app.services import run_worker;run_worker.PROCESS_ARGS=['-c',sys.argv[1],sys.argv[2]];run_worker.spawn_computation();time.sleep(30)"
     monkeypatch.setattr(run_worker, "PROCESS_ARGS", ["-c", parent_script, child_script, str(pid_file)])
     parent = run_worker.spawn_computation()
     identity = None

@@ -13,14 +13,14 @@ beforeEach(() => {
   handler = async query => ({ ...query, items: [{ run_id: `run-${query.page}` }], total: 41 })
   removeHandler = async identity => { calls.push({ deleted: identity }) }
 })
-mock.module('../src/api.ts', { exports: { ApiError: class extends Error {}, deleteRun: identity => removeHandler(identity), getRuns: (query, signal) => { calls.push({ query, signal }); return handler(query, signal) } } })
+mock.module('../src/api/api.ts', { exports: { ApiError: class extends Error {}, deleteRun: identity => removeHandler(identity), getRuns: (query, signal) => { calls.push({ query, signal }); return handler(query, signal) } } })
 const { useRunHistory } = await import('../src/composables/useRunHistory.ts')
-const source = await readFile(new URL('../src/components/RunHistoryPanel.vue', import.meta.url), 'utf8')
+const source = await readFile(new URL('../src/components/simulation/RunHistoryPanel.vue', import.meta.url), 'utf8')
 let compiled = stripTypeScriptTypes(compileScript(parse(source).descriptor, { id: 'run-history-test' }).content, { mode: 'transform' })
 compiled = compiled.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g, (_statement, binding, _quote, specifier) => {
   if (specifier === 'vue') return `import ${binding} from '${import.meta.resolve('vue')}';`
   if (specifier === '@lucide/vue') return `const ${binding.replace(/\bas\b/g, ':')} = new Proxy({}, { get: () => ({}) });`
-  return `import ${binding} from '${new URL('../src/' + specifier.slice(3) + '.ts', import.meta.url).href}';`
+  return `import ${binding} from '${new URL(specifier + '.ts', new URL('../src/components/simulation/RunHistoryPanel.vue', import.meta.url)).href}';`
 })
 const historyPanel = (await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'))).default
 historyPanel.render = () => null

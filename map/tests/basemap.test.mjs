@@ -31,7 +31,7 @@ mock.module('cesium', {
     buildModuleUrl: path => path,
   },
 })
-const { initializeBasemap } = await import('../src/basemap.ts')
+const { initializeBasemap } = await import('../src/map/basemap.ts')
 
 beforeEach(() => {
   ionImageryCalls = ionTerrainCalls = 0

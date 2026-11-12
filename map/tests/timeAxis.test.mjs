@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRenderer, defineComponent, nextTick, shallowRef } from 'vue'
-import { dayTime, localDay, localTime, normalizedTime, temporalColor, timeLabel } from '../src/temporal.ts'
+import { dayTime, localDay, localTime, normalizedTime, temporalColor, timeLabel } from '../src/temporal/temporal.ts'
 import { useTimeAxis } from '../src/composables/useTimeAxis.ts'
 
 test('Shanghai calendar conversion preserves day boundaries, historical DST and actual zero', () => {

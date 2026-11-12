@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { getLayerTimes, getTimeSeries, getObject } from '../src/api.ts'
+import { getLayerTimes, getTimeSeries, getObject } from '../src/api/api.ts'
 
 test('time APIs send fixed versions, zoned time and resolution without changing legacy detail URLs', async t => {
   const calls = [], signal = new AbortController().signal

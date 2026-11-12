@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { getLayerCatalog, deleteLayer, saveCatalogMapState } from '../api.ts'
+import { getLayerCatalog, deleteLayer, saveCatalogMapState } from '../api/api.ts'
 import {
   mapLayer,
   samples,
@@ -10,11 +10,11 @@ import {
   type LayerRecord,
   type LayerMapState,
   type TilesPlacement,
-} from '../types.ts'
-import type { CampusKey } from '../campuses'
-import { defaultCampus } from '../campuses.ts'
-import type { MapController } from '../mapController'
-import { moveTarget } from '../layerTree.ts'
+} from '../layers/types.ts'
+import type { CampusKey } from '../map/campuses'
+import { defaultCampus } from '../map/campuses.ts'
+import type { MapController } from '../map/mapController'
+import { moveTarget } from '../layers/layerTree.ts'
 
 export function useLayerCatalog(
   getController: () => MapController | undefined,

@@ -4,18 +4,18 @@ import { readFileSync } from 'node:fs'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
-import * as temporal from '../src/temporal.ts'
-import * as poi from '../src/poi.ts'
+import * as temporal from '../src/temporal/temporal.ts'
+import * as poi from '../src/map/poi.ts'
 
 function component(name) {
-  const { descriptor } = parse(readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8'))
+  const { descriptor } = parse(readFileSync(new URL(`../src/components/${name === 'TimeAxis' ? 'common' : 'map'}/${name}.vue`, import.meta.url), 'utf8'))
   const source = compileScript(descriptor, { id: name, inlineTemplate: true }).content
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const exports = {}
   new Function('require', 'exports', js)(path => {
     if (path === 'vue') return vue
-    if (path === '../temporal') return temporal
-    if (path === '../poi') return poi
+    if (path === '../../temporal/temporal') return temporal
+    if (path === '../../map/poi') return poi
     if (path === './FeatureInspector.vue') return component('FeatureInspector')
     if (path === '@lucide/vue') return new Proxy({}, { get: () => () => null })
     throw new Error(path)

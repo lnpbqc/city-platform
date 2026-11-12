@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from app.database import FILES_DIR, SessionLocal
 from app.models import BuiltinLayerState, Layer
-from app.builtin_assets import RETIRED_ASSET_IDS
+from app.services.builtin_assets import RETIRED_ASSET_IDS
 
 
 def catalog(client, campus="university-town"):

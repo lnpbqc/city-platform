@@ -6,8 +6,8 @@ import {
   getAssetPage,
   getStats,
   reconcileAssets,
-} from '../api.ts'
-import type { AssetDetail, AssetRecord, AssetFilters, AssetReference, StatsOverview } from '../types'
+} from '../api/api.ts'
+import type { AssetDetail, AssetRecord, AssetFilters, AssetReference, StatsOverview } from '../layers/types'
 
 export function useAssets() {
   const assets = shallowRef<AssetRecord[]>([])

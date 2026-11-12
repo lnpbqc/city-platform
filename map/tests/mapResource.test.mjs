@@ -1,6 +1,6 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { fetchMapGeoJSON, mapLoadError } from '../src/mapResource.ts'
+import { fetchMapGeoJSON, mapLoadError } from '../src/map/mapResource.ts'
 
 test('GeoJSON streaming reports actual byte progress and parses UTF8', async (t) => {
   const bytes = new TextEncoder().encode('{"type":"FeatureCollection","名称":"校园","features":[]}')

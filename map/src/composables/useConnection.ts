@@ -1,6 +1,6 @@
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
-import { ApiError } from '../api.ts'
-import { subscribeApiEvents } from '../apiEvents.ts'
+import { ApiError } from '../api/api.ts'
+import { subscribeApiEvents } from '../api/apiEvents.ts'
 
 export function useConnection(onRecovered: () => void) {
   const status = ref<'checking' | 'online' | 'retrying'>('checking')

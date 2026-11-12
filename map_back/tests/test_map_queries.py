@@ -91,7 +91,7 @@ def test_viewport_validates_bounds_and_versions(client):
 
 
 def test_viewport_budgets_and_weight_precedence(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     # Highest importance is late in the source and a different display cell.
     layer = upload(client, [point('low', x=121.41, weight=100), point('late-high', x=121.59, importance=101, weight=-100)])
     body = {**reference(layer), 'bbox': [121.4, 24.9, 121.6, 25.1], 'width': 640, 'height': 480, 'meters_per_pixel': .5}
@@ -105,7 +105,7 @@ def test_viewport_budgets_and_weight_precedence(client, monkeypatch):
 
 
 def test_road_display_keeps_clipped_vertices_without_changing_original(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     coordinates = [[121.4 + index * 0.001, 25] for index in range(201)]
     feature = {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coordinates}, 'properties': {}}
     layer = upload(client, [feature], category='道路')
@@ -150,7 +150,7 @@ def test_nearby_reports_external_unavailable_and_rejects_other_categories(client
 
 
 def test_viewport_counts_real_intersections_before_feature_budget(client, monkeypatch):
-    from app import map_queries
+    from app.services import map_queries
     # A polygon's envelope intersects the viewport while its hole covers it entirely.
     hole = {'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [
         [[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]], [[1, 1], [1, 3], [3, 3], [3, 1], [1, 1]]]}, 'properties': {}}

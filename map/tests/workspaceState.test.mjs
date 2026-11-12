@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mapViewURL, readWorkspaceAddress, workspaceURL } from '../src/workspaceState.ts'
-import { getScene } from '../src/api.ts'
+import { mapViewURL, readWorkspaceAddress, workspaceURL } from '../src/router/workspaceState.ts'
+import { getScene } from '../src/api/api.ts'
 
 const camera = { longitude: 113.364, latitude: 23.043, height: 1400, heading: 0.4, pitch: -1.4, roll: 0.1, scene_mode: '3d' }
 test('map view links replace snapshot parameters with just camera and region', () => {

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.database import SessionLocal
 from app.main import app
 from app.models import Asset, AssetVersion, NetworkVersion, Scene, SceneAssetReference
-from app.networks import publish_network
+from app.services.networks import publish_network
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 from test_layers import GEO, TILESET, upload as upload_layer, zip_data

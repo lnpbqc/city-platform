@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref, shallowRef } from 'vue'
-import { getRuns, deleteRun } from '../api.ts'
-import type { RunQuery, RunRecord } from '../simulationTypes'
+import { getRuns, deleteRun } from '../api/api.ts'
+import type { RunQuery, RunRecord } from '../simulation/simulationTypes'
 
 export function useRunHistory() {
   const items = shallowRef<RunRecord[]>([])

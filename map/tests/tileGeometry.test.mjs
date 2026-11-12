@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { tileBounds, viewTiles, mergeParts, vertexCount, clipPolygon } from '../src/tileGeometry.ts'
+import { tileBounds, viewTiles, mergeParts, vertexCount, clipPolygon } from '../src/map/tileGeometry.ts'
 
 test('antimeridian views cover both edge columns without spanning the intervening world', () => {
   const tiles = viewTiles([170, -10, -170, 10], 3)

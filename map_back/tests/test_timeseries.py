@@ -10,13 +10,13 @@ from shapely.geometry import shape
 from sqlalchemy import event, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-from app.builtin_assets import CAMPUS_KEYS, SAMPLES_DIR, builtin_asset_id
+from app.services.builtin_assets import CAMPUS_KEYS, SAMPLES_DIR, builtin_asset_id
 from app.database import SessionLocal, engine
-from app.layer_catalog import initialize_catalog
+from app.services.layer_catalog import initialize_catalog
 from app.main import app
 from app.models import Asset, AssetVersion, SpatialObject, TimeSeriesSnapshot
-from app.object_index import index_asset, object_id
-from app.timeseries import ensure_timeseries, normalized_time, safe_average, utc_text
+from app.services.object_index import index_asset, object_id
+from app.services.timeseries import ensure_timeseries, normalized_time, safe_average, utc_text
 from test_objects import features, uploaded
 
 TIMES = ["2026-10-25T00:00:00Z", "2026-10-25T01:00:00Z", "2026-10-26T00:00:00Z", "2026-10-26T01:00:00Z"]

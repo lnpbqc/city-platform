@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readWorkspacePage } from '../src/workspaceRoute.ts'
+import { readWorkspacePage } from '../src/router/workspaceRoute.ts'
 
 test('workspace routes distinguish map, direct data entry, and unknown hashes', () => {
   assert.equal(readWorkspacePage('#/map'), 'map')

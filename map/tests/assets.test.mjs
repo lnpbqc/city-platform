@@ -18,7 +18,7 @@ class ApiError extends Error {
   }
 }
 let listRequest, detailRequest, deleteRequest, scanRequest, statsRequest
-mock.module('../src/api.ts', {
+mock.module('../src/api/api.ts', {
   exports: {
     ApiError,
     getAssets: () => listRequest(),

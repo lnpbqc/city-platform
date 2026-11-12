@@ -11,7 +11,7 @@ from app.database import SessionLocal
 from app.errors import ApiProblem
 from app.main import app
 from app.models import NetworkVersion
-from app.networks import ensure_networks, publish_network, validate_network
+from app.services.networks import ensure_networks, publish_network, validate_network
 
 
 def network(identity="test-net", version="1.0.0"):

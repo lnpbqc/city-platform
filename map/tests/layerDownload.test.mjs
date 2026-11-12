@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { layerDownload, fetchLayerDownload } from '../src/layerDownload.ts'
-import { samplesForCampus, mapLayer } from '../src/types.ts'
+import { layerDownload, fetchLayerDownload } from '../src/layers/layerDownload.ts'
+import { samplesForCampus, mapLayer } from '../src/layers/types.ts'
 
 test('each campus downloads its own GeoJSON and complete 3D sample ZIP', () => {
   for (const campus of ['university-town', 'huangpu']) {

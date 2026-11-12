@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { campuses, defaultCampus } from '../src/campuses.ts'
-import { campusRegions, demoRegion } from '../src/regions.ts'
-import { samples, samplesForCampus } from '../src/types.ts'
+import { campuses, defaultCampus } from '../src/map/campuses.ts'
+import { campusRegions, demoRegion } from '../src/map/regions.ts'
+import { samples, samplesForCampus } from '../src/layers/types.ts'
 
 test('University Town is the default and both campus shortcuts use their own WGS84 targets', () => {
   assert.equal(defaultCampus.key, 'university-town')

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canRegisterAsset, referenceType, referenceVersion, referenceGuidance } from '../src/assetReferences.ts'
+import { canRegisterAsset, referenceType, referenceVersion, referenceGuidance } from '../src/catalog/assetReferences.ts'
 
 const asset = { status: 'active', type: 'geojson', entry_url: '/data-files/id/data.geojson', references: [] }
 

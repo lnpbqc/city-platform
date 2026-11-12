@@ -6,7 +6,7 @@ from threading import Event
 import pytest
 from sqlalchemy import func, select
 
-from app import main, scenes
+from app.services import bookmarks, scenes
 from app.database import FILES_DIR, SessionLocal
 from app.models import Bookmark
 from test_runs import paused_queue, queued_client, setup_run
@@ -174,7 +174,7 @@ def test_bookmark_validation_and_scene_update_compete_in_one_real_write_transact
     client = queued_client
     scene = client.post("/api/scenes", json=draft()).json()
     holding, competing, release = Event(), Event(), Event()
-    original_bookmark, original_scene = main.reserve_writer, scenes.reserve_writer
+    original_bookmark, original_scene = bookmarks.reserve_writer, scenes.reserve_writer
 
     def reserve(session, action, original):
         if action == first_writer:
@@ -185,7 +185,7 @@ def test_bookmark_validation_and_scene_update_compete_in_one_real_write_transact
             competing.set()
             original(session)
 
-    monkeypatch.setattr(main, "reserve_writer", lambda session: reserve(session, "bookmark", original_bookmark))
+    monkeypatch.setattr(bookmarks, "reserve_writer", lambda session: reserve(session, "bookmark", original_bookmark))
     monkeypatch.setattr(scenes, "reserve_writer", lambda session: reserve(session, "scene", original_scene))
     operations = {"bookmark": lambda: save_bookmark(client, workspace(scene)),
                   "scene": lambda: client.put(f"/api/scenes/{scene['id']}", json={**draft(), "name": "并发更新"}, headers={"If-Match": '"1"'})}

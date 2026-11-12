@@ -5,7 +5,7 @@ import { parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
 
-const source = await readFile(new URL('../src/components/BookmarkPanel.vue', import.meta.url), 'utf8')
+const source = await readFile(new URL('../src/components/map/BookmarkPanel.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
 const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -38,8 +38,8 @@ function setup(overrides = {}, resolver = async () => region) {
   const scope = vue.effectScope()
   const panel = scope.run(() => create((name) => {
     if (name === 'vue') return { ...vue, onMounted: () => {}, onBeforeUnmount: (hook) => hooks.push(hook) }
-    if (name === '../api') return api
-    if (name === '../regions') return { resolveRegionTarget: resolver }
+    if (name === '../../api/api') return api
+    if (name === '../../map/regions') return { resolveRegionTarget: resolver }
     if (name === '@lucide/vue') return {}
     throw new Error(`Unexpected component dependency: ${name}`)
   }, () => props, () => (...args) => emitted.push(args), {}, { removeEventListener() {} }))

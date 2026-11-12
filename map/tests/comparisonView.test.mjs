@@ -8,16 +8,16 @@ import { createRenderer, nextTick } from 'vue'
 const camera = { longitude: 113, latitude: 23, height: 900, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' }
 let signals
 beforeEach(() => { signals = []; globalThis.document = { addEventListener() {}, removeEventListener() {} } })
-mock.module('../src/api.ts', { exports: {
+mock.module('../src/api/api.ts', { exports: {
   getLayerTimes: async (_id, _query, signal) => { signals.push(signal); return ['2026-10-25T00:00:00Z', '2026-10-25T01:00:00Z'] },
   getTimeSeries: async (query, signal) => { signals.push(signal); return { ...query, asset: { asset_id: query.asset_id, version: query.version }, unit: 'cm', items: [] } },
 } })
-const source = await readFile(new URL('../src/components/ComparisonView.vue', import.meta.url), 'utf8')
+const source = await readFile(new URL('../src/components/map/ComparisonView.vue', import.meta.url), 'utf8')
 let compiled = stripTypeScriptTypes(compileScript(parse(source).descriptor, { id: 'comparison-view-test' }).content, { mode: 'transform' })
 compiled = compiled.replace(/import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g, (statement, binding, _quote, specifier) => {
   if (specifier === 'vue') return `import ${binding} from '${import.meta.resolve('vue')}';`
   if (specifier.endsWith('.vue')) return `const ${binding} = {};`
-  return `import ${binding} from '${new URL('../src/' + specifier.slice(3) + '.ts', import.meta.url).href}';`
+  return `import ${binding} from '${new URL(specifier + '.ts', new URL('../src/components/map/ComparisonView.vue', import.meta.url)).href}';`
 })
 const component = (await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'))).default
 component.render = () => null

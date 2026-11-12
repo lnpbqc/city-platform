@@ -16,7 +16,7 @@ beforeEach(() => {
   saveResult = undefined
   requestedCampuses = []
 })
-mock.module('../src/api.ts', {
+mock.module('../src/api/api.ts', {
   exports: {
     getLayerCatalog: async (campus, signal) => {
       requestedCampuses.push(campus)
@@ -197,7 +197,7 @@ test('deleting a registration detaches it while preserving the file deletion bou
 })
 
 test('switching campuses replaces only attached builtins and preserves user data and viewing state', async () => {
-  const { samplesForCampus } = await import('../src/types.ts')
+  const { samplesForCampus } = await import('../src/layers/types.ts')
   const builtinRecords = (campus) => samplesForCampus(campus).map((item) => ({
     ...item, builtin: true, asset: { asset_id: `${campus}-${item.id}`, version: '1.0.0' },
     map_attached: item.id !== 'demo-buildings', map_visible: item.id !== 'campus-buildings', map_opacity: item.id === 'campus-buildings' ? 0.35 : 1,

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { TileViewport } from '../src/tileViewport.ts'
+import { TileViewport } from '../src/map/tileViewport.ts'
 
 function setup(t) {
   const previous = globalThis.Worker

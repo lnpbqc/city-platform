@@ -12,7 +12,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from app import main, uploads
+from app.services import layers, uploads
 from app.database import FILES_DIR, STORAGE_DIR
 
 GEO = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"名称": "小样"}, "geometry": {"type": "Point", "coordinates": [114.16, 22.29]}}]}
@@ -68,10 +68,10 @@ def test_tiles_zip_preserves_relative_paths(client, prefix):
 
 @pytest.mark.parametrize("value", [b"broken", b"[]", b"{}", json.dumps({**GEO, "crs": {}}).encode(), json.dumps({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [999, 99]}}]}).encode()])
 def test_invalid_geojson_cleans_temporary_files(client, value):
-    before = set(main.FILES_DIR.iterdir())
+    before = set(layers.FILES_DIR.iterdir())
     assert upload(client, value).status_code == 422
     assert client.get("/api/layers").json() == []
-    assert set(main.FILES_DIR.iterdir()) == before
+    assert set(layers.FILES_DIR.iterdir()) == before
     assert not list((STORAGE_DIR / "tmp").iterdir())
 
 
@@ -133,13 +133,13 @@ def test_encrypted_zip_and_file_count(client, monkeypatch):
 
 
 def test_database_failure_removes_published_upload(client, monkeypatch):
-    before = set(main.FILES_DIR.iterdir())
+    before = set(layers.FILES_DIR.iterdir())
     def fail(*args):
         raise RuntimeError("simulated database failure")
-    monkeypatch.setattr(main, "create_layer", fail)
+    monkeypatch.setattr(layers, "create_layer", fail)
     with pytest.raises(RuntimeError, match="simulated database failure"):
         upload(client, json.dumps(GEO).encode())
-    assert set(main.FILES_DIR.iterdir()) == before
+    assert set(layers.FILES_DIR.iterdir()) == before
     assert not list((STORAGE_DIR / "tmp").iterdir())
 
 
@@ -149,11 +149,11 @@ def test_bad_tileset(client, content):
 
 
 def test_size_and_expansion_limits(client, monkeypatch):
-    monkeypatch.setattr(main, "GEOJSON_LIMIT", 16)
+    monkeypatch.setattr(layers, "GEOJSON_LIMIT", 16)
     assert upload(client, b" " * 17).status_code == 413
-    monkeypatch.setattr(main, "ZIP_LIMIT", 16)
+    monkeypatch.setattr(layers, "ZIP_LIMIT", 16)
     assert upload(client, b" " * 17, "3dtiles", "city.zip").status_code == 413
-    monkeypatch.setattr(main, "ZIP_LIMIT", 1024 * 1024)
+    monkeypatch.setattr(layers, "ZIP_LIMIT", 1024 * 1024)
     monkeypatch.setattr(uploads, "EXPANDED_LIMIT", 16)
     assert upload(client, zip_data({"tileset.json": " " * 100}), "3dtiles", "city.zip").status_code == 413
     assert client.get("/api/layers").json() == []

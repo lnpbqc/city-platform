@@ -12,8 +12,8 @@ from sqlalchemy import delete
 from app.database import FILES_DIR, STORAGE_DIR, SessionLocal
 from app.main import app
 from app.models import Asset, GeoJSONSnapshot
-from app.render_models import RenderJob
-from app import rendering
+from app.models.render import RenderJob
+from app.services import rendering
 from test_layers import GEO, upload
 
 
@@ -254,7 +254,7 @@ def test_recipe_upgrade_uses_snapshot_and_preserves_original_retention(client, e
         assert job.status == 'queued' and job.key != legacy_key
         assert job.ready_at == first_ready and job.source_expires_at == expiry
         assert job.source_state == ('expired' if expired else 'retained')
-        from app.geojson_snapshot import iter_export
+        from app.services.geojson_snapshot import iter_export
         assert json.loads(''.join(iter_export(asset_id, version))) == GEO
     assert client.get(f'/api/render-files/{legacy_key}/map.pmtiles').status_code == 404
 

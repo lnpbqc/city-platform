@@ -9,7 +9,7 @@ beforeEach(() => {
   fetchFrame = async query => ({ layer_id: query.layer_id, asset: { asset_id: query.asset_id, version: query.version }, time: query.time, resolution: query.resolution,
     unit: 'cm', items: [{ object_id: 'point', geometry: { type: 'Point', coordinates: [113, 23] }, value: 0, missing: false }] })
 })
-mock.module('../src/api.ts', { exports: {
+mock.module('../src/api/api.ts', { exports: {
   getLayerTimes: async (id, query, signal) => { timeCalls.push({ id, query, signal }); return ['2026-10-25T00:00:00Z', '2026-10-25T01:00:00Z'] },
   getTimeSeries: (query, signal) => { requests.push({ query, signal }); return fetchFrame(query) },
 } })

@@ -6,8 +6,8 @@ from pathlib import Path
 from time import perf_counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.contracts import NetworkOutput
-from app.routing import calculate_routes
+from app.schemas.networks import NetworkOutput
+from app.services.routing import calculate_routes
 
 size = 100_000
 nodes = [{"id": f"N{index:06}", "coordinates": [113.36, 23.04]} for index in range(size)]

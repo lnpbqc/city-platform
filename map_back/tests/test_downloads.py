@@ -5,7 +5,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from app import assets
+from app.services import assets
 from app.database import FILES_DIR, STORAGE_DIR, SessionLocal
 from app.models import Asset
 from test_layers import GEO, TILESET, upload, zip_data

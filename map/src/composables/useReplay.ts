@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { replayPosition, replayStep, type replayTimeline } from '../simulationReplay.ts'
+import { replayPosition, replayStep, type replayTimeline } from '../simulation/simulationReplay.ts'
 
 export function useReplay(getTimeline: () => ReturnType<typeof replayTimeline> | null) {
   const seconds = ref(0)

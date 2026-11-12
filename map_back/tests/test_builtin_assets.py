@@ -7,8 +7,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from app import builtin_assets
-from app.assets import asset_for_url, asset_record, reconcile
+from app.services import builtin_assets
+from app.services.assets import asset_for_url, asset_record, reconcile
 from app.database import FILES_DIR, SessionLocal
 from app.models import Asset, AssetVersion, Layer
 
@@ -153,7 +153,7 @@ def test_default_path_helper_rejects_id_or_entry_mismatch(client):
 def test_reconcile_detects_default_changes_without_replacing_fingerprint(client, monkeypatch):
     register()
     identity = builtin_assets.builtin_asset_id("university-town", "demo-points")
-    from app import assets
+    from app.services import assets
     original = assets.build_metadata
 
     def changed(*args, **kwargs):

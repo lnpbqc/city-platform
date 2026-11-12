@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import type { TimeResolution } from '../temporalTypes'
-import { dayTime, localDay, normalizedTime } from '../temporal.ts'
+import type { TimeResolution } from '../temporal/temporalTypes'
+import { dayTime, localDay, normalizedTime } from '../temporal/temporal.ts'
 
 export function useTimeAxis(getTimes: () => string[]) {
   const time = ref('')

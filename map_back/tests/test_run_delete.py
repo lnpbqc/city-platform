@@ -1,7 +1,7 @@
 import pytest
 from app.database import SessionLocal
 from app.models import Run, Scene
-from app.run_artifacts import RUNS_DIR
+from app.services.run_artifacts import RUNS_DIR
 from test_runs import setup_run, queued_client, paused_queue
 
 
@@ -18,7 +18,7 @@ def test_delete_terminal_removes_files_and_record(queued_client, status):
     else:
         item = queued_client.post('/api/runs', json=setup_run(queued_client)).json()
         identity = item['run_id']
-        from app.run_store import claim_next, finish_run
+        from app.services.run_store import claim_next, finish_run
         assert claim_next() == identity
         finish_run(identity, status, result={} if status == 'succeeded' else None,
                    error={'code': 'TEST_FAILURE', 'message': 'failed'} if status == 'failed' else None)
@@ -70,7 +70,7 @@ def test_delete_commit_failure_restores_files(queued_client, monkeypatch):
 
 
 def test_stale_result_reader_cannot_republish_deleted_run(queued_client):
-    from app.run_artifacts import publish
+    from app.services.run_artifacts import publish
     from app.errors import ApiProblem
     identity = terminal(queued_client)
     with SessionLocal() as reader:
@@ -96,14 +96,15 @@ def test_run_snapshot_keeps_removed_layer_and_scene_readable(queued_client):
     response = queued_client.get('/api/layers/' + layer['id'] + '/times', params=query)
     assert response.status_code == 200 and response.json() == [TIMES[0]], response.text
     assert queued_client.get('/api/objects', params={**query, 'layer_id': layer['id']}).status_code == 200
-    from app.object_queries import referenced_layer_category, ObjectFilters
+    from app.services.object_queries import referenced_layer_category
+    from app.schemas.objects import ObjectFilters
     with SessionLocal() as session:
         assert referenced_layer_category(session, ObjectFilters(**query, layer_id=layer['id'])) == 'POI'
 
 
 def test_delete_file_cleanup_failure_restores_run(queued_client, monkeypatch):
     identity = terminal(queued_client)
-    from app import run_artifacts
+    from app.services import run_artifacts
     original = run_artifacts.shutil.rmtree
     def fail(path, *args, **kwargs):
         if str(path).endswith('snapshot'):

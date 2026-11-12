@@ -1,8 +1,8 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { getLayerTimes, getTimeSeries } from '../api.ts'
-import type { MapLayer } from '../types'
-import type { MapController } from '../mapController'
-import type { TimeLayerQuery, TimeSeriesRecord } from '../temporalTypes'
+import { getLayerTimes, getTimeSeries } from '../api/api.ts'
+import type { MapLayer } from '../layers/types'
+import type { MapController } from '../map/mapController'
+import type { TimeLayerQuery, TimeSeriesRecord } from '../temporal/temporalTypes'
 import { useTimeAxis } from './useTimeAxis.ts'
 
 export function useTemporalLayers(getLayers: () => MapLayer[], getController: () => MapController | undefined) {

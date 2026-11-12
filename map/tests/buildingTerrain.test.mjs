@@ -13,7 +13,7 @@ mock.module('cesium', {
     },
   },
 })
-const { sampleBuildingTerrain } = await import('../src/buildingTerrain.ts')
+const { sampleBuildingTerrain } = await import('../src/map/buildingTerrain.ts')
 const polygon = (hole = false) =>
   new cesium.PolygonGraphics({
     hierarchy: new cesium.PolygonHierarchy(

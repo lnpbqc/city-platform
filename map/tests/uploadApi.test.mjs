@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import * as api from '../src/api.ts'
+import * as api from '../src/api/api.ts'
 
 function xhrFixture(t) {
   const requests = []

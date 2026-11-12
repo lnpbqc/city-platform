@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from app import assets
+from app.services import assets
 from app.database import FILES_DIR, STORAGE_DIR, SessionLocal
 from app.models import Asset, Layer
 from test_layers import GEO, TILESET, upload, zip_data

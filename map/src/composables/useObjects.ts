@@ -1,8 +1,8 @@
 import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { getObject, getMapObject, getObjects, selectObjects } from '../api.ts'
-import type { GeometryDocument, MapLayer, ObjectQuery, ObjectRecord } from '../types'
-import type { CampusKey } from '../campuses'
-import type { TemporalContext } from '../temporalTypes'
+import { getObject, getMapObject, getObjects, selectObjects } from '../api/api.ts'
+import type { GeometryDocument, MapLayer, ObjectQuery, ObjectRecord } from '../layers/types'
+import type { CampusKey } from '../map/campuses'
+import type { TemporalContext } from '../temporal/temporalTypes'
 
 export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalContext | null = () => null) {
   const activeLayerId = ref('')

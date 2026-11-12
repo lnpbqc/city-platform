@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
-from .contracts import ErrorEnvelope
+from app.schemas.common import ErrorEnvelope
 
 logger = logging.getLogger("city.api")
 logger.setLevel(logging.INFO)

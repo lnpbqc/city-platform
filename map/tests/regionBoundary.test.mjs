@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { boundaryLines, fetchRegionBoundary } from '../src/regionBoundary.ts'
+import { boundaryLines, fetchRegionBoundary } from '../src/map/regionBoundary.ts'
 
 const ring = [
   [113.33, 23.14],

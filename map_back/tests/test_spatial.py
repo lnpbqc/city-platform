@@ -3,7 +3,7 @@ import math
 import pytest
 from shapely.geometry import Point, shape
 
-from app.spatial import area_m2, clip_geometry, parse_bbox, parse_geometry, representative_coordinates, selection_polygon
+from app.services.spatial import area_m2, clip_geometry, parse_bbox, parse_geometry, representative_coordinates, selection_polygon
 
 
 def polygon(ring, holes=None):

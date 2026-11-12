@@ -1,6 +1,6 @@
 # API 1.0 接口说明
 
-本机后端默认地址为 `http://127.0.0.1:8000`，前端通过同源 `/api` 代理访问。完整字段、必填项和响应模型见运行中的[交互文档](http://127.0.0.1:8000/docs)与 [OpenAPI JSON](http://127.0.0.1:8000/openapi.json)。业务模型定义位于 [contracts.py](../map_back/app/contracts.py)，图层、资产及收藏定义位于 [schemas.py](../map_back/app/schemas.py)。
+本机后端默认地址为 `http://127.0.0.1:8000`，前端通过同源 `/api` 代理访问。完整字段、必填项和响应模型见运行中的[交互文档](http://127.0.0.1:8000/docs)与 [OpenAPI JSON](http://127.0.0.1:8000/openapi.json)。请求和响应模型按业务存放在 [schemas/](../map_back/app/schemas/)。
 
 ## 接口速查
 
@@ -182,7 +182,7 @@ POI 先按中文类别、有效名称和比例尺确定背景显示资格，再�
 
 `inputs_sha256` 的哈希对象为规范请求、场景输入、`scene_version/model_version/data_version`：阻断边去重排序，场景图层按 `order/layer_id` 排序，补齐参数默认值。场景 ID、版本和时间元数据及 run_id 从场景正文移除，版本另存于哈希对象；请求仍含 scene_id。运行 ID、运行时间、幂等键和 trace_id 不参与哈希。
 
-规范 JSON 采用 UTF-8、递归键排序、紧凑分隔符、不转义中文、拒绝 NaN/Infinity，SHA-256 输出小写十六进制。实现见 [run_store.py](../map_back/app/run_store.py) 和 [run_artifacts.py](../map_back/app/run_artifacts.py)。
+规范 JSON 采用 UTF-8、递归键排序、紧凑分隔符、不转义中文、拒绝 NaN/Infinity，SHA-256 输出小写十六进制。实现见 [run_store.py](../map_back/app/services/run_store.py) 和 [run_artifacts.py](../map_back/app/services/run_artifacts.py)。
 
 ### 状态、取消与恢复
 
@@ -230,7 +230,7 @@ POI 先按中文类别、有效名称和比例尺确定背景显示资格，再�
 
 已捕获场景保留的旧图层绑定可通过 `layer_id/asset_id/version` 查询对象与时序，服务核对该场景的图层及资产引用；没有对应引用的错绑仍返回 422。
 
-前端链接参数包括 `scene/v/run/t/resolution/camera/compare_t/compare_resolution`，位于 URL 查询部分，页面由 hash 指定。生成链接使用 UTC；读取无时区 t 时按北京时间解释，传给后端前转换为带时区时间。链接解析及生成见 [workspaceState.ts](../map/src/workspaceState.ts)。
+前端链接参数包括 `scene/v/run/t/resolution/camera/compare_t/compare_resolution`，位于 URL 查询部分，页面由 hash 指定。生成链接使用 UTC；读取无时区 t 时按北京时间解释，传给后端前转换为带时区时间。链接解析及生成见 [workspaceState.ts](../map/src/router/workspaceState.ts)。
 
 ## 完整 GeoJSON、显示归档与原文件保留
 

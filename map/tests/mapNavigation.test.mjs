@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readMapView, saveMapView, scaleForDistance } from '../src/mapNavigation.ts'
+import { readMapView, saveMapView, scaleForDistance } from '../src/map/mapNavigation.ts'
 
 const camera = { longitude: 113.4, latitude: 23.1, height: 850, heading: 0.8, pitch: -0.9, roll: 0, scene_mode: '2d' }
 const region = { id: 'demo-university-town', sampleKey: 'university-town', label: '大学城', longitude: 113.4, latitude: 23.1, range: 2000, pitch: -52 }

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.asset_metadata import build_metadata
+from app.services.asset_metadata import build_metadata
 
 
 def write(root, document, name="data.geojson"):

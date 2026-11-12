@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { objectIdentity, identifyFeatures } from '../src/objectIdentity.ts'
+import { objectIdentity, identifyFeatures } from '../src/map/objectIdentity.ts'
 
 test('object identity agrees with Python uuid5 including Unicode and model ordinal', async () => {
   assert.equal(await objectIdentity('asset-one', '1.0.0', 0), '2f3982d2-41e0-519a-ad92-23346a334ed2')

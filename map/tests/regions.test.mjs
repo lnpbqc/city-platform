@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { createRegionIndex, chinaRegion, campusRegions, resolveRegionTarget } from '../src/regions.ts'
+import { createRegionIndex, chinaRegion, campusRegions, resolveRegionTarget } from '../src/map/regions.ts'
 
 const catalog = JSON.parse(
   await readFile(

@@ -4,20 +4,20 @@ import { readFileSync } from 'node:fs'
 import { parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
-import * as poi from '../src/poi.ts'
-import * as tree from '../src/layerTree.ts'
+import * as poi from '../src/map/poi.ts'
+import * as tree from '../src/layers/layerTree.ts'
 
-const { descriptor } = parse(readFileSync(new URL('../src/components/LayerDialog.vue', import.meta.url), 'utf8'))
+const { descriptor } = parse(readFileSync(new URL('../src/components/layers/LayerDialog.vue', import.meta.url), 'utf8'))
 const source = ts.transpileModule(descriptor.scriptSetup.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'exports', source + '\nreturn { categoryChoice, newCategory, category, availableCategories, kind, file, error, selectFile, submit }')
 function setup() {
   const calls = [], events = []
   const dialog = create(name => {
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount() {} }
-    if (name === '../poi') return poi
-    if (name === '../layerTree') return tree
+    if (name === '../../map/poi') return poi
+    if (name === '../../layers/layerTree') return tree
     if (name === '@lucide/vue') return {}
-    if (name === '../api') return { uploadLayer: async body => { calls.push(body); return { id: 'saved' } } }
+    if (name === '../../api/api') return { uploadLayer: async body => { calls.push(body); return { id: 'saved' } } }
     throw Error(name)
   }, () => ({ categories: ['社区设施', '社区设施'] }), () => (...event) => events.push(event), {})
   return { dialog, calls, events }
@@ -36,7 +36,7 @@ test('category options reuse saved categories; only a valid submitted new name i
   assert.equal(calls[0].get('category'), '社区设施')
   assert.equal(events[0][0], 'saved')
 })
-test('GeoJSON accepts exactly 1 GiB and rejects one byte more; ZIP stays at 512 MiB', async () => {
+test('GeoJSON accepts exactly 1 GiB and rejects one byte more; ZIP is capped at 10 GiB', async () => {
   const { dialog, calls } = setup()
   const chosen = size => { const file = new File(['{}'], 'points.geojson'); Object.defineProperty(file, 'size', { value: size }); return file }
   dialog.selectFile({ target: { files: [chosen(1073741825)] } })
@@ -47,6 +47,6 @@ test('GeoJSON accepts exactly 1 GiB and rejects one byte more; ZIP stays at 512 
   await dialog.submit()
   assert.equal(calls.length, 1)
   dialog.kind.value = '3dtiles'
-  dialog.selectFile({ target: { files: [chosen(512 * 1024 * 1024 + 1)] } })
-  assert.match(dialog.error.value, /512/)
+  dialog.selectFile({ target: { files: [chosen(10 * 1024 ** 3 + 1)] } })
+  assert.match(dialog.error.value, /10240/)
 })

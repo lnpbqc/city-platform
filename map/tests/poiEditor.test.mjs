@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 import { parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
-import * as poi from '../src/poi.ts'
+import * as poi from '../src/map/poi.ts'
 
-const { descriptor } = parse(readFileSync(new URL('../src/components/PoiEditor.vue', import.meta.url), 'utf8'))
+const { descriptor } = parse(readFileSync(new URL('../src/components/map/PoiEditor.vue', import.meta.url), 'utf8'))
 const script = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
@@ -33,9 +33,9 @@ function setup({ moved = false, fail = false } = {}) {
   })
   const editor = create(name => {
     if (name === 'vue') return vue
-    if (name === '../poi') return poi
-    if (name === '../mapResource') throw Error('editing must not fetch entire layer')
-    if (name === '../api') return { ApiError, savePoiFeature: async (...args) => {
+    if (name === '../../map/poi') return poi
+    if (name === '../../map/mapResource') throw Error('editing must not fetch entire layer')
+    if (name === '../../api/api') return { ApiError, savePoiFeature: async (...args) => {
       calls.push(args)
       if (fail) throw new ApiError('请重新加载', 'POI_SNAPSHOT_CONFLICT')
       return { id: 'layer' }

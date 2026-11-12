@@ -5,14 +5,14 @@ import { parse, compileScript } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
 import * as vue from 'vue'
 import ts from 'typescript'
-import * as poi from '../src/poi.ts'
+import * as poi from '../src/map/poi.ts'
 
 function component(name) {
-  const { descriptor } = parse(readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8'))
+  const { descriptor } = parse(readFileSync(new URL(`../src/components/map/${name}.vue`, import.meta.url), 'utf8'))
   const source = compileScript(descriptor, { id: name, inlineTemplate: true }).content
   const script = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const exports = {}
-  new Function('require', 'exports', script)(name => name === 'vue' ? vue : name === '../poi' ? poi : undefined, exports)
+  new Function('require', 'exports', script)(name => name === 'vue' ? vue : name === '../../map/poi' ? poi : undefined, exports)
   return exports.default
 }
 test('POI card emphasizes place information and collapses raw and technical fields', async () => {

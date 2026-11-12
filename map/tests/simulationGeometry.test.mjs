@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { simulationGeometry } from '../src/simulationGeometry.ts'
+import { simulationGeometry } from '../src/simulation/simulationGeometry.ts'
 
 const network = { nodes: [{ id: 'S', coordinates: [113, 23] }, { id: 'A', coordinates: [114, 23] }, { id: 'T', coordinates: [114, 24] }],
   edges: [{ id: 'S-A', source: 'S', target: 'A' }, { id: 'A-T', source: 'A', target: 'T' }] }

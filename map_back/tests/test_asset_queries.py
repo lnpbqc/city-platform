@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app import assets
+from app.services import assets
 from app.database import FILES_DIR, SessionLocal
 from app.models import Asset
 from test_layers import GEO, upload

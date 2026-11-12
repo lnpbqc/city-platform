@@ -18,7 +18,7 @@ mock.module('@mapbox/vector-tile', { namedExports: { VectorTile: class {
 } } })
 
 globalThis.self = { postMessage() {} }
-await import('../src/tileViewport.worker.ts')
+await import('../src/map/tileViewport.worker.ts')
 const receive = self.onmessage
 delete globalThis.self
 

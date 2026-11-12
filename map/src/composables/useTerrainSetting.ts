@@ -1,5 +1,5 @@
 import { ref, watch } from 'vue'
-import { ionTerrainConfigured, readTerrainEnabled, saveTerrainEnabled } from '../terrainSetting.ts'
+import { ionTerrainConfigured, readTerrainEnabled, saveTerrainEnabled } from '../map/terrainSetting.ts'
 
 function storage() {
   try { return typeof window === 'undefined' ? undefined : window.localStorage } catch { return undefined }

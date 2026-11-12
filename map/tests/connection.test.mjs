@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRenderer, defineComponent } from 'vue'
-import { ApiError, getScene } from '../src/api.ts'
-import { publishApiEvent, subscribeApiEvents } from '../src/apiEvents.ts'
+import { ApiError, getScene } from '../src/api/api.ts'
+import { publishApiEvent, subscribeApiEvents } from '../src/api/apiEvents.ts'
 import { useConnection } from '../src/composables/useConnection.ts'
 
 const renderer = createRenderer({ createElement:()=>({}),createText:()=>({}),createComment:()=>({}),insert(){},remove(){},setText(){},setElementText(){},patchProp(){},parentNode:()=>null,nextSibling:()=>null })
