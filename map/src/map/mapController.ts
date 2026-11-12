@@ -34,7 +34,7 @@ import {
   LabelGraphics,
 } from 'cesium'
 import { tilesPlacement, type MapLayer, type Selection, type GeometryDocument, type ObjectRecord, type MapViewportFeature, type TilesGroundAnchor, type TilesPlacement } from '../layers/types.ts'
-import type { PolygonGraphics, TerrainProvider } from 'cesium'
+import type { Cesium3DTile, PolygonGraphics, TerrainProvider } from 'cesium'
 import type { RegionTarget } from './regions'
 import { fetchRegionBoundary, type BoundaryState } from './regionBoundary.ts'
 import { initializeBasemap } from './basemap.ts'
@@ -53,6 +53,13 @@ import { poiCategory, poiIcon, poiName, propertyText, roadLevel, roadDisplayLeve
 import { layoutPois, type PoiAnchor } from './poiLayout.ts'
 
 type Resource = GeoJsonDataSource | Cesium3DTileset
+type ModelPick = {
+  layer: MapLayer
+  tile?: Cesium3DTile
+  feature?: { target: { color: Color }; original?: Color; tint?: Color }
+  marker?: Entity
+  cancelMarker?: () => void
+}
 type Building = { polygon: PolygonGraphics; height: number }
 type BuildingPlacement = {
   items: Building[]
@@ -161,6 +168,7 @@ export function createMapController(
   let highlightLayerId: string | null = null
   let highlightIds = new Set<string>()
   let activeObjectId: string | undefined
+  let modelPick: ModelPick | undefined
   const highlightRestorers: (() => void)[] = []
   const simulationEntities: Entity[] = []
   const simulationEdges = new Map<Entity, string>()
@@ -259,6 +267,53 @@ export function createMapController(
     highlightRestorers.push(() => { properties[key] = previous })
     properties[key] = value
   }
+  function paintModelFeature(pick: ModelPick) {
+    const feature = pick.feature
+    if (!feature || Color.equals(feature.target.color, feature.tint)) return
+    feature.original = Color.clone(feature.target.color)
+    feature.target.color = Color.fromCssColorString('#f59e0b').withAlpha(pick.layer.opacity)
+    // Cesium stores feature colors as bytes, so compare against the color it actually applied.
+    feature.tint = Color.clone(feature.target.color)
+  }
+  function restoreModelFeature(pick: ModelPick) {
+    const feature = pick.feature
+    if (feature?.original && Color.equals(feature.target.color, feature.tint)) feature.target.color = feature.original
+    pick.feature = undefined
+  }
+  function clearModelPick() {
+    if (!modelPick) return
+    restoreModelFeature(modelPick)
+    modelPick.cancelMarker?.()
+    if (modelPick.marker) viewer.entities.remove(modelPick.marker)
+    modelPick = undefined
+    viewer.scene.requestRender()
+  }
+  function markModelSurface(pick: ModelPick, hit: unknown, position: Cartesian2) {
+    const scene = viewer.scene
+    // The next frame invalidates depth cached by pointer tracking at the same pixel.
+    const stop = scene.postRender.addEventListener(() => {
+      stop()
+      pick.cancelMarker = undefined
+      queueMicrotask(() => {
+        if (modelPick !== pick || scene.pick(position, 1, 1) !== hit) return
+        const previous = scene.pickTranslucentDepth
+        let surface: Cartesian3 | undefined
+        try {
+          scene.pickTranslucentDepth = true
+          surface = scene.pickPosition(position)
+        } finally {
+          scene.pickTranslucentDepth = previous
+        }
+        if (!surface) return
+        pick.marker = viewer.entities.add({
+          position: surface,
+          point: { pixelSize: 10, color: Color.fromCssColorString('#f59e0b'), outlineColor: Color.WHITE, outlineWidth: 2 },
+        })
+        scene.requestRender()
+      })
+    })
+    pick.cancelMarker = stop
+  }
   function entityObjectId(entry: Entry | undefined, entity: Entity) {
     if (!entry?.objectIds) return undefined
     const id = entity.id.split('_')[0]!
@@ -309,8 +364,6 @@ export function createMapController(
         const sources = entry.sources?.get(id) ?? [id]
         if (sources.some(source => highlightIds.has(source))) paintEntity(entity, activeObjectId && sources.includes(activeObjectId) ? '#f59e0b' : '#22c3ee', layer.opacity)
       }
-    } else if (resource && entry.objectIds?.some(id => highlightIds.has(id))) {
-      changeHighlight(resource, 'style', new Cesium3DTileStyle({ color: `color('${activeObjectId ? '#f59e0b' : '#22c3ee'}', ${layer.opacity})` }))
     }
     viewer.scene.requestRender()
   }
@@ -344,6 +397,7 @@ export function createMapController(
     }
   }
   function highlightObjects(layerId: string | null, ids: string[], activeId?: string) {
+    clearModelPick()
     roadHighlightsAbort?.abort()
     if (!layerId) { pickVersion++; roadPickAbort?.abort() }
     if (selectedOverlayObject && (selectedOverlayLayer !== layerId || selectedOverlayObject.object_id !== activeId)) clearSelectedOverlay()
@@ -869,11 +923,17 @@ export function createMapController(
     const current = () => terrainEnabled && entryCurrent(layer, entry) && placement.revision === revision
     const point = anchor ? Cartographic.fromDegrees(anchor.longitude, anchor.latitude) : placement.center
     const apply = (delta: number) => {
+      let matrix = placement.original
       if (point && delta) {
         const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(point)
         const translation = Matrix4.fromTranslation(Cartesian3.multiplyByScalar(up, delta, up))
-        tileset.modelMatrix = Matrix4.multiply(translation, placement.original, translation)
-      } else tileset.modelMatrix = placement.original
+        matrix = Matrix4.multiply(translation, placement.original, translation)
+      }
+      if (modelPick?.layer === layer && modelPick.marker && !Matrix4.equals(tileset.modelMatrix, matrix)) {
+        viewer.entities.remove(modelPick.marker)
+        modelPick.marker = undefined
+      }
+      tileset.modelMatrix = matrix
       viewer.scene.requestRender()
     }
     if (!anchor) {
@@ -996,6 +1056,7 @@ export function createMapController(
 
   function appearance(layer: MapLayer) {
     const viewportEntry = entries.get(layer)
+    if (!layer.visible && modelPick?.layer === layer) { highlightObjects(null, []); onPick(null) }
     if (viewportEntry?.viewport && viewportEntry.viewportVisible !== layer.visible) {
       const wasVisible = viewportEntry.viewportVisible
       viewportEntry.viewportVisible = layer.visible
@@ -1387,11 +1448,16 @@ export function createMapController(
           if (!current() || layer.status === 'error') return
           layer.status = 'ready'; layer.progress = 100; layer.loadPhase = '当前视野内容已就绪'
         }))
-        entry.cleanup.push(pending.tileUnload.addEventListener(() => {
-          if (current() && highlightLayerId === layer.id && !entry.objectIds?.length) {
-            highlightObjects(null, [])
-            onPick(null)
-          }
+        entry.cleanup.push(pending.tileVisible.addEventListener((tile: Cesium3DTile) => {
+          if (modelPick?.layer === layer && modelPick.tile === tile) paintModelFeature(modelPick)
+        }), pending.tileUnload.addEventListener((tile: Cesium3DTile) => {
+          const pick = modelPick
+          if (!pick || pick.layer !== layer || pick.tile !== tile) return
+          restoreModelFeature(pick)
+          // The feature is still live here; remove the marker after Cesium finishes traversing the tileset.
+          queueMicrotask(() => {
+            if (modelPick === pick) { highlightObjects(null, []); onPick(null) }
+          })
         }))
         layer.loadPhase = '正在加载当前视野瓦片'
       }
@@ -1505,6 +1571,7 @@ export function createMapController(
       return
     }
     const picked = viewer.scene.pick(event.position)
+    if (modelPick?.marker && picked?.id === modelPick.marker) return
     if (picked?.id && [...replayEntities.values()].some(item => item.entity === picked.id)) return
     if (picked?.id && simulationEntities.includes(picked.id)) {
       let identity = simulationEdges.get(picked.id)
@@ -1606,10 +1673,16 @@ export function createMapController(
         for (const id of picked.getPropertyIds())
           properties[id] = picked.getProperty(id)
       const objectId = layer ? entries.get(layer)?.objectIds?.[0] : undefined
-      if (layer && objectId) highlightObjects(layer.id, [objectId], objectId)
-      else {
-        highlightObjects(layer?.id ?? null, [])
-        if ('color' in picked) changeHighlight(picked, 'color', Color.fromCssColorString('#f59e0b'))
+      highlightObjects(layer?.id ?? null, [])
+      if (layer) {
+        modelPick = { layer, tile: picked.content?.tile }
+        if (picked.color instanceof Color) {
+          modelPick.feature = { target: picked }
+          paintModelFeature(modelPick)
+        } else if (viewer.scene.pickPositionSupported) {
+          markModelSurface(modelPick, picked, new Cartesian2(event.position.x, event.position.y))
+        }
+        viewer.scene.requestRender()
       }
       onPick({
         title: '三维对象',

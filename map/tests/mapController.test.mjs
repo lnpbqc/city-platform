@@ -1,7 +1,7 @@
 import { beforeEach, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Quaternion } from 'cesium'
+import { Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Color, Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Quaternion } from 'cesium'
 
 const deferred = () => {
   let resolve
@@ -67,6 +67,7 @@ class Cesium3DTileset {
   tileFailed = event()
   loadProgress = event()
   initialTilesLoaded = event()
+  tileVisible = event()
   tileUnload = event()
   boundingSphere = { center: { longitude: 113, latitude: 23, height: 0 }, radius: 500 }
   modelMatrix = { height: 5 }
@@ -76,11 +77,6 @@ class Cesium3DTileset {
   destroy() {
     this.destroyed = true
   }
-}
-const color = {
-  withAlpha(alpha) {
-    return { ...color, alpha }
-  },
 }
 class Viewer {
   clock = { currentTime: 0 }
@@ -99,6 +95,7 @@ class Viewer {
     morphTo2D: () => { this.scene.mode = 2 },
     morphComplete: event(),
     postUpdate: event(),
+    postRender: event(),
     backgroundColor: null,
     renderError: { addEventListener() {} },
     screenSpaceCameraController: { enableInputs: true },
@@ -232,6 +229,7 @@ mock.module('cesium', {
     Quaternion,
     Matrix4: {
       clone: (matrix) => ({ ...matrix }),
+      equals: (left, right) => left.height === right.height,
       getTranslation: RootMatrix.getTranslation,
       fromTranslation: (height) => ({ height }),
       multiply: (translation, original, result) => Object.assign(result, { height: translation.height + original.height }),
@@ -249,7 +247,7 @@ mock.module('cesium', {
       static distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) }
       static fromDegrees(longitude, latitude, height) { return { longitude, latitude, height } }
     },
-    Color: { fromCssColorString: () => color, WHITE: color },
+    Color,
     GeoJsonDataSource,
     Cesium3DTileset,
     Cesium3DTileStyle: Noop,
@@ -1686,7 +1684,7 @@ test('multipart features share backend ID, highlight all parts and restore curre
   controller.destroy()
 })
 
-test('semantic-free 3D picking links to the model resource without inventing building properties', async (t) => {
+test('merged 3D model picking marks only the clicked surface and keeps the asset index', async (t) => {
   const { controller, layer, picks } = setup('3dtiles')
   Object.assign(layer, { id: 'model-layer', name: '几何模型', asset_id: 'asset-one', asset_version: '1.0.0', object_count: 1 })
   t.mock.method(globalThis, 'fetch', async () => new Response('{"status":"ready","entry_url":"/model/tileset.json"}'))
@@ -1695,14 +1693,105 @@ test('semantic-free 3D picking links to the model resource without inventing bui
   tileRequest.resolve(resource)
   await controller.load(layer)
   const previous = resource.style
-  viewer.scene.pick = () => ({ content: { tileset: resource }, getPropertyIds: () => [] })
+  const tile = {}
+  const model = { content: { tileset: resource, tile } }
+  viewer.scene.pick = () => model
+  viewer.scene.pickPositionSupported = true
+  const surface = new Vector(100, 200, 300)
+  viewer.scene.pickTranslucentDepth = false
+  let cachedDepth = true
+  viewer.scene.pickPosition = () => viewer.scene.pickTranslucentDepth && !cachedDepth ? surface : new Vector(1, 2, 3)
+  const rendered = async () => { cachedDepth = false; viewer.scene.postRender.fire(); await Promise.resolve() }
   click({ position: new Cartesian2(10, 10) })
+  await rendered()
   assert.equal(picks.at(-1).objectId, '0bdeee8a-0109-5520-8e8c-2e0d09a945d8')
   assert.deepEqual(picks.at(-1).properties, {})
   assert.equal(picks.at(-1).resourceType, '3dtiles')
-  assert.notEqual(resource.style, previous)
-  controller.highlightObjects(null, [])
   assert.equal(resource.style, previous)
+  assert.deepEqual(viewer.entities.values.map(entity => entity.position), [surface])
+  assert.equal(viewer.scene.pickTranslucentDepth, false)
+  const marker = viewer.entities.values[0]
+  resource.tileUnload.fire({})
+  assert.equal(viewer.entities.values[0], marker, 'unrelated tiles leave the current marker alone')
+  viewer.scene.pick = () => ({ id: marker })
+  click({ position: new Cartesian2(10, 10) })
+  assert.equal(viewer.entities.values[0], marker, 'the marker does not replace the picked model')
+  controller.highlightObjects(null, [])
+  assert.equal(viewer.entities.values.length, 0)
+  viewer.scene.pick = () => model
+  viewer.scene.pickPosition = () => undefined
+  click({ position: new Cartesian2(10, 10) })
+  await rendered()
+  assert.equal(picks.at(-1).resourceType, '3dtiles')
+  assert.equal(viewer.entities.values.length, 0)
+  viewer.scene.pickPosition = () => surface
+  viewer.scene.pick = (_position, width) => width === 1 ? undefined : model
+  click({ position: new Cartesian2(10, 10) })
+  await rendered()
+  assert.equal(picks.at(-1).resourceType, '3dtiles')
+  assert.equal(viewer.entities.values.length, 0, 'a nearby hit must not mark an unrelated surface under the cursor')
+  viewer.scene.pick = () => model
+  click({ position: new Cartesian2(10, 10) })
+  await rendered()
+  resource.tileUnload.fire(tile)
+  await Promise.resolve()
+  assert.equal(viewer.entities.values.length, 0)
+  assert.equal(picks.at(-1), null)
+  click({ position: new Cartesian2(10, 10) })
+  controller.highlightObjects(null, [])
+  await rendered()
+  assert.equal(viewer.entities.values.length, 0, 'a cleared selection must not add a marker after rendering')
+  click({ position: new Cartesian2(10, 10) })
+  await rendered()
+  assert.equal(viewer.entities.values.length, 1)
+  await controller.setTilesPlacement(layer, { tiles_height_offset_m: 2 })
+  assert.equal(viewer.entities.values.length, 0, 'a marker at the old elevation is no longer on the model')
+  assert.equal(picks.at(-1).resourceType, '3dtiles')
+  controller.destroy()
+})
+
+test('3D picking highlights only the current feature in an indexed tileset', async t => {
+  const { controller, layer, picks } = setup('3dtiles')
+  Object.assign(layer, { id: 'model-layer', asset_id: 'asset-one', asset_version: '1.0.0', object_count: 1 })
+  t.mock.method(globalThis, 'fetch', async () => new Response('{"status":"ready","entry_url":"/model/tileset.json"}'))
+  const resource = new Cesium3DTileset()
+  tileRequest.resolve(resource)
+  await controller.load(layer)
+  const initialStyle = resource.style
+  const firstTile = {}, secondTile = {}
+  const feature = (tile, name, original) => ({
+    content: { tileset: resource, tile }, color: original, getPropertyIds: () => ['name'], getProperty: () => name,
+  })
+  const first = feature(firstTile, '第一栋', Color.WHITE)
+  const second = feature(secondTile, '第二栋', Color.BLUE)
+  const tint = Color.fromCssColorString('#f59e0b')
+  viewer.scene.pick = () => first
+  click({ position: new Cartesian2(10, 10) })
+  assert.deepEqual(first.color, tint)
+  assert.deepEqual(second.color, Color.BLUE)
+  assert.equal(resource.style, initialStyle)
+  const id = picks.at(-1).objectId
+  viewer.scene.pick = () => second
+  click({ position: new Cartesian2(10, 10) })
+  assert.equal(picks.at(-1).objectId, id, 'detail still uses the shared asset index')
+  assert.equal(picks.at(-1).properties.name, '第二栋')
+  assert.deepEqual(first.color, Color.WHITE)
+  assert.deepEqual(second.color, tint)
+  assert.equal(resource.style, initialStyle)
+  resource.tileUnload.fire(firstTile)
+  assert.deepEqual(second.color, tint)
+  layer.opacity = 0.4
+  controller.appearance(layer)
+  const restyled = Color.WHITE.withAlpha(0.4)
+  first.color = restyled
+  second.color = restyled
+  resource.tileVisible.fire(secondTile)
+  assert.deepEqual(first.color, restyled)
+  assert.deepEqual(second.color, tint.withAlpha(0.4))
+  layer.visible = false
+  controller.appearance(layer)
+  assert.deepEqual(second.color, restyled)
+  assert.equal(picks.at(-1), null)
   controller.destroy()
 })
 
@@ -1712,13 +1801,15 @@ test('unindexed tile highlighting restores its original color before tile conten
   const resource = new Cesium3DTileset()
   tileRequest.resolve(resource)
   await controller.load(layer)
-  const original = { original: true }
-  const feature = { tileset: resource, color: original, getPropertyIds: () => [] }
+  const tile = {}
+  const original = Color.BLUE
+  const feature = { content: { tileset: resource, tile }, color: original, getPropertyIds: () => [] }
   viewer.scene.pick = () => feature
   click({ position: new Cartesian2(10, 10) })
   assert.notEqual(feature.color, original)
-  resource.tileUnload.fire()
-  assert.equal(feature.color, original)
+  resource.tileUnload.fire(tile)
+  assert.deepEqual(feature.color, original)
+  await Promise.resolve()
   assert.equal(picks.at(-1), null)
   controller.destroy()
 })

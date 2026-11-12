@@ -12,7 +12,7 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
-  return { onMapSelection, inspectedSelection, onMapReady, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError }
+  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
@@ -28,9 +28,10 @@ function setup(options = {}) {
   objects.areaIds.value = []
   for (const key of ['refresh', 'setLayer', 'setPage', 'applyFilters', 'select', 'showPicked', 'clearArea', 'clearSelection']) objects[key] = () => {}
   objects.selectArea = value => queries.push({ layer: objects.activeLayerId.value, geometry: value })
+  options.objectActions?.(objects)
   const controller = {
     cancellations: 0,
-    initialize() {}, highlightObjects() {}, setMode() {}, resume() {},
+    initialize() {}, highlights: [], highlightObjects(...args) { this.highlights.push(args) }, objectPage() {}, setMode() {}, resume() {},
     cancelAreaSelection() { this.cancellations++; this.cancelled?.() },
     beginAreaSelection(mode, callback, cancelled) { this.callback = callback; this.cancelled = cancelled },
     getCamera() { return this.camera ?? { longitude: 113, latitude: 23, height: 800, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' } },
@@ -225,6 +226,41 @@ test('failed or superseded scene preflight cannot replace the current map', asyn
   assert.equal(ctx.panel.viewLayers.value, ctx.props.layers)
   assert.deepEqual(ctx.controller.removed, [])
   ctx.cleanup()
+})
+
+test('the workspace keeps map-picked 3D feedback until leaving its detail card', async t => {
+  const ctx = setup({ objectActions(objects) {
+    objects.showPicked = id => { objects.selectedId.value = id }
+    objects.clearSelection = () => { objects.selectedId.value = '' }
+  } })
+  t.after(() => ctx.cleanup())
+  const pick = { title: '三维对象', layerId: 'a', layerName: '模型', properties: {}, resourceType: '3dtiles' }
+  await ctx.panel.onMapSelection({ ...pick, objectId: 'asset-object' })
+  await vue.nextTick()
+  assert.equal(ctx.objects.selectedId.value, 'asset-object')
+  assert.deepEqual(ctx.controller.highlights, [], 'the asset ID must not replace the map pick')
+  await ctx.panel.onMapSelection(pick)
+  await vue.nextTick()
+  assert.deepEqual(ctx.controller.highlights, [])
+  ctx.panel.clearObjectSelection()
+  await vue.nextTick()
+  assert.deepEqual(ctx.controller.highlights.at(-1), ['a', [], undefined], 'return clears even an unindexed map pick')
+})
+
+test('an older unindexed 3D pick cannot clear a newer indexed model detail', async t => {
+  let finish
+  const ctx = setup({ objectActions(objects) {
+    objects.setLayer = id => { objects.activeLayerId.value = id; return new Promise(resolve => { finish = resolve }) }
+    objects.showPicked = (id, layer) => { objects.activeLayerId.value = layer; objects.selectedId.value = id }
+    objects.clearSelection = () => { objects.selectedId.value = '' }
+  } })
+  t.after(() => ctx.cleanup())
+  const model = { title: '三维对象', layerName: '模型', properties: {}, resourceType: '3dtiles' }
+  const older = ctx.panel.onMapSelection({ ...model, layerId: 'b' })
+  await ctx.panel.onMapSelection({ ...model, layerId: 'a', objectId: 'new-model' })
+  finish()
+  await older
+  assert.equal(ctx.objects.selectedId.value, 'new-model')
 })
 
 test('raw picked properties disappear when the pinned resource changes or is removed', async t => {

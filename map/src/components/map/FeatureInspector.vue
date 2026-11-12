@@ -8,6 +8,12 @@ const props = defineProps<{ selection: Selection | null; embedded?: boolean; cat
 const emit = defineEmits<{ close: [] }>()
 const object = computed(() => props.selection?.object)
 const sourceLabels: Record<string, string> = { geometry_model: '几何模型', OSM: 'OpenStreetMap', manual: '人工', synthetic: '合成演示', dataset: '数据集' }
+const isModel = computed(() => props.selection?.resourceType === '3dtiles')
+const modelNameKeys = ['name', '名称', '名稱', 'name:zh']
+const modelProperties = computed(() => props.selection?.properties ?? {})
+const modelTitle = computed(() => propertyText(modelProperties.value, ...modelNameKeys) || object.value?.name || props.selection?.title || '三维对象')
+const modelFields = computed(() => Object.entries(modelProperties.value).filter(([key, value]) =>
+  !modelNameKeys.includes(key) || typeof value !== 'string' || value.trim() !== modelTitle.value))
 const properties = computed(() => object.value?.properties && Object.keys(object.value.properties).length ? object.value.properties : props.selection?.properties ?? {})
 const isPoi = computed(() => props.category === 'POI')
 const isRoad = computed(() => !isPoi.value && (props.category === '道路' || object.value?.type === 'road' || !!propertyText(properties.value, 'highway')))
@@ -36,21 +42,45 @@ function valueText(value: unknown) {
       </button>
     </header>
     <span v-if="!embedded" class="inspector-type">对象属性</span>
-    <h2>{{ isPoi || isRoad ? object?.name || propertyText(properties, 'name', '名称', '名稱', 'name:zh') || selection.title : object?.name ?? selection.title }}</h2>
-    <p class="inspector-source">{{ selection.layerName }}</p>
+    <h2>{{ isModel ? modelTitle : isPoi || isRoad ? object?.name || propertyText(properties, 'name', '名称', '名稱', 'name:zh') || selection.title : object?.name ?? selection.title }}</h2>
+    <template v-if="isModel">
+      <dl v-if="modelFields.length" aria-label="模型属性">
+        <div v-for="[key, value] in modelFields" :key="key">
+          <dt>{{ key }}</dt><dd>{{ valueText(value) }}</dd>
+        </div>
+      </dl>
+      <p v-if="!Object.keys(modelProperties).length" class="no-properties">该瓦片未携带语义属性，来源：几何模型</p>
+      <dl class="object-fields">
+        <template v-if="object">
+          <div><dt>类型</dt><dd>{{ object.type }}</dd></div>
+          <div><dt>高度</dt><dd>{{ object.height_m == null ? '未提供' : `${object.height_m} m` }}</dd></div>
+        </template>
+        <div><dt>所属图层</dt><dd>{{ selection.layerName }}</dd></div>
+        <template v-if="object">
+          <div><dt>来源</dt><dd>{{ sourceLabels[object.semantic_source] ?? object.semantic_source }}</dd></div>
+          <div><dt>等级</dt><dd>{{ object.level ?? '未提供' }}</dd></div>
+          <div><dt>置信度</dt><dd>{{ object.confidence == null ? '未提供' : `${object.confidence * 100}%` }}</dd></div>
+          <div><dt>WGS84坐标</dt><dd>{{ object.coordinates?.map(value => value.toFixed(6)).join(', ') ?? '未提供' }}</dd></div>
+          <div><dt>资产版本</dt><dd>{{ object.asset.asset_id }}@{{ object.asset.version }}</dd></div>
+          <div><dt>原始几何</dt><dd>{{ object.geometry?.type ?? '未提供' }}</dd></div>
+          <div><dt>object_id</dt><dd>{{ object.object_id }}</dd></div>
+        </template>
+      </dl>
+    </template>
+    <p v-else class="inspector-source">{{ selection.layerName }}</p>
     <p v-if="selection.detailLoading" role="status">正在读取原始对象详情…</p>
     <p v-if="selection.detailError" class="detail-error" role="alert">{{ selection.detailError }}</p>
-    <section v-if="object?.temporal" class="temporal-value" aria-label="当前时次属性">
+    <section v-if="!isModel && object?.temporal" class="temporal-value" aria-label="当前时次属性">
       <span>{{ timeLabel(object.temporal.time, object.temporal.resolution) }} · {{ object.temporal.resolution === 'day' ? '日均' : '小时' }} · 北京时间</span>
       <strong>{{ object.temporal.missing ? '该时次缺测 / 未覆盖' : `${object.temporal.value?.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} ${object.temporal.unit}` }}</strong>
     </section>
-    <dl v-if="isPoi || isRoad" class="object-fields">
+    <dl v-if="!isModel && (isPoi || isRoad)" class="object-fields">
       <div v-if="isPoi"><dt>类别</dt><dd>{{ poiCategory(properties) }}</dd></div>
       <div v-if="isPoi"><dt>地址</dt><dd>{{ poiAddress(properties) || '未提供' }}</dd></div>
       <div v-if="isRoad"><dt>道路等级</dt><dd>{{ roadLevel(properties) || object?.level || '未提供' }}</dd></div>
       <div><dt>来源</dt><dd>{{ featureSource || '未提供' }}</dd></div>
     </dl>
-    <dl v-if="object" class="object-fields">
+    <dl v-if="!isModel && object" class="object-fields">
       <div><dt>object_id</dt><dd>{{ object.object_id }}</dd></div>
       <div><dt>类型</dt><dd>{{ object.type }}</dd></div>
       <div><dt>名称</dt><dd>{{ object.name ?? '未提供' }}</dd></div>
@@ -62,10 +92,10 @@ function valueText(value: unknown) {
       <div><dt>资产版本</dt><dd>{{ object.asset.asset_id }}@{{ object.asset.version }}</dd></div>
       <div><dt>原始几何</dt><dd>{{ object.geometry?.type ?? '未提供' }}</dd></div>
     </dl>
-    <p v-if="(object?.type === 'model' || selection.resourceType === '3dtiles') && !Object.keys(properties).length" class="no-properties">该瓦片未携带语义属性，来源：几何模型</p>
-    <p v-else-if="!Object.keys(properties).length && !selection.detailLoading" class="no-properties">该对象未提供语义属性。</p>
+    <p v-if="!isModel && object?.type === 'model' && !Object.keys(properties).length" class="no-properties">该瓦片未携带语义属性，来源：几何模型</p>
+    <p v-else-if="!isModel && !Object.keys(properties).length && !selection.detailLoading" class="no-properties">该对象未提供语义属性。</p>
     <p v-if="!selection.objectId && !selection.detailLoading" class="no-properties">该资源尚无本地对象索引，以下为原始可读属性。</p>
-    <dl v-if="Object.keys(properties).length">
+    <dl v-if="!isModel && Object.keys(properties).length">
       <div v-for="(value, key) in properties" :key="key">
         <dt>{{ key }}</dt>
         <dd>{{ valueText(value) }}</dd>

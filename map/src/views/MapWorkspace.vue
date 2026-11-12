@@ -117,11 +117,12 @@ const inspectedSelection = computed<Selection | null>(() => {
   const layer = queryLayers.value.find(layer => layer.id === (raw?.layerId || activeLayerId.value))
   if (!layer || raw?.asset && (raw.asset.asset_id !== layer.asset_id || raw.asset.version !== layer.asset_version)) return null
   const object = objectDetail.value
+  const resourceType = raw?.resourceType ?? layer.type
   return {
-    title: object?.name ?? raw?.title ?? '对象详情',
+    title: object?.name ?? raw?.title ?? (resourceType === '3dtiles' ? '三维对象' : '对象详情'),
     layerName: queryLayers.value.find(layer => layer.id === activeLayerId.value)?.name ?? raw?.layerName ?? '图层未提供',
     properties: raw?.properties ?? object?.properties ?? {},
-    resourceType: raw?.resourceType ?? queryLayers.value.find(layer => layer.id === activeLayerId.value)?.type,
+    resourceType,
     objectId: selectedId.value || raw?.objectId,
     layerId: activeLayerId.value || raw?.layerId,
     asset: object?.asset ?? raw?.asset,
@@ -246,8 +247,8 @@ async function onMapSelection(value: Selection | null) {
     const page = controller?.objectPage(value.objectId, value.layerId, objectPageSize.value) ?? 1
     await showPicked(value.objectId, value.layerId, page)
   } else {
-    if (value.layerId) await setObjectLayer(value.layerId)
     clearSelection()
+    if (value.layerId) await setObjectLayer(value.layerId)
   }
 }
 async function onListSelection(item: ObjectRecord) {
@@ -286,7 +287,9 @@ function onEscape(event: KeyboardEvent) {
 function onVisibility() { if (document.hidden) temporal.pause() }
 onMounted(() => { window.addEventListener('keydown', onEscape); document.addEventListener('visibilitychange', onVisibility) })
 onBeforeUnmount(() => { closeNearby(); ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
-watch([objectsOpen, activeLayerId, selectedId, areaIds, () => props.active], () => {
+watch([objectsOpen, activeLayerId, selectedId, areaIds, () => selection.value?.resourceType === '3dtiles', () => props.active], () => {
+  // The indexed ID identifies the whole asset; the controller owns the actual map pick.
+  if (selection.value?.resourceType === '3dtiles' && objectsOpen.value) return
   if (selection.value && !selection.value.objectId && objectsOpen.value) return
   if (!objectsOpen.value || !props.active) { controller?.highlightObjects(null, []); return }
   const ids = areaGeometry.value ? areaIds.value : selectedId.value ? [selectedId.value] : []

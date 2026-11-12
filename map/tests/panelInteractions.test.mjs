@@ -79,6 +79,22 @@ test('map-picked raw models show details and resource invalidation returns to re
   assert.notEqual(ctx.find(cls('object-results')).style.display, 'none')
 })
 
+test('3D model details put picked properties before asset metadata, even after loading', async t => {
+  const raw = { title: '三维对象', layerName: '校园模型', resourceType: '3dtiles', objectId: 'asset-object',
+    properties: { 名称: '教学楼 A', 用途: '教学', 层数: 4 }, detailLoading: true }
+  const ctx = mount('ObjectPanel', { layers: [], items: [], total: 0, page: 1, pageSize: 20, layerId: '', q: '', type: '', selectedId: '', selection: raw, loading: false, error: '', area: false, drawing: null, progress: null })
+  t.after(ctx.close)
+  const detail = () => text(ctx.find(cls('object-details')))
+  assert.match(detail(), /教学楼 A.*用途教学.*层数4.*校园模型/)
+  ctx.props.selection = { ...raw, detailLoading: false, object: { name: '整个校园', object_id: 'asset-object',
+    type: 'model', height_m: 18, semantic_source: 'geometry_model', coordinates: [113, 23],
+    asset: { asset_id: 'campus', version: '1' }, properties: { 名称: '整个校园', 备注: '资产属性' } } }
+  await tick()
+  assert.match(detail(), /教学楼 A.*用途教学.*层数4.*类型model.*高度18 m.*所属图层校园模型.*来源几何模型.*等级.*置信度.*WGS84坐标.*资产版本campus@1.*原始几何.*object_idasset-object/)
+  assert.equal(detail().match(/教学楼 A/g)?.length, 1)
+  assert.doesNotMatch(detail(), /整个校园|资产属性/)
+})
+
 const timeProps = () => ({ time: '2026-10-25T00:00:00Z', resolution: 'hour', rate: 2, playing: true, maximum: 1, position: 0, times: ['2026-10-25T00:00:00Z', '2026-10-25T01:00:00Z'], loading: false, metadataLoading: false, allMissing: false, counts: [{ id: 'a', name: '积水', total: 3, missing: 0 }], errors: {} })
 test('time settings collapse without resetting playback; core controls and settings emit their values', async t => {
   const ctx = mount('TimeAxis', timeProps(), { onPause() {}, onStep() {}, onSeek() {}, 'onUpdate:resolution'() {}, 'onUpdate:rate'() {}, onSelect() {} })
