@@ -6,6 +6,9 @@ import type { BoundaryState } from '../../map/regionBoundary'
 import type { NavigationReading } from '../../map/mapNavigation'
 import { useTerrainSetting } from '../../composables/useTerrainSetting'
 import type { MapPoint } from '../../map/mapController'
+import type { WeatherEffect as WeatherEffectKind } from '../../map/weather'
+import WeatherEffect from './WeatherEffect.vue'
+const props = defineProps<{ weatherEffect?: WeatherEffectKind; trackWeather?: boolean }>()
 const emit = defineEmits<{
   ready: [controller: MapController]
   selection: [value: Selection | null]
@@ -14,10 +17,13 @@ const emit = defineEmits<{
   boundary: [state: BoundaryState]
   navigation: [state: NavigationReading, settled: boolean]
   ground: [point: MapPoint]
+  cameraMove: []
+  weatherResize: []
 }>()
 const container = ref<HTMLElement | null>(null)
 const { terrainEnabled } = useTerrainSetting()
 let controller: MapController | undefined
+let weatherResize: ResizeObserver | undefined
 watch(terrainEnabled, (enabled) => { void controller?.setTerrain(enabled) })
 onMounted(() => {
   try {
@@ -27,8 +33,13 @@ onMounted(() => {
       (message) => emit('notice', message),
       (state) => emit('boundary', state),
       (state, settled) => emit('navigation', state, settled),
-      { terrain: terrainEnabled.value, onGroundClick: point => emit('ground', point) },
+      { terrain: terrainEnabled.value, onGroundClick: point => emit('ground', point),
+        onCameraMove: props.trackWeather ? () => emit('cameraMove') : undefined },
     )
+    if (props.trackWeather) {
+      weatherResize = new ResizeObserver(() => emit('weatherResize'))
+      weatherResize.observe(container.value!)
+    }
     emit('ready', controller)
   } catch (error) {
     emit(
@@ -37,18 +48,23 @@ onMounted(() => {
     )
   }
 })
-onBeforeUnmount(() => controller?.destroy())
+onBeforeUnmount(() => { weatherResize?.disconnect(); controller?.destroy() })
 </script>
 
 <template>
-  <div ref="container" class="map-canvas" aria-label="Cesium 三维地图"></div>
+  <div class="map-canvas">
+    <div ref="container" class="map-engine" aria-label="Cesium 地图"></div>
+    <WeatherEffect :effect="weatherEffect ?? 'none'" />
+  </div>
 </template>
 
 <style scoped>
 .map-canvas {
   position: absolute;
   inset: 64px 0 0;
+  isolation: isolate;
 }
+.map-engine { position: absolute; inset: 0; }
 :deep(.cesium-viewer-bottom) {
   left: auto !important;
   right: 6px;

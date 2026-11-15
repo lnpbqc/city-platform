@@ -5,6 +5,8 @@ import { parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
 import * as poi from '../src/map/poi.ts'
+import { useWeatherView } from '../src/composables/useWeatherView.ts'
+import { linkedCameras } from '../src/map/linkedCameras.ts'
 
 const source = await readFile(new URL('../src/views/MapWorkspace.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
@@ -12,7 +14,7 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
-  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError }
+  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, comparisonReady, onComparisonNavigation, cameraMoving, shownWeather, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
@@ -35,6 +37,7 @@ function setup(options = {}) {
     cancelAreaSelection() { this.cancellations++; this.cancelled?.() },
     beginAreaSelection(mode, callback, cancelled) { this.callback = callback; this.cancelled = cancelled },
     getCamera() { return this.camera ?? { longitude: 113, latitude: 23, height: 800, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' } },
+    getWeatherPoint() { return options.weatherPoint?.() ?? null },
     setCamera(camera) { this.camera = camera },
     removed: [], remove(layer) { this.removed.push(layer.id); layer.attached = false },
     async load(layer) { layer.attached = true; layer.status = 'ready' }, appearance() {}, syncOrder() {},
@@ -44,8 +47,9 @@ function setup(options = {}) {
     if (name === '../api/api') return { getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: hook => hooks.push(hook) }
     if (name === '../composables/useObjects') return { useObjects: () => objects }
+    if (name === '../composables/useWeatherView') return { useWeatherView }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
-    if (name === '../map/linkedCameras') return { linkedCameras: () => () => {} }
+    if (name === '../map/linkedCameras') return { linkedCameras }
     if (name === '../map/poi') return poi
     if (name === '../simulation/sceneLayers') return {
       captureLayers: layers => layers.map(layer => ({ layer_id: layer.id, asset: { asset_id: layer.asset_id, version: layer.asset_version }, map_attached: layer.attached, map_visible: layer.visible, map_opacity: layer.opacity })),
@@ -226,6 +230,41 @@ test('failed or superseded scene preflight cannot replace the current map', asyn
   assert.equal(ctx.panel.viewLayers.value, ctx.props.layers)
   assert.deepEqual(ctx.controller.removed, [])
   ctx.cleanup()
+})
+
+test('comparison waits for the driving camera to settle and queries weather once', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_800_000_000_000 })
+  const requests = []
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests.push(url)
+    return { ok: true, json: async () => ({ latitude: 23, longitude: 114, code: 71, is_day: true, valid_at: '2026-01-01T00:00:00Z' }) }
+  })
+  let point = { latitude: 23, longitude: 113 }
+  const ctx = setup({ weatherPoint: () => point })
+  t.after(() => ctx.cleanup())
+  ctx.controller.setCamera = camera => {
+    ctx.controller.camera = camera
+    ctx.panel.onNavigation({ camera }, true)
+  }
+  const initial = ctx.controller.getCamera()
+  ctx.panel.onNavigation({ camera: initial }, true)
+  ctx.panel.toggleComparison()
+  let right = initial
+  ctx.panel.comparisonReady({ getCamera: () => right, setCamera: camera => {
+    right = camera
+    ctx.panel.onComparisonNavigation({ camera }, true)
+  } })
+  ctx.panel.cameraMoving('right')
+  point = { latitude: 23, longitude: 114 }
+  right = { ...initial, longitude: 114 }
+  ctx.panel.onComparisonNavigation({ camera: right }, false)
+  t.mock.timers.tick(800)
+  assert.deepEqual(requests, [])
+  ctx.panel.onComparisonNavigation({ camera: right }, true)
+  t.mock.timers.tick(600)
+  await new Promise(setImmediate)
+  assert.deepEqual(requests, ['/api/weather/current?lat=23&lon=114'])
+  assert.equal(ctx.panel.shownWeather.value.effect, 'snow')
 })
 
 test('the workspace keeps map-picked 3D feedback until leaving its detail card', async t => {

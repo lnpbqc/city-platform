@@ -128,7 +128,9 @@ class RunQueue:
                 if record.model_version != MODEL_VERSION:
                     raise ApiProblem(409, "MODEL_VERSION_UNAVAILABLE", "保存的模型版本当前不可执行")
                 network = session.get(NetworkVersion, (record.network_id, record.network_version))
-                payload = canonical_bytes({"request": record.input_snapshot["request"], "network": network.document})
+                request = dict(record.input_snapshot["request"])
+                request.pop("weather", None)
+                payload = canonical_bytes({"request": request, "network": network.document})
                 with self._process_guard:
                     process = spawn_computation()
                     self._active = (identity, process)

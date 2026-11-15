@@ -2,6 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { LoaderCircle, Save, Play, Square, Plus, RefreshCw, Crosshair, History } from '@lucide/vue'
 import MapCanvas from '../components/map/MapCanvas.vue'
+import WeatherControl from '../components/map/WeatherControl.vue'
+import { useWeatherView } from '../composables/useWeatherView'
+import { noWeather } from '../map/weather'
 import RunHistoryPanel from '../components/simulation/RunHistoryPanel.vue'
 import ReplayControls from '../components/simulation/ReplayControls.vue'
 import RunExports from '../components/simulation/RunExports.vue'
@@ -37,7 +40,7 @@ const currentLayers = (): SceneLayerState[] => props.layers.filter(layer => laye
 }))
 const simulation = useSimulation(() => controller?.getCamera() ?? initialCamera, currentLayers)
 const { scenes, networks, draft, sceneId, sceneVersion, network, run, result, snapshot, loading, saving, submitting, error,
-  busy, submissionPending, editingLocked, historical, resultNetwork, previewDraft, cancelling, recoveryError, initialize, chooseScene, chooseNetwork, save, submit, cancel, refreshRun, toggleEdge, newScene, openRun, rerun } = simulation
+  busy, submissionPending, editingLocked, historical, resultNetwork, previewDraft, cancelling, recoveryError, initialize, chooseScene, chooseNetwork, save, submit: submitRun, cancel, refreshRun, toggleEdge, newScene, openRun, rerun } = simulation
 const configurationLocked = computed(() => props.backend === 'loading' || loading.value || editingLocked.value)
 const historyLocked = computed(() => loading.value || saving.value || submitting.value || busy.value || submissionPending.value)
 const historyOpen = ref(false)
@@ -46,6 +49,11 @@ const mapError = ref('')
 const notice = ref('')
 const runStatus = ref<HTMLElement | null>(null)
 const preview = ref(true)
+const fixedWeather = computed(() => historical.value || !preview.value)
+const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, () => props.active && !fixedWeather.value)
+const { mode: weatherMode, status: weatherStatus } = weather
+const shownWeather = computed(() => fixedWeather.value ? snapshot.value?.request.weather ?? noWeather : weather.display.value)
+function submit() { return submitRun(shownWeather.value) }
 const replayPositions = ref<{ baseline: number[] | null; blocked: number[] | null }>({ baseline: null, blocked: null })
 const mapLayers = ref<MapLayer[]>([])
 const temporal = useTemporalLayers(() => mapLayers.value, () => controller)
@@ -148,6 +156,7 @@ watch(() => JSON.stringify(draft.value.layers), () => { if (!restoringWorkspace)
 function ready(value: MapController) {
   controller = value
   controller.initialize(demoRegion, localCamera ?? draft.value.camera)
+  weather.resized()
   void syncLayers()
   paint()
   controller.showReplay(replayPositions.value)
@@ -172,7 +181,9 @@ function isReady() { return !!controller && initializationFinished.value && aliv
 function canCapture() { return isReady() && !restoringWorkspace && !loading.value && !saving.value && !submitting.value && !submissionPending.value }
 function announceReady() { if (isReady()) emit('ready') }
 function onNavigation(value: NavigationReading, settled: boolean) {
-  if (!settled || !props.active) return
+  if (!settled) return
+  weather.settled()
+  if (!props.active) return
   try { window.localStorage.setItem(cameraStorageKey, JSON.stringify(value.camera)) } catch { /* Browser storage may be disabled. */ }
 }
 function captureWorkspace(): WorkspaceCapture {
@@ -261,10 +272,12 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
 
 <template>
   <section class="simulation-workspace" aria-label="仿真推演工作区">
-    <MapCanvas @ready="ready" @navigation="onNavigation" @notice="notice = $event" @fatal="mapError = $event" />
+    <MapCanvas :weather-effect="active ? shownWeather.effect : 'none'" track-weather
+      @camera-move="weather.moving" @weather-resize="weather.resized" @ready="ready" @navigation="onNavigation" @notice="notice = $event" @fatal="mapError = $event" />
     <aside class="simulation-config panel" aria-label="仿真配置">
       <header><div><span class="eyebrow">SIMULATION</span><h1>仿真推演</h1></div><button class="icon-button" aria-label="新建场景" :disabled="configurationLocked" @click="newScene(); preview = true"><Plus :size="18" /></button></header>
       <p class="synthetic">{{ network?.synthetic ? '合成演示 · 校区附近路网' : '版本化路网' }}</p>
+      <WeatherControl class="simulation-weather" v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus" :fixed="fixedWeather" />
       <p v-if="loading || backend === 'loading'"><LoaderCircle :size="14" class="spin" />正在读取场景与路网…</p>
       <fieldset :disabled="configurationLocked">
         <label>已保存场景<select aria-label="选择场景" :value="sceneId" @change="selectScene"><option value="">新建场景</option><option v-for="scene in scenes" :key="scene.id" :value="scene.id">{{ scene.name }} · v{{ scene.version }}</option></select></label>
@@ -309,6 +322,7 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
 <style scoped>
 .simulation-workspace { position: absolute; inset: 0; }
 .simulation-config { position: absolute; z-index: 3; left: 24px; top: 84px; bottom: 28px; width: 330px; padding: 22px; overflow-y: auto; }
+.simulation-weather { margin: 0 0 12px; }
 header, .section-heading, .save-actions, .simulation-tools { display: flex; align-items: center; gap: 12px; }
 header, .section-heading { justify-content: space-between; }
 h1 { font-size: 23px; margin: 5px 0 0; }

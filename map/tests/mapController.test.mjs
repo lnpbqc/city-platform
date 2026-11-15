@@ -111,6 +111,7 @@ class Viewer {
   }
   camera = {
     changed: event(),
+    moveStart: event(),
     moveEnd: event(),
     positionCartographic: { longitude: 113, latitude: 23, height: 900 },
     roll: 0,
@@ -486,6 +487,26 @@ test('zoom framing leaves near, 2D and programmatic views alone and stops on rev
   assert.equal(viewer.lastView, restored)
   controller.destroy()
   assert.equal(viewer.canvasEvents.has('wheel'), false)
+})
+
+test('automatic weather samples the center ground only at a local scale', () => {
+  let moves = 0
+  const { controller } = setup('geojson', undefined, undefined, { onCameraMove: () => moves++ })
+  let metersPerPixel = 30
+  viewer.scene.globe.pick = ({ center: { x, y } }) => {
+    assert.equal(y, 300)
+    return new Vector(6378137, (x - 400) * metersPerPixel, 0)
+  }
+  viewer.camera.moveStart.fire()
+  assert.equal(moves, 1)
+  assert.deepEqual(controller.getWeatherPoint(), { longitude: 0, latitude: 0 })
+  metersPerPixel = 100
+  assert.equal(controller.getWeatherPoint(), null)
+  viewer.scene.globe.pick = () => undefined
+  assert.equal(controller.getWeatherPoint(), null)
+  controller.destroy()
+  viewer.camera.moveStart.fire()
+  assert.equal(moves, 1)
 })
 
 test('empty ground clicks query nearby POIs without changing existing object picking', () => {

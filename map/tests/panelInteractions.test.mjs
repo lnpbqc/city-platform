@@ -6,6 +6,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import * as temporal from '../src/temporal/temporal.ts'
 import * as poi from '../src/map/poi.ts'
+import * as weather from '../src/map/weather.ts'
 
 function component(name) {
   const { descriptor } = parse(readFileSync(new URL(`../src/components/${name === 'TimeAxis' ? 'common' : 'map'}/${name}.vue`, import.meta.url), 'utf8'))
@@ -16,6 +17,7 @@ function component(name) {
     if (path === 'vue') return vue
     if (path === '../../temporal/temporal') return temporal
     if (path === '../../map/poi') return poi
+    if (path === '../../map/weather') return weather
     if (path === './FeatureInspector.vue') return component('FeatureInspector')
     if (path === '@lucide/vue') return new Proxy({}, { get: () => () => null })
     throw new Error(path)
@@ -24,7 +26,7 @@ function component(name) {
 }
 const walk = n => [n, ...(n.children ?? []).flatMap(walk)]
 const text = n => `${n.text ?? ''}${(n.children ?? []).map(text).join('')}`
-const components = { ObjectPanel: component('ObjectPanel'), TimeAxis: component('TimeAxis') }
+const components = { ObjectPanel: component('ObjectPanel'), TimeAxis: component('TimeAxis'), WeatherControl: component('WeatherControl') }
 const label = value => n => n.props['aria-label'] === value
 const cls = value => n => String(n.props.class).split(' ').includes(value)
 const tick = async () => { await vue.nextTick(); await vue.nextTick() }
@@ -44,6 +46,28 @@ function mount(name, initial, handlers = {}) {
   app.mount(root)
   return { props, root, events, focused: () => focused, find: fn => walk(root).find(fn), close: () => app.unmount() }
 }
+
+test('weather selector can override automatic weather and history shows the saved source', async t => {
+  const ctx = mount('WeatherControl', { compact: true, mode: 'auto', status: 'ready', weather: {
+    source: 'open-meteo', effect: 'rain', reading: { code: 61, valid_at: '2026-01-01T00:15:00Z' },
+  } }, { 'onUpdate:mode': mode => { ctx.props.mode = mode } })
+  t.after(ctx.close)
+  const button = ctx.find(label('天气设置'))
+  assert.equal(button.props['aria-expanded'], false)
+  button.props.onClick()
+  await tick()
+  assert.equal(button.props['aria-expanded'], true)
+  assert.match(text(ctx.root), /镜头中心天气 · 小雨.*08:15.*Open-Meteo/)
+  const select = ctx.find(label('天气模式'))
+  assert.deepEqual(select.children.filter(node => node.tag === 'option').map(node => node.props.value), ['auto', 'clear', 'rain', 'snow'])
+  select.props.onChange({ target: { value: 'snow' } })
+  await tick()
+  assert.equal(ctx.props.mode, 'snow')
+  ctx.props.fixed = true
+  await tick()
+  assert.equal(ctx.find(label('天气模式')), undefined)
+  assert.match(text(ctx.root), /运行天气 · 小雨/)
+})
 
 test('results enter loading details; return preserves filters, range, page, scroll and keyboard focus', async t => {
   const item = { object_id: 'one', name: '教学楼', type: 'building' }

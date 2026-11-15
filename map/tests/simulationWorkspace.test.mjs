@@ -17,10 +17,11 @@ const run = { run_id: 'run-one', scene_id: 'scene-one', scene_version: 1, status
   data_version: 'net-001@1.0.0', submitted_at: '2026-10-27T00:00:00Z', started_at: null, finished_at: null, elapsed_ms: null, error: null, trace_id: 'trace' }
 const result = { run_id: 'run-one', baseline: { path: ['S', 'T'], length_m: 100, duration_s: 10, reachable: true },
   blocked: { path: ['S', 'T'], length_m: 100, duration_s: 10, reachable: true }, metrics: { increase_percent: 0, rerouted: false }, created_at: '2026-10-27T00:00:01Z' }
-let assetCalls, sceneCalls, sceneValue, assetHandler, times, submissionError, catalogReads, catalogHandler
+let assetCalls, sceneCalls, sceneValue, assetHandler, times, submissionError, catalogReads, catalogHandler, runWeather
 beforeEach(() => {
   assetCalls = []
   sceneCalls = []; sceneValue = scene; times = []; submissionError = null; catalogReads = 0
+  runWeather = undefined
   catalogHandler = async query => ({ ...query, total: 0, items: [] })
   assetHandler = async (id, version) => ({ asset_id: id, version, source_kind: 'upload', type: 'geojson', name: 'area', entry_url: '/pinned.geojson', source: '', status: 'ready' })
   globalThis.window = { localStorage: { getItem: () => null, setItem() {}, removeItem() {} } }
@@ -33,7 +34,7 @@ mock.module('../src/api/api.ts', { exports: {
   getScene: async (id, signal, version) => { sceneCalls.push({ id, version, signal }); return sceneValue }, getNetwork: async () => network,
   saveScene: async body => ({ ...scene, ...body }), submitRun: async () => { if (submissionError) throw submissionError; return run }, rerunRun: async () => run,
   getRun: async () => ({ ...run, status: 'succeeded' }),
-  getRunInput: async () => ({ request: { scene_id: 'scene-one', network: scene.network, origin: 'S', destination: 'T', blocked_edges: [], params: { mode: 'car' }, seed: 0 },
+  getRunInput: async () => ({ request: { scene_id: 'scene-one', network: scene.network, origin: 'S', destination: 'T', blocked_edges: [], params: { mode: 'car' }, seed: 0, weather: runWeather },
     scene, model_version: 'routing-1', data_version: 'net-001@1.0.0' }),
   getRunResult: async () => result, cancelRun: async () => ({ ...run, status: 'cancelled' }),
   getAssetVersion: async (id, version) => {
@@ -69,6 +70,7 @@ async function setup(t, options = {}) {
   const state = app._instance.setupState
   const calls = { load: [], paint: [], replay: [], camera: [], temporal: [], placement: [] }
   const ready = () => state.ready({ initialize: (_region, value) => calls.camera.push(value), getCamera: () => calls.camera.at(-1) ?? camera, setCamera: value => calls.camera.push(value),
+    getWeatherPoint: () => null,
     load: async item => {
       calls.load.push({ asset_id: item.asset_id, asset_version: item.asset_version, source_kind: item.asset_source_kind, order: item.order })
       if (item.type === '3dtiles') calls.placement.push({ offset: item.tiles_height_offset_m, anchor: item.tiles_ground_anchor, align: item.tiles_align_to_terrain })
@@ -94,6 +96,26 @@ test('a historical result arriving before map readiness restores replay position
   assert.equal(state.historical, false)
   assert.equal(state.sceneId, '')
   assert.deepEqual(calls.replay.at(-1), { baseline: null, blocked: null })
+})
+
+test('opening and leaving a run switches between its saved weather and the session mode', async t => {
+  const { state } = await setup(t)
+  state.weatherMode = 'rain'
+  t.after(() => { state.weatherMode = 'auto' })
+  assert.deepEqual(state.shownWeather, { source: 'manual', effect: 'rain' })
+  runWeather = { source: 'manual', effect: 'snow' }
+  await state.openRun('run-one')
+  await flush()
+  assert.equal(state.fixedWeather, true)
+  assert.deepEqual(state.shownWeather, runWeather)
+  assert.equal('weather' in state.draft, false)
+  state.editConfiguration()
+  await flush()
+  assert.deepEqual(state.shownWeather, { source: 'manual', effect: 'rain' })
+  runWeather = undefined
+  await state.openRun('run-one')
+  await flush()
+  assert.deepEqual(state.shownWeather, { source: 'none', effect: 'none' })
 })
 async function succeeded(state) { await state.submit(); await state.refreshRun(); await flush(); assert.equal(state.preview, false); assert.ok(state.result) }
 

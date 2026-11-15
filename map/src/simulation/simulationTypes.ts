@@ -1,5 +1,6 @@
 import type { CameraState } from '../map/mapNavigation'
 import type { TilesPlacement } from '../layers/types'
+import type { WeatherSnapshot } from '../map/weather'
 
 export interface AssetVersionRef { asset_id: string; version: string }
 export interface SceneLayerState extends TilesPlacement {
@@ -48,6 +49,7 @@ export interface RunInput {
   blocked_edges: string[]
   params: { mode: 'car' }
   seed: number
+  weather?: WeatherSnapshot
 }
 export interface RunRecord {
   run_id: string

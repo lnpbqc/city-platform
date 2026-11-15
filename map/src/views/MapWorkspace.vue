@@ -5,6 +5,8 @@ import LayerPanel from '../components/layers/LayerPanel.vue'
 import RegionPicker from '../components/map/RegionPicker.vue'
 import BookmarkPanel from '../components/map/BookmarkPanel.vue'
 import MapToolbar from '../components/map/MapToolbar.vue'
+import WeatherControl from '../components/map/WeatherControl.vue'
+import { useWeatherView } from '../composables/useWeatherView'
 import ObjectPanel from '../components/map/ObjectPanel.vue'
 import PoiEditor from '../components/map/PoiEditor.vue'
 import PoiDetails from '../components/map/PoiDetails.vue'
@@ -95,6 +97,25 @@ let comparisonController: MapController | undefined
 const comparisonOpen = ref(false)
 const comparisonTime = ref<TemporalContext>({ time: '', resolution: 'hour' })
 const synchronizeCamera = linkedCameras(() => controller, () => comparisonController)
+const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, () => props.active)
+const { mode: weatherMode, status: weatherStatus, display: shownWeather } = weather
+const movingCameras = new Set<'left' | 'right'>()
+let mirroringCamera = false
+function mirrorCamera(side: 'left' | 'right', camera: CameraState) {
+  if (mirroringCamera) return
+  mirroringCamera = true
+  try { synchronizeCamera(side, camera) } finally { mirroringCamera = false }
+}
+function cameraMoving(side: 'left' | 'right') {
+  movingCameras.add(side)
+  weather.moving()
+}
+function cameraSettled(side: 'left' | 'right') {
+  if (mirroringCamera) return
+  movingCameras.delete(side)
+  if (!movingCameras.size) weather.settled()
+}
+watch(comparisonOpen, open => { if (!open) cameraSettled('right') })
 const temporal = useTemporalLayers(() => viewLayers.value, () => controller)
 const { time, resolution, rate, playing, maximum, position, times, loading: timeLoading, metadataLoading,
   counts: timeCounts, errors: timeErrors, allMissing, dynamicLayers } = temporal
@@ -306,6 +327,7 @@ function getController() {
 function onMapReady(value: MapController) {
   controller = value
   controller.initialize(selectedRegion.value, storedView?.camera)
+  weather.resized()
   if (selectedRegion.value.sampleKey) emit('campus', selectedRegion.value.sampleKey)
   emit('ready', value)
   temporal.paint()
@@ -313,12 +335,17 @@ function onMapReady(value: MapController) {
 function onNavigation(value: NavigationReading, settled: boolean) {
   navigation.value = value
   is2D.value = value.camera.scene_mode === '2d'
-  if (comparisonOpen.value) synchronizeCamera('left', value.camera)
+  if (comparisonOpen.value) mirrorCamera('left', value.camera)
   if (settled) {
+    cameraSettled('left')
     try { saveMapView(window.localStorage, { camera: value.camera, region: selectedRegion.value }) } catch { /* Browser storage may be disabled. */ }
   }
 }
-function comparisonReady(value: MapController) { comparisonController = value; if (controller) synchronizeCamera('left', controller.getCamera()) }
+function comparisonReady(value: MapController) { comparisonController = value; if (controller) mirrorCamera('left', controller.getCamera()) }
+function onComparisonNavigation(value: NavigationReading, settled: boolean) {
+  mirrorCamera('right', value.camera)
+  if (settled) cameraSettled('right')
+}
 function toggleComparison() {
   if (!comparisonOpen.value && (!navigation.value || is2D.value !== (navigation.value.camera.scene_mode === '2d'))) return
   temporal.pause()
@@ -521,6 +548,8 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 <template>
   <div class="map-workspace" :style="{ '--time-axis-height': `${timeAxisHeight}px` }" aria-label="地图工作台视图">
     <div class="primary-map" :class="{ split: comparisonOpen }"><MapCanvas
+      :weather-effect="shownWeather.effect" track-weather
+      @camera-move="cameraMoving('left')" @weather-resize="weather.resized"
       @ready="onMapReady"
       @selection="onMapSelection"
       @notice="notice = $event"
@@ -530,7 +559,9 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @ground="queryNearby"
     /></div>
     <ComparisonView v-if="comparisonOpen && navigation" :active="active" :layers="viewLayers" :camera="navigation.camera" :initial-time="comparisonTime" :recovery="recovery"
-      @ready="comparisonReady" @navigation="synchronizeCamera('right', $event.camera)" @time="comparisonTime = $event" />
+      :weather-effect="shownWeather.effect" @camera-move="cameraMoving('right')"
+      @ready="comparisonReady" @navigation="onComparisonNavigation" @time="comparisonTime = $event" />
+    <WeatherControl class="map-weather" :class="{ comparing: comparisonOpen }" compact v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus" />
     <LayerPanel v-if="!comparisonOpen"
       v-model:open="sidebar"
       v-model:filter="filter"
@@ -570,6 +601,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       </template>
     </RegionPicker>
     <MapToolbar v-if="!comparisonOpen"
+      class="browse-tools"
       :is2-d="is2D"
       :heading="navigation?.camera.heading ?? 0"
       :add-poi="poiAllowed"
@@ -644,6 +676,8 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 .comparison-trigger.comparing { top: 84px; right: 24px; }
 .comparison-trigger:disabled { opacity: .5; }
 .comparison-heading { position: absolute; left: 24px; top: 84px; padding: 11px 15px; font-size: 11px; color: #65788e; }
+.map-weather { position: absolute; z-index: 2; right: 185px; top: 84px; }
+.map-weather.comparing { right: 150px; }
 .comparison-time-left { left: 24px; right: calc(50% + 12px); }
 .temporal-legend { bottom: calc(var(--time-axis-height) + 58px); }
 .temporal-objects { max-height: max(100px, calc(100svh - var(--time-axis-height) - 192px)); }
@@ -664,9 +698,14 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 }
 .state-errors > div { display: flex; align-items: center; gap: 12px; }
 .state-errors button { flex-shrink: 0; color: var(--blue); }
+@media (max-width: 760px) {
+  .map-weather { right: 12px; top: 76px; z-index: 5; }
+  .map-weather.comparing { left: 12px; right: auto; }
+  .browse-tools { top: 124px; }
+  .comparison-heading { display: none; }
+}
 @media (max-width: 600px) {
   .primary-map.split { right: 0; bottom: 50%; }
-  .comparison-heading { display: none; }
   .comparison-time-left { left: 12px; right: 64px; bottom: calc(50% + 52px); max-height: max(110px, calc(50svh - 140px)); }
   .map-workspace:has(> .time-axis) :deep(.layer-panel) {
     max-height: max(100px, calc(100svh - var(--time-axis-height) - 130px));

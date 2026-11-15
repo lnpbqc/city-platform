@@ -8,9 +8,10 @@ import type { MapController } from '../../map/mapController'
 import type { CameraState, NavigationReading } from '../../map/mapNavigation'
 import type { TemporalContext } from '../../temporal/temporalTypes'
 import { demoRegion } from '../../map/regions'
+import type { WeatherEffect } from '../../map/weather'
 
-const props = defineProps<{ active: boolean; layers: MapLayer[]; camera: CameraState; initialTime: TemporalContext; recovery?: number }>()
-const emit = defineEmits<{ ready: [controller: MapController]; navigation: [value: NavigationReading]; time: [value: TemporalContext] }>()
+const props = defineProps<{ active: boolean; layers: MapLayer[]; camera: CameraState; initialTime: TemporalContext; recovery?: number; weatherEffect?: WeatherEffect }>()
+const emit = defineEmits<{ ready: [controller: MapController]; navigation: [value: NavigationReading, settled: boolean]; time: [value: TemporalContext]; cameraMove: [] }>()
 const layers = ref<MapLayer[]>([])
 const error = ref('')
 let controller: MapController | undefined
@@ -57,6 +58,7 @@ function ready(value: MapController) {
   void syncLayers()
 }
 function visibility() { if (document.hidden) temporal.pause() }
+function navigate(value: NavigationReading, settled: boolean) { emit('navigation', value, settled) }
 onMounted(() => document.addEventListener('visibilitychange', visibility))
 watch(() => props.active, async value => { if (value) { await nextTick(); controller?.resume() } else temporal.pause() })
 onBeforeUnmount(() => { alive = false; ++version; document.removeEventListener('visibilitychange', visibility); controller = undefined })
@@ -64,7 +66,7 @@ onBeforeUnmount(() => { alive = false; ++version; document.removeEventListener('
 
 <template>
   <section class="comparison-view" aria-label="右侧对比地图">
-    <MapCanvas @ready="ready" @navigation="emit('navigation', $event)" @notice="error = $event" @fatal="error = $event" />
+    <MapCanvas :weather-effect="weatherEffect" track-weather @camera-move="emit('cameraMove')" @ready="ready" @navigation="navigate" @notice="error = $event" @fatal="error = $event" />
     <TimeAxis class="comparison-time" label="右侧时间轴" :time="time" v-model:resolution="resolution" v-model:rate="rate" :playing="playing"
       :maximum="maximum" :position="position" :times="times" :loading="loading" :metadata-loading="metadataLoading" :counts="counts" :errors="errors" :all-missing="allMissing"
       @select="temporal.setTime" @seek="temporal.seek" @step="temporal.step" @play="temporal.play" @pause="temporal.pause" @refresh="temporal.refreshAvailability(); temporal.refresh()" />

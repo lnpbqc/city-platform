@@ -59,6 +59,7 @@ def test_persisted_input_idempotency_and_canonical_hash(queued_client):
     another = client.post("/api/runs", json=body, headers={"Idempotency-Key": "new"}).json()
     assert another["run_id"] != run["run_id"] and another["inputs_sha256"] == run["inputs_sha256"]
     snapshot = client.get(f"/api/runs/{run['run_id']}/input").json()
+    assert "weather" not in snapshot["request"]
     scene = {key: value for key, value in snapshot["scene"].items() if key not in {"id", "version", "created_at", "updated_at", "run_id"}}
     scene["layers"] = sorted(scene["layers"], key=lambda layer: (layer["order"], layer["layer_id"]))
     scene["blocked_edges"] = sorted(set(scene["blocked_edges"]))
@@ -70,6 +71,43 @@ def test_persisted_input_idempotency_and_canonical_hash(queued_client):
     assert json.loads((folder / "input.json").read_text(encoding="utf-8")) == snapshot
     assert run["trace_id"] in (folder / "run.log").read_text(encoding="utf-8")
     assert not (folder / "result.json").exists()
+
+
+@pytest.mark.parametrize("weather", [
+    {"source": "manual", "effect": "rain"},
+    {"source": "none", "effect": "none"},
+    {"source": "open-meteo", "effect": "snow", "reading": {
+        "latitude": 23.03, "longitude": 113.36, "code": 71, "is_day": True, "valid_at": "2026-01-01T00:00:00Z",
+    }},
+])
+def test_run_weather_is_fixed_for_retry_and_rerun(queued_client, weather):
+    client = queued_client
+    body = setup_run(client, weather=weather)
+    headers = {"Idempotency-Key": "weather"}
+    response = client.post("/api/runs", json=body, headers=headers)
+    assert response.status_code == 201
+    run = response.json()
+    assert client.post("/api/runs", json=body, headers=headers).json() == run
+    rerun = client.post(f"/api/runs/{run['run_id']}/rerun", headers={"Idempotency-Key": "weather-rerun"})
+    assert rerun.status_code == 201
+    for identity in (run["run_id"], rerun.json()["run_id"]):
+        saved = client.get(f"/api/runs/{identity}/input").json()
+        assert saved["request"]["weather"] == weather
+        assert "weather" not in saved["scene"]
+    assert rerun.json()["inputs_sha256"] == run["inputs_sha256"]
+
+
+def test_weather_does_not_change_the_worker_result(client):
+    body = setup_run(client)
+    results = []
+    for mode in ({}, {"weather": {"source": "manual", "effect": "snow"}}):
+        response = client.post("/api/runs", json={**body, **mode})
+        assert response.status_code == 201
+        identity = response.json()["run_id"]
+        assert wait_terminal(client, identity)["status"] == "succeeded"
+        result = client.get(f"/api/runs/{identity}/result").json()
+        results.append({key: result[key] for key in ("baseline", "blocked", "metrics")})
+    assert results[0] == results[1]
 
 
 @pytest.mark.parametrize("change,code", [({"blocked_edges": ["T-B"]}, "INVALID_EDGE"),

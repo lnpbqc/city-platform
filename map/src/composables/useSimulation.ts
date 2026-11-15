@@ -3,6 +3,7 @@ import { ApiError, cancelRun, getNetwork, getNetworks, getRun, getRunInput, getR
 import type { CameraState } from '../map/mapNavigation'
 import type { Page } from '../layers/types'
 import type { NetworkRecord, RunInput, RunRecord, RunResult, RunSnapshot, SceneInput, SceneLayerState, SceneRecord } from '../simulation/simulationTypes'
+import type { WeatherSnapshot } from '../map/weather'
 
 const storageKey = 'city.simulation.scene.v1'
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value))
@@ -305,7 +306,7 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
     }, 500)
   }
   function restoreSnapshot(value: RunRecord, savedInput: RunSnapshot, savedNetwork: NetworkRecord, savedResult: RunResult | null) {
-    const { scene_id: _sceneId, ...configuration } = savedInput.request
+    const { scene_id: _sceneId, weather: _weather, ...configuration } = savedInput.request
     historical.value = true
     sceneId.value = ''
     sceneVersion.value = null
@@ -397,7 +398,7 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
       return false
     }
   }
-  async function submit() {
+  async function submit(weather?: WeatherSnapshot) {
     if (!alive || busy.value || submitting.value || saving.value) return
     if (loading.value) { error.value = '场景正在读取，请稍后提交。'; return }
     if (historical.value && !pending.value) { rejectEdit(); return }
@@ -407,11 +408,13 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
     try {
       if (!pending.value) {
         if (!draft.value.network || !draft.value.origin || !draft.value.destination) throw new Error('请选择路网版本、起点和终点。')
+        const fixedWeather = weather && copy(weather)
         const saved = await persist(false, operation)
         if (!saved || !currentView(operation.version, operation.scope)) return
         clearRun()
         pending.value = { kind: 'submit', key: crypto.randomUUID(), body: { scene_id: saved.id, network: copy(saved.network!),
-          origin: saved.origin!, destination: saved.destination!, blocked_edges: [...new Set(saved.blocked_edges)].sort(), params: copy(saved.params), seed: saved.seed } }
+          origin: saved.origin!, destination: saved.destination!, blocked_edges: [...new Set(saved.blocked_edges)].sort(), params: copy(saved.params), seed: saved.seed,
+          ...(fixedWeather ? { weather: fixedWeather } : {}) } }
       }
       const fixed = pending.value
       postAbort = new AbortController()

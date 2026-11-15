@@ -240,18 +240,20 @@ test('lost POST response retries the exact key and body without saving a new sce
   const { app, simulation } = setup()
   await simulation.initialize()
   handlers.submit = async () => { throw new ApiError('NETWORK_ERROR · trace_id: lost', 0) }
-  await simulation.submit()
+  const weather = { source: 'manual', effect: 'rain' }
+  await simulation.submit(weather)
   assert.equal(simulation.submissionPending.value, true)
   assert.equal(simulation.editingLocked.value, true)
   assert.match(simulation.error.value, /重试/)
   const frozen = clone(calls.submit[0].body), key = calls.submit[0].key
+  assert.deepEqual(frozen.weather, weather)
   simulation.draft.value.seed = 999
   await simulation.chooseNetwork('other', '2.0.0')
   assert.equal(calls.network.length, 0)
   await simulation.newScene()
   assert.equal(simulation.sceneId.value, 'scene-one')
   handlers.submit = async () => record()
-  await simulation.submit()
+  await simulation.submit({ source: 'manual', effect: 'snow' })
   assert.equal(calls.save.length, 1)
   assert.equal(calls.submit[1].key, key)
   assert.deepEqual(calls.submit[1].body, frozen)

@@ -6,7 +6,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.database import FILES_DIR
 from app.errors import ERROR_RESPONSES, TraceMiddleware, http_error, unexpected_error, validation_error
-from app.routers import asset_catalog, asset_queries, layer_catalog, object_queries, map_queries, networks, scenes, runs, timeseries, render_api, system, layers, bookmarks, assets
+from app.routers import asset_catalog, asset_queries, layer_catalog, object_queries, map_queries, networks, scenes, runs, timeseries, render_api, system, layers, bookmarks, assets, weather
 from app.routers.source_files import SourceFiles
 from app.services.builtin_assets import SAMPLES_DIR
 from app.services.lifecycle import lifespan
@@ -30,6 +30,7 @@ app.include_router(runs.router)
 app.include_router(timeseries.router)
 app.include_router(render_api.router)
 app.include_router(system.router)
+app.include_router(weather.router)
 app.include_router(layers.router)
 app.include_router(bookmarks.router)
 app.include_router(assets.router)

@@ -99,6 +99,7 @@ export interface MapControllerOptions {
   /** Show ion world terrain when it is available; defaults to true. */
   terrain?: boolean
   onGroundClick?: (point: MapPoint) => void
+  onCameraMove?: () => void
 }
 
 export function createMapController(
@@ -613,6 +614,17 @@ export function createMapController(
     return (ray && viewer.scene.globe.pick(ray, viewer.scene))
       ?? viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid)
   }
+  function getWeatherPoint(): MapPoint | null {
+    const { clientWidth: width, clientHeight: height } = viewer.scene.canvas
+    if (!alive || !width || !height || viewer.scene.mode === SceneMode.MORPHING) return null
+    const center = groundAt(new Cartesian2(width / 2, height / 2))
+    if (!center) return null
+    const left = groundAt(new Cartesian2(width / 4, height / 2))
+    const right = groundAt(new Cartesian2(width * 3 / 4, height / 2))
+    if (!left || !right || Cartesian3.distance(left, right) * 2 >= 50_000) return null
+    const point = Cartographic.fromCartesian(center)
+    return point ? { longitude: CesiumMath.toDegrees(point.longitude), latitude: CesiumMath.toDegrees(point.latitude) } : null
+  }
   function navigation(settled = false) {
     if (!alive || viewer.scene.mode === SceneMode.MORPHING) return
     const target = pointerPosition ? (viewer.scene.pickPositionSupported ? viewer.scene.pickPosition(pointerPosition) : undefined) ?? groundAt(pointerPosition) : undefined
@@ -724,6 +736,7 @@ export function createMapController(
       refreshViewports()
     }),
     viewer.scene.morphComplete.addEventListener(() => { navigation(true); refreshViewports() })]
+  if (options.onCameraMove) navigationCleanup.push(viewer.camera.moveStart.addEventListener(options.onCameraMove))
   function setCamera(camera: CameraState) {
     if (!alive || !validCamera(camera)) return false
     stopAutoFrame()
@@ -1719,6 +1732,7 @@ export function createMapController(
   }
   function setMode(twoD: boolean) {
     stopAutoFrame()
+    options.onCameraMove?.()
     if (twoD) viewer.scene.morphTo2D(0.6)
     else viewer.scene.morphTo3D(0.6)
   }
@@ -1827,6 +1841,7 @@ export function createMapController(
       } else if (homeRegion) goToRegion(homeRegion)
     },
     getCamera,
+    getWeatherPoint,
     setCamera,
     north,
     beginPointPicking,

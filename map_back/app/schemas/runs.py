@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.assets import AssetVersionRef
 from app.schemas.common import ErrorEnvelope
 from app.schemas.scenes import SceneOutput, SimulationParams
+from app.schemas.weather import WeatherSnapshot
 
 RunStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
@@ -19,6 +20,7 @@ class RunInput(BaseModel):
     blocked_edges: list[str] = Field(default_factory=list)
     params: SimulationParams = Field(default_factory=SimulationParams)
     seed: int = 0
+    weather: WeatherSnapshot | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class RunInputSnapshot(BaseModel):
