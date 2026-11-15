@@ -18,7 +18,9 @@ export interface TilesPlacement {
   tiles_ground_anchor?: TilesGroundAnchor | null
   tiles_align_to_terrain?: boolean | null
 }
-export const tilesPlacement = (state: TilesPlacement, defaultAlign: boolean | null = null): Required<TilesPlacement> => ({
+export const tilesPlacement = (state: TilesPlacement & { tiles_calibrated?: boolean }, defaultAlign: boolean | null = null): Required<TilesPlacement> => state.tiles_calibrated ? ({
+  tiles_height_offset_m: 0, tiles_ground_anchor: null, tiles_align_to_terrain: false,
+}) : ({
   tiles_height_offset_m: state.tiles_height_offset_m ?? 0,
   tiles_ground_anchor: state.tiles_ground_anchor ? { ...state.tiles_ground_anchor } : null,
   tiles_align_to_terrain: state.tiles_align_to_terrain ?? defaultAlign,
@@ -41,12 +43,16 @@ export interface LayerRecord extends TilesPlacement {
   asset_id?: string | null
   asset_version?: string | null
   asset_source_kind?: 'default' | 'upload' | 'external' | null
+  tiles_calibrated?: boolean
+  tiles_calibration_allowed?: boolean
+  tiles_revision?: number
+  tiles_terrain_anchor?: TilesGroundAnchor | null
   map_attached?: boolean
   map_visible?: boolean
   map_opacity?: number
   road_max_level?: number
 }
-export type LayerInput = Omit<LayerRecord, 'id' | 'created_at' | 'asset_id' | 'asset_version' | 'asset_source_kind' | keyof LayerMapState>
+export type LayerInput = Omit<LayerRecord, 'id' | 'created_at' | 'asset_id' | 'asset_version' | 'asset_source_kind' | 'tiles_calibrated' | 'tiles_calibration_allowed' | 'tiles_revision' | 'tiles_terrain_anchor' | keyof LayerMapState>
 export interface LayerMapState extends TilesPlacement {
   map_attached: boolean
   map_visible: boolean
@@ -85,6 +91,9 @@ export interface AssetRecord {
   references: AssetReference[]
   reference_count: number
   current_version?: string
+  tiles_calibrated?: boolean
+  revision?: number
+  tiles_terrain_anchor?: TilesGroundAnchor | null
   source_kind?: 'default' | 'upload' | 'external'
   protected?: boolean
   name?: string
@@ -132,6 +141,9 @@ export interface AssetRegisterInput {
 }
 export interface AssetVersionRecord {
   render?: RenderDescriptor | null
+  tiles_calibrated?: boolean
+  revision?: number
+  tiles_terrain_anchor?: TilesGroundAnchor | null
   asset_id: string
   version: string
   name: string

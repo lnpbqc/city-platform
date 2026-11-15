@@ -10,21 +10,34 @@ test('map view links replace snapshot parameters with just camera and region', (
   assert.deepEqual([...url.searchParams.keys()], ['custom', 'camera', 'region'])
   assert.equal(url.hash, '#/map')
   assert.deepEqual(readWorkspaceAddress(url), { page: 'map', region_id: 'demo-university-town', camera,
-    scene_id: undefined, scene_version: undefined, run_id: undefined, time: undefined, resolution: 'hour', comparison: null })
+    scene_id: undefined, scene_version: undefined, run_id: undefined, time: undefined, resolution: 'hour' })
   url.searchParams.set('scene', 'mixed')
   assert.throws(() => readWorkspaceAddress(url), cause => cause.code === 'INVALID_WORKSPACE_LINK')
 })
-test('full map and simulation URLs round-trip fixed references, camera and independent times', () => {
+test('full map and simulation URLs round-trip fixed references, camera and time', () => {
   for (const page of ['map', 'simulation']) {
     const state = { page, scene_id: 'scene/id', scene_version: 3, run_id: page === 'simulation' ? 'run/id' : null,
-      time: '2026-10-25T00:00:00.000Z', resolution: 'hour', camera,
-      comparison: page === 'map' ? { time: '2026-10-24T16:00:00.000Z', resolution: 'day' } : null }
+      time: '2026-10-25T00:00:00.000Z', resolution: 'hour', camera }
     const url = new URL(workspaceURL(state, 'http://localhost:5173/?custom=keep&run=old#/data'))
     assert.equal(url.searchParams.get('custom'), 'keep')
     assert.equal(url.hash, `/${page}`.replace('/', '#/'))
     assert.deepEqual(readWorkspaceAddress(url), { ...state, run_id: state.run_id ?? undefined })
   }
   assert.equal(readWorkspaceAddress(new URL('http://localhost/#/map')), null)
+})
+test('legacy comparison links and bookmark state retain only the primary map', () => {
+  const state = { page: 'map', scene_id: 'old-scene', scene_version: 2, time: '2026-10-25T00:00:00.000Z', resolution: 'day', camera }
+  const legacy = { ...state, comparison: { time: '2026-10-26T00:00:00.000Z', resolution: 'hour' } }
+  const url = new URL(workspaceURL(legacy, 'http://localhost/?compare_t=old&compare_resolution=hour'))
+  assert.equal(url.searchParams.has('compare_t'), false)
+  assert.equal(url.searchParams.has('compare_resolution'), false)
+  url.searchParams.append('compare_t', 'old')
+  url.searchParams.append('compare_t', 'obsolete')
+  url.searchParams.set('compare_resolution', 'obsolete')
+  assert.deepEqual(readWorkspaceAddress(url), { ...state, run_id: undefined })
+  const viewLink = new URL(mapViewURL({ camera, region: { id: 'demo-university-town' } }, url.href))
+  viewLink.searchParams.set('compare_resolution', 'obsolete')
+  assert.equal(readWorkspaceAddress(viewLink).region_id, 'demo-university-town')
 })
 test('documented unzoned links use Shanghai time and run-only links select simulation', () => {
   const value = readWorkspaceAddress(new URL('http://localhost/?scene=s1&run=r1&t=2026-10-25T12:00'))
@@ -35,7 +48,7 @@ test('documented unzoned links use Shanghai time and run-only links select simul
 })
 test('malformed references, dates, modes and camera fail with a trace instead of fallback', () => {
   for (const query of ['scene=', 'v=1', 'scene=s&v=0', 'scene=s&v=1.5', 'scene=s&v=9999999999999999999', 'scene=a&scene=b',
-    'resolution=minute', 'compare_resolution=day', 'run=r&compare_t=2026-10-25T08:00', 't=2026-02-30T08:00', 't=2026-10-25T24:00',
+    'resolution=minute', 't=2026-02-30T08:00', 't=2026-10-25T24:00',
     't=2026-10-25T08:00:00%2B25:00', 'camera={}', 'camera=invalid']) {
     assert.throws(() => readWorkspaceAddress(new URL(`http://localhost/?${query}`)), cause => cause.code === 'INVALID_WORKSPACE_LINK' && !!cause.traceId, query)
   }

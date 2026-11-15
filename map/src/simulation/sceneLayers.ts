@@ -25,6 +25,7 @@ export async function prepareSceneLayers(states: SceneLayerState[], catalog: Map
     const layer = mapLayer({ id: state.layer_id, name: state.name ?? metadata?.name ?? asset?.name ?? '底图', category: asset ? state.category ?? metadata?.category ?? '专题' : '底图',
       type: asset?.type === '3dtiles' ? '3dtiles' : 'geojson', url: asset?.entry_url ?? '', source: asset?.source ?? '',
       asset_id: asset?.asset_id, asset_version: asset?.version, asset_source_kind: asset?.source_kind,
+      tiles_calibrated: asset?.tiles_calibrated, tiles_revision: asset?.revision, tiles_terrain_anchor: asset?.tiles_terrain_anchor,
       map_attached: state.map_attached, map_visible: state.map_visible, map_opacity: state.map_opacity, road_max_level: state.road_max_level ?? 2,
       ...(asset?.type === '3dtiles' ? sceneTilesPlacement(state) : {}) }, asset?.source_kind === 'default' || !asset)
     layer.render = asset?.render

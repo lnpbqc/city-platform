@@ -6,7 +6,6 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import * as poi from '../src/map/poi.ts'
 import { useWeatherView } from '../src/composables/useWeatherView.ts'
-import { linkedCameras } from '../src/map/linkedCameras.ts'
 
 const source = await readFile(new URL('../src/views/MapWorkspace.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
@@ -14,12 +13,13 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
-  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, comparisonReady, onComparisonNavigation, cameraMoving, shownWeather, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError, captureDisplayView, openDisplayRegion, home }
+  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, cameraMoving, shownWeather, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError, captureDisplayView, openDisplayRegion, home,
+    startCalibration, changeCalibration, pickCalibrationPivot, publishCalibration, cancelCalibration, blockedTilesAsset, calibrationError, calibrationMatrix }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
   const hooks = [], queries = [], events = []
-  const props = vue.reactive({ active: true, layers: [
+  const props = vue.reactive({ active: true, backend: 'online', layers: [
     { id: 'a', attached: true, asset_id: 'asset-a', asset_version: '1.0.0' },
     { id: 'b', attached: true, asset_id: 'asset-b', asset_version: '1.0.0' },
   ] })
@@ -43,18 +43,22 @@ function setup(options = {}) {
     setRegionBoundary() {},
     setCamera(camera) { this.camera = camera; return true },
     flyToCamera(camera) { return options.fly ? options.fly(camera) : this.setCamera(camera) },
+    beginTilesCalibration(_layer, callbacks) { this.calibration = callbacks; return true },
+    updateTilesCalibration(offsets) { this.offsets = { ...offsets }; return this.picking ? null : Object.values(offsets) },
+    async prepareTilesCalibration() { return { matrix: Object.values(this.offsets), terrain_anchor: { longitude: 113, latitude: 23, height: 40 } } },
+    pickTilesCalibrationPivot() { this.picking = true; this.calibration.notice('选择表面') },
+    endTilesCalibration() { this.calibration = null },
     removed: [], remove(layer) { this.removed.push(layer.id); layer.attached = false },
     async load(layer) { layer.attached = true; layer.status = 'ready' }, appearance() {}, syncOrder() {},
   }
   const scope = vue.effectScope()
   const panel = scope.run(() => create(name => {
-    if (name === '../api/api') return { getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
+    if (name === '../api/api') return { calibrateTiles: options.calibrateTiles, getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: hook => hooks.push(hook) }
     if (name === '../composables/useObjects') return { useObjects: () => objects }
     if (name === '../composables/useWeatherView') return { useWeatherView }
     if (name === '../composables/useDisplayRegions') return { useDisplayRegions: () => ({ regions: vue.ref(options.displayRegions ?? []) }) }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
-    if (name === '../map/linkedCameras') return { linkedCameras }
     if (name === '../map/poi') return poi
     if (name === '../simulation/sceneLayers') return {
       captureLayers: layers => layers.map(layer => ({ layer_id: layer.id, asset: { asset_id: layer.asset_id, version: layer.asset_version }, map_attached: layer.attached, map_visible: layer.visible, map_opacity: layer.opacity })),
@@ -69,6 +73,81 @@ function setup(options = {}) {
   panel.onMapReady(controller)
   return { panel, props, objects, controller, queries, events, cleanup() { hooks.forEach(hook => hook()); scope.stop() } }
 }
+
+test('calibration previews six offsets, preserves failed drafts and blocks old ZIPs through reload', async t => {
+  const publishes = []
+  let fail = true
+  const ctx = setup({ calibrateTiles: async (...args) => {
+    publishes.push(args)
+    if (fail) throw new Error('资产版本已更新')
+    return { version: '1.0.0', revision: 1 }
+  } })
+  t.after(ctx.cleanup)
+  const { panel, controller, props } = ctx
+  const target = props.layers[0]
+  target.tiles_calibration_allowed = true
+  props.layers[1].asset_id = target.asset_id
+  panel.startCalibration(target)
+  assert.equal(panel.blockedTilesAsset.value, 'asset-a')
+  panel.pickCalibrationPivot()
+  assert.equal(panel.calibrationMatrix.value, null)
+  await panel.publishCalibration('update')
+  assert.equal(publishes.length, 0)
+  controller.picking = false
+  controller.calibration.notice('')
+  controller.calibration.moved(1.25, -2.83)
+  for (const [key, value] of Object.entries({ up: 3, yaw: 4, pitch: 5, roll: 6 })) panel.changeCalibration(key, value)
+  props.active = false
+  await vue.nextTick()
+  assert.equal(panel.blockedTilesAsset.value, 'asset-a', 'data view cannot silently download the pre-calibration model')
+  assert.ok(controller.calibration)
+  props.active = true
+  await vue.nextTick()
+  await panel.publishCalibration('update')
+  assert.equal(panel.calibrationError.value, '资产版本已更新')
+  assert.ok(controller.calibration)
+  assert.deepEqual(publishes[0], ['asset-a', {
+    mode: 'update', base_version: '1.0.0', base_revision: 0, matrix: [1.25, -2.83, 3, 4, 5, 6],
+    terrain_anchor: { longitude: 113, latitude: 23, height: 40 },
+  }])
+  fail = false
+  await panel.publishCalibration('update')
+  assert.equal(controller.calibration, null)
+  assert.equal(panel.blockedTilesAsset.value, 'asset-a')
+  assert.deepEqual(ctx.events.at(-1), ['refresh'])
+  Object.assign(target, { tiles_revision: 1, tiles_calibrated: true })
+  await vue.nextTick()
+  assert.equal(panel.blockedTilesAsset.value, 'asset-a')
+  Object.assign(props.layers[1], { tiles_revision: 1, tiles_calibrated: true })
+  await vue.nextTick()
+  assert.equal(panel.blockedTilesAsset.value, undefined)
+  panel.startCalibration(target)
+  panel.cancelCalibration()
+  assert.equal(controller.calibration, null)
+  assert.equal(panel.blockedTilesAsset.value, undefined)
+})
+
+test('saving a named calibration copy releases the original layer without waiting for a replacement', async t => {
+  const publishes = []
+  const ctx = setup({ calibrateTiles: async (...args) => {
+    publishes.push(args)
+    return { asset_id: 'new-asset', revision: 1, name: '校准样本' }
+  } })
+  t.after(ctx.cleanup)
+  const { panel, props, controller } = ctx
+  const target = props.layers[0]
+  target.tiles_calibration_allowed = true
+  target.tiles_revision = 2
+  panel.startCalibration(target)
+  await panel.publishCalibration('copy', '  校准样本  ')
+  assert.equal(publishes[0][1].name, '校准样本')
+  assert.equal(publishes[0][1].base_revision, 2)
+  assert.equal(publishes[0][1].mode, 'copy')
+  assert.equal(panel.blockedTilesAsset.value, undefined)
+  assert.equal(controller.calibration, null)
+  assert.equal(target.tiles_revision, 2)
+  assert.deepEqual(ctx.events.at(-1), ['refresh'])
+})
 
 test('time axis height follows wrapping and releases its observer when hidden or unmounted', async t => {
   const observers = []
@@ -183,22 +262,16 @@ test('completed areas keep their scope and closing the object panel cancels draf
   ctx.cleanup()
 })
 
-test('comparison waits for the requested scene mode before creating its second view', () => {
-  const ctx = setup()
-  const camera = { longitude: 113, latitude: 23, height: 800, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' }
-  ctx.panel.onNavigation({ camera }, false)
-  ctx.panel.toggleMode()
-  ctx.panel.toggleComparison()
-  assert.equal(ctx.panel.comparisonOpen.value, false)
-  ctx.panel.onNavigation({ camera: { ...camera, scene_mode: '2d' } }, false)
-  ctx.panel.toggleComparison()
-  assert.equal(ctx.panel.comparisonOpen.value, true)
-  ctx.cleanup()
+test('the workspace renders a single map and keeps its thematic timeline', () => {
+  const template = descriptor.template.content
+  assert.equal((template.match(/<MapCanvas\b/g) ?? []).length, 1)
+  assert.equal((template.match(/<TimeAxis\b/g) ?? []).length, 1)
+  assert.doesNotMatch(template, /ComparisonView|时间对比/)
 })
 
 const fixedScene = id => ({ id, version: 1, name: id, camera: { longitude: 114, latitude: 24, height: 500, heading: 0.2, pitch: -1.4, roll: 0, scene_mode: '3d' },
   current_time: '2026-10-25T01:00:00Z', layers: [{ layer_id: 'fixed', asset: { asset_id: id, version: '2.0.0' }, map_attached: true, map_visible: false, map_opacity: 0.35, order: 0 }] })
-const address = { page: 'map', resolution: 'hour', comparison: { time: '2026-10-26T01:00:00Z', resolution: 'day' } }
+const address = { page: 'map', resolution: 'hour', time: '2026-10-25T05:00:00Z', comparison: { time: '2026-10-26T01:00:00Z', resolution: 'day' } }
 test('restored map layers edit independently and exiting releases their resources', async () => {
   const ctx = setup()
   ctx.props.layers[0].map_attached = true
@@ -210,8 +283,11 @@ test('restored map layers edit independently and exiting releases their resource
   assert.equal(local.asset_id, 'snapshot')
   assert.equal(local.visible, false)
   assert.equal(local.opacity, 0.35)
-  assert.equal(ctx.panel.comparisonOpen.value, true)
-  assert.deepEqual(ctx.panel.captureWorkspace().comparison, address.comparison)
+  const captured = ctx.panel.captureWorkspace()
+  assert.equal(captured.time, address.time)
+  assert.equal(captured.resolution, address.resolution)
+  assert.deepEqual(captured.camera, fixedScene('snapshot').camera)
+  assert.equal(Object.hasOwn(captured, 'comparison'), false)
   ctx.panel.changeLayer(local, 'toggle')
   ctx.panel.setOpacity(local, 0.6)
   assert.equal(ctx.props.layers[0].visible, true)
@@ -269,7 +345,7 @@ test('display-region clicks and home fly without sampling weather or capturing a
     displayRegions: [region],
     extent: () => point && region,
     weatherPoint: () => point,
-    fly(camera) { flights.push(camera); ctx.panel.cameraMoving('left'); return true },
+    fly(camera) { flights.push(camera); ctx.panel.cameraMoving(); return true },
   })
   t.after(ctx.cleanup)
   assert.equal(ctx.panel.openDisplayRegion(region), true)
@@ -288,7 +364,7 @@ test('display-region clicks and home fly without sampling weather or capturing a
   assert.deepEqual(flights, [target, target])
 })
 
-test('comparison waits for the driving camera to settle and queries weather once', async t => {
+test('the primary map waits for the camera to settle and queries weather once', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_800_000_000_000 })
   const requests = []
   t.mock.method(globalThis, 'fetch', async url => {
@@ -296,27 +372,17 @@ test('comparison waits for the driving camera to settle and queries weather once
     return { ok: true, json: async () => ({ latitude: 23, longitude: 114, code: 71, is_day: true, valid_at: '2026-01-01T00:00:00Z' }) }
   })
   let point = { latitude: 23, longitude: 113 }
-  const ctx = setup({ weatherPoint: () => point, displayRegions: [{ id: 'comparison', name: '对比区域', latitude: 23, longitude: 114, radius_m: 5000 }] })
+  const ctx = setup({ weatherPoint: () => point, displayRegions: [{ id: 'preview', name: '展示区域', latitude: 23, longitude: 114, radius_m: 5000 }] })
   t.after(() => ctx.cleanup())
-  ctx.controller.setCamera = camera => {
-    ctx.controller.camera = camera
-    ctx.panel.onNavigation({ camera }, true)
-  }
   const initial = ctx.controller.getCamera()
   ctx.panel.onNavigation({ camera: initial }, true)
-  ctx.panel.toggleComparison()
-  let right = initial
-  ctx.panel.comparisonReady({ getCamera: () => right, setCamera: camera => {
-    right = camera
-    ctx.panel.onComparisonNavigation({ camera }, true)
-  } })
-  ctx.panel.cameraMoving('right')
+  ctx.panel.cameraMoving()
   point = { latitude: 23, longitude: 114 }
-  right = { ...initial, longitude: 114 }
-  ctx.panel.onComparisonNavigation({ camera: right }, false)
+  const target = { ...initial, longitude: 114 }
+  ctx.panel.onNavigation({ camera: target }, false)
   t.mock.timers.tick(800)
   assert.deepEqual(requests, [])
-  ctx.panel.onComparisonNavigation({ camera: right }, true)
+  ctx.panel.onNavigation({ camera: target }, true)
   t.mock.timers.tick(600)
   await new Promise(setImmediate)
   assert.deepEqual(requests, ['/api/weather/current?lat=23&lon=114'])

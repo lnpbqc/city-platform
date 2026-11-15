@@ -67,7 +67,7 @@ onBeforeUnmount(() => { alive = false })
     <button class="workspace-bookmarks-trigger" aria-label="完整画面收藏与链接" :aria-expanded="open" @click="toggle"><BookmarkIcon :size="16" /><span>收藏与链接</span></button>
     <section v-if="open" class="workspace-bookmarks-panel panel" aria-label="完整画面收藏">
       <header><h2>完整画面收藏</h2><button class="icon-button" aria-label="关闭完整画面收藏" @click="open = false"><X :size="16" /></button></header>
-      <p>保存固定版本图层、相机、时次和仿真运行。双视图同时保存右侧时间。<template v-if="map">视图链接只分享地图位置和相机。</template></p>
+      <p>保存图层、相机、时次和仿真运行。<template v-if="map">视图链接只分享地图位置和相机。</template></p>
       <form @submit.prevent="save"><label>画面名称<input v-model="name" aria-label="完整收藏名称" required maxlength="120" :disabled="busy" /></label>
         <div class="actions"><button class="primary-button" :disabled="busy || !enabled">{{ busy ? '正在处理…' : '收藏当前画面' }}</button><button type="button" class="secondary-button" :disabled="busy || !enabled" @click="copy">{{ map ? '复制视图链接' : '复制复现链接' }}</button></div></form>
       <p v-if="!enabled">进入地图或仿真工作区，等待加载完成后保存。</p>

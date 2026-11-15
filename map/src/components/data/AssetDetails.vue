@@ -1,13 +1,35 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { X, LoaderCircle, RefreshCw } from '@lucide/vue'
 import type { AssetDetail } from '../../layers/types'
+import { startTilesZipDownload, tilesZipTarget } from '../../layers/layerDownload'
 import AssetReferences from './AssetReferences.vue'
 import RenderStatus from './RenderStatus.vue'
 
-defineProps<{ asset: AssetDetail | null; busy: boolean; error: string }>()
+const props = defineProps<{ asset: AssetDetail | null; busy: boolean; error: string; downloadBlocked?: boolean }>()
 const emit = defineEmits<{ close: []; retry: []; scene: [id: string] }>()
 const dialog = ref<HTMLElement | null>(null)
+const zipDownloading = ref(false)
+const zipError = ref('')
+watch(() => [props.asset?.id, props.asset?.current_version, props.asset?.revision], () => { zipError.value = '' })
+async function downloadTiles() {
+  const asset = props.asset
+  if (!asset?.current_version || zipDownloading.value) return
+  if (props.downloadBlocked) {
+    zipError.value = '请回地图保存校准，或取消预览后再下载。'
+    return
+  }
+  zipError.value = ''
+  zipDownloading.value = true
+  try {
+    await startTilesZipDownload(tilesZipTarget(asset.id, asset.current_version,
+      asset.name || asset.original_name || '模型', asset.tiles_calibrated, asset.revision))
+  } catch (error) {
+    zipError.value = error instanceof Error ? error.message : '下载失败，请重试。'
+  } finally {
+    zipDownloading.value = false
+  }
+}
 let previousFocus: HTMLElement | null = null
 function bytes(value: number | null) {
   if (value === null) return '未知'
@@ -90,6 +112,12 @@ onBeforeUnmount(() => {
           <span v-else>上传原文件已到期清理</span>
           · <a :href="`/api/assets/${encodeURIComponent(asset.id)}/versions/${encodeURIComponent(asset.current_version)}/geojson`">导出 GeoJSON</a>
         </p>
+        <p v-else-if="asset.type === '3dtiles' && asset.status === 'active' && asset.source_kind !== 'external' && asset.current_version">
+          <button class="text-button" type="button" :disabled="zipDownloading" @click="downloadTiles">
+            {{ zipDownloading ? '正在准备下载…' : asset.tiles_calibrated ? '下载校准后的 ZIP' : '下载完整 ZIP' }}
+          </button>
+        </p>
+        <p v-if="zipError" role="alert" class="detail-error">{{ zipError }}</p>
         <dl>
           <div>
             <dt>数据入口</dt>

@@ -31,6 +31,7 @@ const props = defineProps<{
   catalogError: string
   deleting: string
   revision: number
+  blockedTilesAsset?: string
 }>()
 const emit = defineEmits<{
   add: []
@@ -41,8 +42,8 @@ const emit = defineEmits<{
   refresh: []
   openScene: [scene: SceneRecord]
 }>()
-const tabs = ['records', 'assets', 'scenes'] as const
-const tab = ref<typeof tabs[number]>('records')
+const tabs = ['assets', 'records', 'scenes'] as const
+const tab = ref<typeof tabs[number]>('assets')
 const sceneCount = ref<number | null>(null)
 const sceneQuery = ref('')
 const sceneJump = ref(0)
@@ -261,17 +262,6 @@ watch(
           @keydown="navigateTabs"
         >
           <button
-            id="record-tab"
-            role="tab"
-            :aria-selected="tab === 'records'"
-            :tabindex="tab === 'records' ? 0 : -1"
-            aria-controls="record-panel"
-            :class="{ active: tab === 'records' }"
-            @click="changeTab('records')"
-          >
-            <Database :size="16" />图层登记<span>{{ records.length }}</span>
-          </button>
-          <button
             id="asset-tab"
             role="tab"
             :aria-selected="tab === 'assets'"
@@ -283,6 +273,17 @@ watch(
             <FolderOpen :size="16" />资产目录<span>{{
               stats?.asset_count ?? total
             }}</span>
+          </button>
+          <button
+            id="record-tab"
+            role="tab"
+            :aria-selected="tab === 'records'"
+            :tabindex="tab === 'records' ? 0 : -1"
+            aria-controls="record-panel"
+            :class="{ active: tab === 'records' }"
+            @click="changeTab('records')"
+          >
+            <Database :size="16" />图层登记<span>{{ records.length }}</span>
           </button>
           <button id="scene-tab" role="tab" :aria-selected="tab === 'scenes'" :tabindex="tab === 'scenes' ? 0 : -1"
             aria-controls="scene-panel" :class="{ active: tab === 'scenes' }" @click="changeTab('scenes')">
@@ -609,7 +610,7 @@ watch(
                         class="text-button"
                         @click="emit('registerAsset', asset)"
                       >
-                        重新登记</button
+                        登记为图层</button
                       ><button
                         class="text-button danger-text"
                         :disabled="
@@ -682,6 +683,7 @@ watch(
       :asset="detail"
       :busy="detailLoading"
       :error="detailError"
+      :download-blocked="!!blockedTilesAsset && blockedTilesAsset === detailId"
       @close="closeDetail"
       @retry="retryDetail"
       @scene="showScene"

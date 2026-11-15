@@ -4,11 +4,14 @@ import {
   EasingFunction,
   Cartesian2,
   Cartesian3,
+  Plane,
+  IntersectionTests,
   Cartographic,
   Color,
   GeoJsonDataSource,
   Cesium3DTileset,
   Cesium3DTileStyle,
+  Resource as CesiumResource,
   ColorMaterialProperty,
   PolylineOutlineMaterialProperty,
   ConstantProperty,
@@ -52,6 +55,8 @@ import type { TimeSeriesRecord } from '../temporal/temporalTypes'
 import { temporalColor } from '../temporal/temporal.ts'
 import { poiCategory, poiIcon, poiName, propertyText, roadLevel, roadDisplayLevel } from './poi.ts'
 import { layoutPois, type PoiAnchor } from './poiLayout.ts'
+import { calibrationFrame, calibrationMatrix } from './tilesCalibration.ts'
+import type { TilesCalibrationOffsets } from './tilesCalibrationTypes.ts'
 
 type Resource = GeoJsonDataSource | Cesium3DTileset
 type ModelPick = {
@@ -69,7 +74,7 @@ type BuildingPlacement = {
   placed?: TerrainProvider
 }
 type Entry = { version: number; resource?: Resource; abort: AbortController; cleanup: (() => void)[]; objectIds?: string[]; temporal?: TimeSeriesRecord | null; buildings?: BuildingPlacement
-  tilesPlacement?: { original: Matrix4; center: Cartographic | undefined; revision: number; aligned: boolean }
+  tilesPlacement?: { original: Matrix4; center: Cartographic | undefined; revision: number; aligned: boolean; sampling: boolean; terrainHeight?: number }
   viewport?: boolean; viewAbort?: AbortController; viewVersion?: number; weights?: Map<string, number>
   bounds?: { west: number; south: number; east: number; north: number } | null
   viewportVisible?: boolean
@@ -81,6 +86,28 @@ type Entry = { version: number; resource?: Resource; abort: AbortController; cle
 export interface MapPoint {
   longitude: number
   latitude: number
+}
+
+type CalibrationCallbacks = {
+  moved: (east: number, north: number) => void
+  invalidated: () => void
+  notice: (message: string) => void
+}
+
+type TilesCalibration = {
+  layer: MapLayer
+  tileset: Cesium3DTileset
+  baseline: Matrix4
+  coordinates: ReturnType<typeof calibrationFrame>
+  marker: Entity
+  position: ConstantPositionProperty
+  callbacks: CalibrationCallbacks
+  offsets: TilesCalibrationOffsets
+  terrain: boolean
+  ground?: Cartesian3
+  groundHeight?: number
+  picking?: 'pivot' | 'ground'
+  drag?: { plane: Plane; start: Cartesian3; east: number; north: number; previousInputs: boolean }
 }
 
 function tilesetOrigin(transform: Matrix4 | undefined): TilesGroundAnchor | null {
@@ -171,6 +198,7 @@ export function createMapController(
   let highlightIds = new Set<string>()
   let activeObjectId: string | undefined
   let modelPick: ModelPick | undefined
+  let tilesCalibration: TilesCalibration | undefined
   const highlightRestorers: (() => void)[] = []
   const simulationEntities: Entity[] = []
   const simulationEdges = new Map<Entity, string>()
@@ -566,6 +594,7 @@ export function createMapController(
   }
   function beginAreaSelection(mode: 'box' | 'polygon', callback: (geometry: GeometryDocument) => void, cancelled?: () => void) {
     if (!alive) return
+    if (tilesCalibration) endTilesCalibration(true)
     cancelAreaSelection()
     cancelPointPicking()
     stopAutoFrame()
@@ -754,6 +783,7 @@ export function createMapController(
   if (options.onCameraMove) navigationCleanup.push(viewer.camera.moveStart.addEventListener(options.onCameraMove))
 
   function useCameraProjection(mode: CameraState['scene_mode']) {
+    if (mode === '2d' && tilesCalibration) endTilesCalibration(true)
     if (viewer.scene.mode === SceneMode.MORPHING) viewer.scene.completeMorph()
     if (mode === '2d' && viewer.scene.mode !== SceneMode.SCENE2D) viewer.scene.morphTo2D(0)
     if (mode === '3d' && viewer.scene.mode !== SceneMode.SCENE3D) viewer.scene.morphTo3D(0)
@@ -843,6 +873,7 @@ export function createMapController(
 
   function beginPointPicking(callback: (point: MapPoint) => void) {
     if (!alive) return
+    if (tilesCalibration) endTilesCalibration(true)
     cancelAreaSelection()
     cancelPointPicking()
     pointPicking = callback
@@ -983,11 +1014,30 @@ export function createMapController(
   }
   // Keep terrain samples for when terrain is displayed again.
   const tileTerrainHeights = new Map<string, Promise<number>>()
+  function sampleTileTerrain(longitude: number, latitude: number) {
+    if (!worldTerrain) throw new Error('地形服务不可用')
+    const key = `${longitude},${latitude}`
+    let sample = tileTerrainHeights.get(key)
+    if (!sample) {
+      sample = sampleTerrainMostDetailed(worldTerrain, [Cartographic.fromDegrees(longitude, latitude)], true)
+        .then(([result]) => {
+          if (!result || !Number.isFinite(result.height)) throw new Error('地形高程缺失')
+          return result.height
+        })
+      tileTerrainHeights.set(key, sample)
+      sample.catch(() => tileTerrainHeights.delete(key))
+    }
+    return sample
+  }
+
   async function refreshTilesPlacement(layer: MapLayer, entry: Entry) {
     const tileset = entry.resource
     if (!(tileset instanceof Cesium3DTileset) || !entryCurrent(layer, entry)) return
+    if (tilesCalibration?.layer === layer) return
+    const baked = layer.tiles_calibrated ? layer.tiles_terrain_anchor : null
+    if (layer.tiles_calibrated && !baked) return
     const { tiles_height_offset_m: offset, tiles_ground_anchor: manual, tiles_align_to_terrain: align } = tilesPlacement(layer, true)
-    const anchor = align ? manual ?? layer.tilesModelOrigin : null
+    const anchor = baked ?? (align ? manual ?? layer.tilesModelOrigin : null)
     layer.tilesTerrainNotice = align && !anchor ? '无法识别模型原点，可改用手动锚点。当前使用原始高度加手动偏移。' : ''
     if (!offset && !anchor && !entry.tilesPlacement) return
     const placement = entry.tilesPlacement ??= {
@@ -995,8 +1045,10 @@ export function createMapController(
       center: Cartographic.fromCartesian(tileset.boundingSphere.center),
       revision: 0,
       aligned: false,
+      sampling: false,
     }
     const revision = ++placement.revision
+    placement.sampling = false
     const current = () => terrainEnabled && entryCurrent(layer, entry) && placement.revision === revision
     const point = anchor ? Cartographic.fromDegrees(anchor.longitude, anchor.latitude) : placement.center
     const apply = (delta: number) => {
@@ -1013,48 +1065,218 @@ export function createMapController(
       tileset.modelMatrix = matrix
       viewer.scene.requestRender()
     }
+    if (baked) {
+      placement.terrainHeight = terrainEnabled ? baked.height : 0
+      apply(placement.terrainHeight - baked.height)
+      return
+    }
     if (!anchor) {
       placement.aligned = false
+      placement.terrainHeight = undefined
       apply(offset)
       return
     }
     if (!terrainEnabled) {
       apply(offset - anchor.height)
       placement.aligned = true
+      placement.terrainHeight = 0
       return
     }
     if (!placement.aligned) apply(offset)
-    await basemapReady
-    if (!current()) return
+    placement.sampling = true
+    layer.tilesTerrainNotice = '正在采样地形…'
     const report = (reason: string) => {
       layer.tilesTerrainNotice = `${reason}，${placement.aligned ? '已保留上次校正高度' : '当前使用原始高度加手动偏移'}。`
       if (manual) onNotice(`${layer.name ?? '3D Tiles'}：${layer.tilesTerrainNotice}`)
     }
-    if (!worldTerrain) {
-      report('地形服务不可用')
-      return
-    }
-    layer.tilesTerrainNotice = '正在采样地形…'
-    const key = `${anchor.longitude},${anchor.latitude}`
-    let sample = tileTerrainHeights.get(key)
-    if (!sample) {
-      sample = sampleTerrainMostDetailed(worldTerrain, [Cartographic.fromDegrees(anchor.longitude, anchor.latitude)], true)
-        .then(([result]) => {
-          if (!result || !Number.isFinite(result.height)) throw new Error('地形高程缺失')
-          return result.height
-        })
-      tileTerrainHeights.set(key, sample)
-      sample.catch(() => tileTerrainHeights.delete(key))
-    }
     try {
-      const height = await sample
+      await basemapReady
+      if (!current()) return
+      if (!worldTerrain) { report('地形服务不可用'); return }
+      const height = await sampleTileTerrain(anchor.longitude, anchor.latitude)
       if (!current()) return
       apply(height - anchor.height + offset)
       placement.aligned = true
+      placement.terrainHeight = height
       layer.tilesTerrainNotice = ''
     } catch {
       if (current()) report('地形采样失败')
+    } finally {
+      if (placement.revision === revision) placement.sampling = false
     }
+  }
+
+  function beginTilesCalibration(layer: MapLayer, callbacks: CalibrationCallbacks) {
+    const entry = entries.get(layer)
+    const tileset = entry?.resource
+    if (!alive || !(tileset instanceof Cesium3DTileset) || !layer.attached || !layer.visible) {
+      callbacks.notice('请先加载并显示模型。')
+      return false
+    }
+    if (viewer.scene.mode !== SceneMode.SCENE3D) {
+      callbacks.notice('请切换到三维地图后校准。')
+      return false
+    }
+    if (entry?.tilesPlacement?.sampling) {
+      callbacks.notice('请等待地形采样完成后再校准。')
+      return false
+    }
+    endTilesCalibration()
+    const baseline = Matrix4.clone(tileset.modelMatrix)
+    const baked = layer.tiles_calibrated ? layer.tiles_terrain_anchor : null
+    const sourceAnchor = baked ?? layer.tiles_ground_anchor ?? layer.tilesModelOrigin
+    const ground = sourceAnchor ? Matrix4.multiplyByPoint(baseline,
+      Cartesian3.fromDegrees(sourceAnchor.longitude, sourceAnchor.latitude, sourceAnchor.height), new Cartesian3()) : undefined
+    const groundHeight = entry?.tilesPlacement?.terrainHeight ?? sourceAnchor?.height
+    const root = tileset.root?.transform
+    const pivot = layer.tilesModelOrigin && root
+      ? Matrix4.multiplyByPoint(baseline, Matrix4.getTranslation(root, new Cartesian3()), new Cartesian3())
+      : tileset.boundingSphere.center
+    if (!Number.isFinite(Cartesian3.magnitude(pivot)) || Cartesian3.magnitude(pivot) < 1) {
+      callbacks.notice('无法确定模型的旋转中心。')
+      return false
+    }
+    viewer.camera.cancelFlight()
+    cancelAreaSelection()
+    cancelPointPicking()
+    highlightObjects(null, [])
+    onPick(null)
+    const position = new ConstantPositionProperty(pivot)
+    const marker = viewer.entities.add({
+      position,
+      point: { pixelSize: 15, color: Color.fromCssColorString('#1676e8'), outlineColor: Color.WHITE,
+        outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    })
+    tilesCalibration = { layer, tileset, baseline, position, marker, callbacks, coordinates: calibrationFrame(pivot),
+      offsets: { east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 }, terrain: terrainEnabled, ground, groundHeight }
+    viewer.scene.requestRender()
+    return true
+  }
+
+  function updateTilesCalibration(offsets: TilesCalibrationOffsets): number[] | null {
+    const editing = tilesCalibration
+    if (!editing || editing.picking) return null
+    const matrix = calibrationMatrix(editing.coordinates, editing.baseline, offsets)
+    if (!matrix) return null
+    editing.offsets = { ...offsets }
+    editing.tileset.modelMatrix = matrix
+    editing.position.setValue(Matrix4.multiplyByPoint(editing.coordinates.frame,
+      new Cartesian3(offsets.east, offsets.north, offsets.up), new Cartesian3()))
+    viewer.scene.requestRender()
+    return Matrix4.pack(matrix, [])
+  }
+
+  function pickTilesCalibrationPivot(kind: 'pivot' | 'ground' = 'pivot') {
+    const editing = tilesCalibration
+    if (!editing || (kind === 'pivot' && Object.values(editing.offsets).some(value => value !== 0))) return
+    editing.picking = kind
+    editing.marker.show = false
+    editing.callbacks.notice(kind === 'pivot' ? '请点击当前模型表面选择旋转中心。' : '请点击当前模型应贴合地面的点。')
+    viewer.scene.requestRender()
+  }
+
+  function pickCalibrationPoint(editing: TilesCalibration, screen: Cartesian2) {
+    const scene = viewer.scene
+    const picked = scene.pick(screen, 1, 1)
+    const belongs = picked?.primitive === editing.tileset || picked?.tileset === editing.tileset
+      || picked?.content?.tileset === editing.tileset
+    let point: Cartesian3 | undefined
+    if (belongs && scene.pickPositionSupported) {
+      const previous = scene.pickTranslucentDepth
+      try {
+        scene.pickTranslucentDepth = true
+        point = scene.pickPosition(screen)
+      } finally { scene.pickTranslucentDepth = previous }
+    }
+    if (!point || !Number.isFinite(Cartesian3.magnitude(point)) || Cartesian3.magnitude(point) < 1) {
+      editing.callbacks.notice('未拾取到当前模型表面，请换一个位置重试。')
+      return
+    }
+    if (editing.picking === 'ground') {
+      const inverse = Matrix4.inverseTransformation(editing.tileset.modelMatrix, new Matrix4())
+      const toBaseline = Matrix4.multiply(editing.baseline, inverse, new Matrix4())
+      editing.ground = Matrix4.multiplyByPoint(toBaseline, point, new Cartesian3())
+      editing.groundHeight = entries.get(editing.layer)?.tilesPlacement?.terrainHeight
+        ?? Cartographic.fromCartesian(editing.ground).height - (editing.layer.tiles_height_offset_m ?? 0)
+    } else {
+      editing.coordinates = calibrationFrame(point)
+      editing.position.setValue(point)
+    }
+    editing.marker.show = true
+    editing.picking = undefined
+    editing.callbacks.notice('')
+    viewer.scene.requestRender()
+  }
+
+  async function prepareTilesCalibration() {
+    const editing = tilesCalibration
+    if (!editing || editing.picking) return null
+    if (!editing.ground || editing.groundHeight === undefined) throw new Error('请先选择模型上的贴地点。')
+    const preview = Matrix4.clone(editing.tileset.modelMatrix)
+    const inverse = Matrix4.inverseTransformation(editing.baseline, new Matrix4())
+    const adjustment = Matrix4.multiply(preview, inverse, new Matrix4())
+    const point = Cartographic.fromCartesian(Matrix4.multiplyByPoint(adjustment, editing.ground, new Cartesian3()))
+    const longitude = CesiumMath.toDegrees(point.longitude)
+    const latitude = CesiumMath.toDegrees(point.latitude)
+    let height: number
+    try {
+      await basemapReady
+      height = await sampleTileTerrain(longitude, latitude)
+    } catch {
+      throw new Error('地形采样失败，请重试。')
+    }
+    if (tilesCalibration !== editing || editing.picking || !Matrix4.equals(editing.tileset.modelMatrix, preview)) return null
+    const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(point)
+    const translation = Matrix4.fromTranslation(Cartesian3.multiplyByScalar(up, height - editing.groundHeight, up))
+    const matrix = Matrix4.multiply(translation, preview, translation)
+    return { matrix: Matrix4.pack(matrix, []), terrain_anchor: { longitude, latitude, height } }
+  }
+
+  function beginCalibrationDrag(screen: Cartesian2) {
+    const editing = tilesCalibration
+    if (!editing || editing.picking || viewer.scene.pick(screen)?.id !== editing.marker) return
+    const position = editing.position.getValue(viewer.clock.currentTime)
+    const ray = viewer.camera.getPickRay(screen)
+    if (!position || !ray) return
+    const normal = Matrix4.multiplyByPointAsVector(editing.coordinates.frame, Cartesian3.UNIT_Z, new Cartesian3())
+    const plane = Plane.fromPointNormal(position, normal)
+    const point = IntersectionTests.rayPlane(ray, plane)
+    if (!point) return
+    const camera = viewer.scene.screenSpaceCameraController
+    editing.drag = { plane, start: Matrix4.multiplyByPoint(editing.coordinates.inverse, point, new Cartesian3()),
+      east: editing.offsets.east, north: editing.offsets.north, previousInputs: camera.enableInputs }
+    camera.enableInputs = false
+  }
+
+  function moveCalibrationDrag(screen: Cartesian2) {
+    const editing = tilesCalibration
+    const drag = editing?.drag
+    if (!editing || !drag) return
+    const ray = viewer.camera.getPickRay(screen)
+    const point = ray && IntersectionTests.rayPlane(ray, drag.plane)
+    if (!point) return
+    const local = Matrix4.multiplyByPoint(editing.coordinates.inverse, point, new Cartesian3())
+    editing.callbacks.moved(drag.east + local.x - drag.start.x, drag.north + local.y - drag.start.y)
+  }
+
+  function stopCalibrationDrag() {
+    const editing = tilesCalibration
+    if (!editing?.drag) return
+    viewer.scene.screenSpaceCameraController.enableInputs = editing.drag.previousInputs
+    editing.drag = undefined
+  }
+
+  function endTilesCalibration(invalidated = false) {
+    const editing = tilesCalibration
+    if (!editing) return
+    stopCalibrationDrag()
+    tilesCalibration = undefined
+    editing.tileset.modelMatrix = editing.baseline
+    viewer.entities.remove(editing.marker)
+    if (alive) viewer.scene.requestRender()
+    const entry = entries.get(editing.layer)
+    if (entry && editing.terrain !== terrainEnabled) void refreshTilesPlacement(editing.layer, entry)
+    if (invalidated) editing.callbacks.invalidated()
   }
   /** Places white models on the active terrain, sampling again if terrain changes meanwhile. */
   async function placeBuildings(buildings: BuildingPlacement, current: () => boolean) {
@@ -1133,6 +1355,7 @@ export function createMapController(
 
   function appearance(layer: MapLayer) {
     const viewportEntry = entries.get(layer)
+    if (!layer.visible && tilesCalibration?.layer === layer) endTilesCalibration(true)
     if (!layer.visible && modelPick?.layer === layer) { highlightObjects(null, []); onPick(null) }
     if (viewportEntry?.viewport && viewportEntry.viewportVisible !== layer.visible) {
       const wasVisible = viewportEntry.viewportVisible
@@ -1227,6 +1450,7 @@ export function createMapController(
   }
 
   function remove(layer: MapLayer) {
+    if (tilesCalibration?.layer === layer) endTilesCalibration(true)
     if (selectedOverlayLayer === layer.id) clearSelectedOverlay()
     if (highlightLayerId === layer.id) { highlightObjects(null, []); onPick(null) }
     const entry = entries.get(layer)
@@ -1448,6 +1672,11 @@ export function createMapController(
           throw new ApiError('资产版本不可用', 409, { status: version.status }, 'ASSET_UNAVAILABLE', `client-${crypto.randomUUID()}`)
         url = version.entry_url
         entry.bounds = version.bounds
+        if (layer.type === '3dtiles' && version.tiles_calibrated !== undefined) {
+          layer.tiles_calibrated = version.tiles_calibrated
+          layer.tiles_terrain_anchor = version.tiles_terrain_anchor
+          layer.tiles_revision = version.revision
+        }
         if (layer.static !== false) {
           const render = layer.render ?? version.render
           const profile = layer.category === '道路' || layer.category === '线状网络' ? 'roads' : layer.category === 'POI' ? 'poi' : 'generic'
@@ -1500,7 +1729,10 @@ export function createMapController(
         if (layer.asset_id && layer.asset_version && layer.object_count != null)
           entry.objectIds = [await objectIdentity(layer.asset_id, layer.asset_version, -1)]
         if (!current()) return
-        pending = await Cesium3DTileset.fromUrl(url, {
+        const source = layer.asset_source_kind === 'upload' && layer.tiles_revision
+          ? new CesiumResource({ url, queryParameters: { revision: layer.tiles_revision } })
+          : url
+        pending = await Cesium3DTileset.fromUrl(source, {
           maximumScreenSpaceError: 16,
         })
         if (!current()) {
@@ -1597,6 +1829,7 @@ export function createMapController(
   }
 
   const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
+  viewer.scene.canvas.addEventListener?.('pointercancel', stopCalibrationDrag)
   // Cesium 1.146 emits distance and angle/height motion, unlike its declared event shape.
   handler.setInputAction((event: ScreenSpaceEventHandler.TwoPointMotionEvent | { distance: { startPosition: Cartesian2; endPosition: Cartesian2 } }) => {
     if (!('distance' in event)) return
@@ -1605,6 +1838,7 @@ export function createMapController(
   }, ScreenSpaceEventType.PINCH_MOVE)
   handler.setInputAction((event: { endPosition: Cartesian2 }) => {
     if (!alive) return
+    if (tilesCalibration?.drag) { moveCalibrationDrag(event.endPosition); return }
     if (areaMode === 'box' && boxStart) {
       const points = boxPoints(event.endPosition)
       if (points) drawDraft([...points, points[0]!])
@@ -1617,6 +1851,10 @@ export function createMapController(
   }, ScreenSpaceEventType.MOUSE_MOVE)
   handler.setInputAction((event: { position: Cartesian2 }) => {
     if (!alive) return
+    if (tilesCalibration) {
+      if (tilesCalibration.picking) pickCalibrationPoint(tilesCalibration, event.position)
+      return
+    }
     const requestVersion = ++pickVersion
     roadPickAbort?.abort()
     if (areaMode) {
@@ -1772,9 +2010,12 @@ export function createMapController(
     }
   }, ScreenSpaceEventType.LEFT_CLICK)
   handler.setInputAction((event: { position: Cartesian2 }) => {
-    if (alive && areaMode === 'box') boxStart = event.position
+    if (!alive) return
+    if (tilesCalibration) beginCalibrationDrag(event.position)
+    else if (areaMode === 'box') boxStart = event.position
   }, ScreenSpaceEventType.LEFT_DOWN)
   handler.setInputAction((event: { position: Cartesian2 }) => {
+    if (tilesCalibration) { stopCalibrationDrag(); return }
     if (!alive || areaMode !== 'box') return
     const points = boxPoints(event.position)
     if (!points) { onNotice('框选范围需要覆盖有效地面，请重新拖动。'); return }
@@ -1796,6 +2037,7 @@ export function createMapController(
     viewer.scene.requestRender()
   }
   function setMode(twoD: boolean) {
+    if (twoD && tilesCalibration) endTilesCalibration(true)
     cancelDisplayFlight()
     stopAutoFrame()
     options.onCameraMove?.()
@@ -1831,6 +2073,7 @@ export function createMapController(
   }
   function destroy() {
     if (!alive) return
+    endTilesCalibration(true)
     stopAutoFrame()
     cancelAreaSelection()
     highlightObjects(null, [])
@@ -1848,6 +2091,7 @@ export function createMapController(
     viewer.scene.canvas.removeEventListener?.('pointerdown', onPointerDown)
     viewer.scene.canvas.removeEventListener?.('wheel', onWheel)
     viewer.scene.canvas.removeEventListener?.('mouseleave', clearPointer)
+    viewer.scene.canvas.removeEventListener?.('pointercancel', stopCalibrationDrag)
     entries.clear()
     handler.destroy()
     viewer.destroy()
@@ -1861,10 +2105,16 @@ export function createMapController(
     },
     load,
     async setTilesPlacement(layer: MapLayer, value: TilesPlacement) {
+      if (layer.tiles_calibrated || tilesCalibration?.layer === layer) return
       Object.assign(layer, tilesPlacement(value))
       const entry = entries.get(layer)
       if (entry) await refreshTilesPlacement(layer, entry)
     },
+    beginTilesCalibration,
+    updateTilesCalibration,
+    pickTilesCalibrationPivot,
+    prepareTilesCalibration,
+    endTilesCalibration,
     setRoadMaxLevel(layer: MapLayer, level: number) {
       layer.road_max_level = Math.max(1, Math.min(4, Math.trunc(level)))
       const entry = entries.get(layer)

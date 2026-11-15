@@ -211,12 +211,15 @@ export function useLayerCatalog(
           const mapped = mapLayer(record)
           const layer = existing.get(record.id)
           if (!layer) return mapped
+          const contentChanged = (layer.tiles_revision ?? 0) !== (mapped.tiles_revision ?? 0)
           const sourceChanged = layer.url !== mapped.url || layer.type !== mapped.type
-            || layer.asset_id !== mapped.asset_id || layer.asset_version !== mapped.asset_version
+            || layer.asset_id !== mapped.asset_id || layer.asset_version !== mapped.asset_version || contentChanged
+          const calibratedUpdate = sourceChanged && mapped.tiles_calibrated && !!mapped.asset_id
+            && mapped.asset_id === layer.asset_id
           if (sourceChanged) {
             getController()?.remove(layer)
             // Campus changes rebind the shared default state; custom source edits require an explicit join.
-            if (!mapped.builtin && !(mapped.category === 'POI' && record.map_attached)) {
+            if (!mapped.builtin && !calibratedUpdate && !(mapped.category === 'POI' && record.map_attached)) {
               layer.visible = record.map_visible ?? layer.visible
               layer.opacity = record.map_opacity ?? layer.opacity
               persistState(layer, stateFor(layer, false))
@@ -228,6 +231,7 @@ export function useLayerCatalog(
           const previousRoadLevel = layer.road_max_level ?? 2
           const previousPlacement = tilesPlacement(layer)
           Object.assign(layer, metadata, unsaved, unsavedPlacement)
+          if (layer.tiles_calibrated) Object.assign(layer, tilesPlacement(layer))
           if (previousRoadLevel !== (layer.road_max_level ?? 2)) getController()?.setRoadMaxLevel(layer, layer.road_max_level ?? 2)
           if (layer.type === '3dtiles' && !sameTilesPlacement(previousPlacement, layer))
             void getController()?.setTilesPlacement(layer, layer)

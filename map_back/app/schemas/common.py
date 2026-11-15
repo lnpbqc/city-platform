@@ -1,6 +1,6 @@
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 T = TypeVar("T")
 
@@ -33,3 +33,10 @@ class Bounds(BaseModel):
     north: float = Field(ge=-90, le=90, allow_inf_nan=False)
     min_height: float | None = Field(default=None, allow_inf_nan=False)
     max_height: float | None = Field(default=None, allow_inf_nan=False)
+
+
+class TilesGroundAnchor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False, strict=True)
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False, strict=True)
+    height: float = Field(allow_inf_nan=False, strict=True)

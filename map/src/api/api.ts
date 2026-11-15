@@ -4,7 +4,7 @@ import type { DisplayRegion, DisplayRegionView } from '../map/displayRegions'
 import type { SceneInput, SceneRecord, NetworkRecord, RunInput, RunRecord, RunSnapshot, RunResult, RunQuery } from '../simulation/simulationTypes'
 import type { TemporalContext, TimeLayerQuery, TimeSeriesQuery, TimeSeriesRecord } from '../temporal/temporalTypes'
 import { publishApiEvent } from './apiEvents.ts'
-import type { MapLayerReference, MapViewportResult, NearbyPoi } from '../layers/types'
+import type { MapLayerReference, MapViewportResult, NearbyPoi, TilesGroundAnchor } from '../layers/types'
 
 export const getMapViewport = (body: MapLayerReference & { bbox: [number, number, number, number]; width: number; height: number; meters_per_pixel?: number; road_max_level?: number }, signal?: AbortSignal) =>
   request<MapViewportResult>('/api/map/viewport', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
@@ -186,6 +186,17 @@ export const getAssetVersions = (id: string) =>
   request<AssetVersionRecord[]>(`/api/assets/${encodeURIComponent(id)}/versions`)
 export const getAssetVersion = (id: string, version: string, signal?: AbortSignal) =>
   request<AssetVersionRecord>(`/api/assets/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}`, { signal })
+export type TilesCalibrationInput = {
+  base_version: string
+  base_revision: number
+  matrix: number[]
+  terrain_anchor: TilesGroundAnchor
+} & ({ mode: 'update' } | { mode: 'copy'; name: string })
+export const calibrateTiles = (id: string, body: TilesCalibrationInput) =>
+  request<AssetVersionRecord>(`/api/assets/${encodeURIComponent(id)}/versions/calibrate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 export const getRenderStatus = (id: string, version: string, category: string, signal?: AbortSignal) =>
   request<import('../layers/types').RenderDescriptor | null>(`/api/assets/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/render?category=${encodeURIComponent(category)}`, { signal })
 export const getRoadGroups = (body: { layer_id: string; asset_id: string; version: string; render_key: string; object_ids: string[]; campus?: string }, signal?: AbortSignal) =>

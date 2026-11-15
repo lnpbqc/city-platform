@@ -40,7 +40,7 @@ interface WorkspaceView {
   canCapture?: () => boolean
   cancelRestore: () => void
 }
-const mapView = ref<WorkspaceView & { home: () => void; clearScene: () => void; captureView: () => MapView }>()
+const mapView = ref<WorkspaceView & { home: () => void; clearScene: () => void; captureView: () => MapView; blockedTilesAsset?: string }>()
 const simulationView = ref<WorkspaceView>()
 const readyRevision = ref(0)
 const recovery = ref(0)
@@ -296,7 +296,7 @@ async function copyWorkspaceLink() {
 function openManagedScene(scene: SceneRecord) {
   void openBookmark({ page: scene.network || scene.run_id ? 'simulation' : 'map', scene_id: scene.id,
     scene_version: scene.version, run_id: scene.run_id, camera: scene.camera, time: scene.current_time,
-    resolution: 'hour', comparison: null })
+    resolution: 'hour' })
 }
 async function openBookmark(state: WorkspaceState) {
   window.history.pushState(null, '', workspaceURL(state))
@@ -355,6 +355,7 @@ addressChanged()
     />
     <DataManagerView
       @open-scene="openManagedScene"
+      :blocked-tiles-asset="mapView?.blockedTilesAsset"
       v-show="page === 'data'"
       :layers="layers"
       :backend="backend"

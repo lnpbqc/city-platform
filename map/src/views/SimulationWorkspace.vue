@@ -193,11 +193,10 @@ function captureWorkspace(): WorkspaceCapture {
   if (!canCapture()) throw workspaceError('仿真画面正在读取、保存或确认提交，请完成后保存画面')
   const camera = controller!.getCamera()
   const scene = JSON.parse(JSON.stringify({ ...draft.value, camera, current_time: time.value || null, run_id: run.value?.run_id ?? draft.value.run_id }))
-  return { page: 'simulation', scene, camera, run_id: scene.run_id, time: scene.current_time, resolution: resolution.value, comparison: null }
+  return { page: 'simulation', scene, camera, run_id: scene.run_id, time: scene.current_time, resolution: resolution.value }
 }
 async function restoreWorkspace(scene: SceneRecord | null, address: WorkspaceAddress) {
   if (!isReady()) throw workspaceError('仿真工作区尚未准备好')
-  if (address.comparison) throw workspaceError('双视图时间仅用于地图工作台')
   if (scene && address.run_id && scene.run_id !== address.run_id) throw workspaceError('链接运行 ID 与固定场景保存的运行 ID 不一致')
   cancelRestore()
   const version = restoreVersion

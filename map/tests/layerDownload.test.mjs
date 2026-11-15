@@ -1,7 +1,36 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { layerDownload, fetchLayerDownload } from '../src/layers/layerDownload.ts'
+import { layerDownload, fetchLayerDownload, startTilesZipDownload } from '../src/layers/layerDownload.ts'
 import { samplesForCampus, mapLayer } from '../src/layers/types.ts'
+
+test('current model downloads pin the revision and use the asset name', () => {
+  const layer = mapLayer({
+    id: 'tiles', asset_id: 'model', asset_version: '1.0.0', name: '林芝/北区', type: '3dtiles',
+    url: '/data-files/model/3dtiles/tileset.json', tiles_calibrated: true, tiles_revision: 2,
+  })
+  assert.deepEqual(layerDownload(layer), {
+    url: '/api/assets/model/versions/1.0.0/download?revision=2',
+    filename: '林芝_北区.zip', label: '下载校准后的 ZIP', external: false, native: true,
+  })
+})
+
+test('native downloads check availability and leave the ZIP transfer to the browser', async t => {
+  const url = '/api/assets/model/versions/1.0.1/download'
+  const anchor = { click() { this.clicked = true }, remove() { this.removed = true } }
+  const previous = globalThis.document
+  globalThis.document = { createElement: () => anchor, body: { append() {} } }
+  t.after(() => { if (previous === undefined) delete globalThis.document; else globalThis.document = previous })
+  let response = new Response(null, { status: 409, headers: { 'X-Download-Error': encodeURIComponent('发布文件缺失') } })
+  const requests = t.mock.method(globalThis, 'fetch', async () => response)
+  await assert.rejects(startTilesZipDownload({ url, filename: 'model-1.0.1.zip' }), /发布文件缺失/)
+  assert.equal(anchor.clicked, undefined)
+  response = new Response()
+  await startTilesZipDownload({ url, filename: 'model-1.0.1.zip' })
+  assert.equal(anchor.href, url)
+  assert.equal(anchor.download, 'model-1.0.1.zip')
+  assert.equal(anchor.clicked && anchor.removed, true)
+  assert.ok(requests.mock.calls.every(({ arguments: args }) => args[0] === url && args[1].method === 'HEAD'))
+})
 
 test('each campus downloads its own GeoJSON and complete 3D sample ZIP', () => {
   for (const campus of ['university-town', 'huangpu']) {

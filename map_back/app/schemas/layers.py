@@ -5,18 +5,12 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.assets import AssetVersionRef
+from app.schemas.common import TilesGroundAnchor
 
 class LegendItem(BaseModel):
     label: str
     color: str
     value: str | float | None = None
-
-
-class TilesGroundAnchor(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False, strict=True)
-    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False, strict=True)
-    height: float = Field(allow_inf_nan=False, strict=True)
 
 
 class LayerCatalogOutput(BaseModel):
@@ -42,6 +36,10 @@ class LayerCatalogOutput(BaseModel):
     tiles_height_offset_m: float = Field(default=0, allow_inf_nan=False, strict=True)
     tiles_ground_anchor: TilesGroundAnchor | None = None
     tiles_align_to_terrain: bool | None = Field(default=None, strict=True)
+    tiles_calibrated: bool = False
+    tiles_calibration_allowed: bool = False
+    tiles_revision: int = 0
+    tiles_terrain_anchor: TilesGroundAnchor | None = None
     order: int = Field(default=0, ge=0)
 
 
@@ -59,7 +57,7 @@ class LayerInput(BaseModel):
         parts = urlsplit(value)
         if parts.scheme in ("http", "https") and parts.netloc and not parts.username and not parts.password:
             return value
-        if value.startswith(("/data-files/", "/samples/")) and ".." not in parts.path.split("/") and not parts.query and not parts.fragment:
+        if value.startswith(("/data-files/", "/samples/", "/api/assets/")) and ".." not in parts.path.split("/") and not parts.query and not parts.fragment:
             return value
         raise ValueError("请使用 http(s) 地址或 /data-files/ 文件地址，不支持本机磁盘路径")
 

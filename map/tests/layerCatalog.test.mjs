@@ -126,6 +126,37 @@ const record = {
   source: '合成',
 }
 
+test('a calibrated asset update reloads every attached layer and keeps presentation settings', async t => {
+  records = ['first', 'second'].map((id, index) => ({
+    ...record, id, type: '3dtiles', asset: { asset_id: 'shared', version: '1.0.0' },
+    url: '/data-files/shared/tileset.json', map_attached: true, map_visible: index === 0,
+    map_opacity: 0.4 + index * 0.2, tiles_height_offset_m: 12, tiles_align_to_terrain: true,
+  }))
+  const { app, catalog, calls } = setup()
+  t.after(() => app.unmount())
+  await flush()
+  assert.equal(calls.load, 2)
+  const terrainAnchor = { longitude: 94, latitude: 29, height: 2980 }
+  records = records.map(layer => ({
+    ...layer, tiles_calibrated: true, tiles_height_offset_m: 0, tiles_align_to_terrain: false,
+    tiles_revision: 1, tiles_terrain_anchor: terrainAnchor,
+  }))
+  await catalog.refreshCatalog()
+  assert.deepEqual(calls.remove, ['first', 'second'])
+  assert.equal(calls.load, 4)
+  assert.deepEqual(saves, [])
+  for (const [index, layer] of catalog.layers.value.entries()) {
+    assert.equal(layer.asset_version, '1.0.0')
+    assert.equal(layer.tiles_revision, 1)
+    assert.deepEqual(layer.tiles_terrain_anchor, terrainAnchor)
+    assert.equal(layer.attached, true)
+    assert.equal(layer.visible, index === 0)
+    assert.equal(layer.opacity, records[index].map_opacity)
+    assert.equal(layer.tiles_align_to_terrain, false)
+    assert.equal(layer.tiles_height_offset_m, 0)
+  }
+})
+
 test('saving registration does not load or locate; metadata edits preserve current map state', async () => {
   records = []
   const { app, catalog, calls } = setup()

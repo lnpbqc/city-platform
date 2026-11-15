@@ -22,6 +22,8 @@ const props = defineProps<{
   catalogError: string
   ordering: boolean
   orderError: string
+  allowCalibration?: boolean
+  blockedTilesAsset?: string
 }>()
 const emit = defineEmits<{
   'update:open': [value: boolean]
@@ -35,6 +37,7 @@ const emit = defineEmits<{
   opacity: [layer: MapLayer, value: number]
   roadMaxLevel: [layer: MapLayer, value: number]
   tilesPlacement: [layer: MapLayer, value: TilesPlacement]
+  calibrate: [layer: MapLayer]
   move: [layer: MapLayer, direction: number]
 }>()
 const search = ref('')
@@ -138,6 +141,8 @@ function toggleGroup(category: string) {
             :can-move-up="moveTarget(layers, layer, -1) !== null"
             :can-move-down="moveTarget(layers, layer, 1) !== null"
             :ordering="ordering"
+            :allow-calibration="allowCalibration"
+            :download-blocked="!!blockedTilesAsset && layer.asset_id === blockedTilesAsset"
             @toggle="emit('toggle', layer)"
             @load="emit('load', layer)"
             @locate="emit('locate', layer)"
@@ -145,6 +150,7 @@ function toggleGroup(category: string) {
             @opacity="emit('opacity', layer, $event)"
             @road-max-level="emit('roadMaxLevel', layer, $event)"
             @tiles-placement="emit('tilesPlacement', layer, $event)"
+            @calibrate="emit('calibrate', layer)"
             @move="emit('move', layer, $event)"
           />
         </div>

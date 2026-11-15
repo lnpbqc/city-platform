@@ -178,6 +178,19 @@ test('map captures model placement and the simulation restores it from the pinne
   assert.equal(disabled.tiles_align_to_terrain, false)
 })
 
+test('a saved scene uses the current model revision and its baked terrain reference', async () => {
+  const { prepareSceneLayers } = await import('../src/simulation/sceneLayers.ts')
+  const anchor = { longitude: 94, latitude: 29, height: 2980 }
+  assetHandler = async (id, version) => ({ asset_id: id, version, source_kind: 'upload', type: '3dtiles',
+    name: 'model', entry_url: '/data-files/area/tileset.json', source: '', status: 'ready',
+    revision: 2, tiles_calibrated: true, tiles_terrain_anchor: anchor })
+  const [model] = await prepareSceneLayers([{ ...layer, tiles_height_offset_m: 20 }], [])
+  assert.equal(model.asset_version, '1.0.0')
+  assert.equal(model.tiles_revision, 2)
+  assert.deepEqual(model.tiles_terrain_anchor, anchor)
+  assert.equal(model.tiles_height_offset_m, 0)
+})
+
 test('configuration stays locked until the initial catalog and simulation directories are ready', async t => {
   const { state, props } = await setup(t, { backend: 'loading' })
   assert.equal(state.loading, false, 'simulation initialize has not begun before the layer catalog')
@@ -196,7 +209,7 @@ test('a full workspace restores its own pinned scene and run without replacing i
   const { state } = await setup(t, { dynamic: true })
   assert.equal(state.isReady(), true)
   const address = { page: 'simulation', scene_id: saved.id, scene_version: 7, run_id: 'run-one', time: '2026-10-26T01:00:00Z',
-    resolution: 'day', camera: { ...camera, height: 7777 }, comparison: null }
+    resolution: 'day', camera: { ...camera, height: 7777 } }
   await state.restoreWorkspace(saved, address); await flush()
   const capture = state.captureWorkspace()
   assert.equal(sceneCalls.at(-1).version, 7)
@@ -216,7 +229,7 @@ test('a full workspace restores its own pinned scene and run without replacing i
 
 test('run-only links restore historical inputs and explicit scene/run conflicts leave the draft untouched', async t => {
   const { state } = await setup(t)
-  const address = { page: 'simulation', run_id: 'run-one', resolution: 'hour', comparison: null }
+  const address = { page: 'simulation', run_id: 'run-one', resolution: 'hour' }
   await state.restoreWorkspace(null, address); await flush()
   assert.equal(state.historical, true)
   assert.equal(state.captureWorkspace().run_id, 'run-one')
@@ -229,7 +242,7 @@ test('missing pinned resources and superseded resource reads cannot overwrite th
   const { state } = await setup(t)
   state.draft.name = '保留当前草稿'
   assetHandler = async () => { throw new Error('ASSET_NOT_FOUND · trace_id: missing') }
-  const address = { page: 'simulation', scene_id: scene.id, scene_version: 1, resolution: 'hour', comparison: null }
+  const address = { page: 'simulation', scene_id: scene.id, scene_version: 1, resolution: 'hour' }
   await assert.rejects(state.restoreWorkspace(scene, address), /ASSET_NOT_FOUND/)
   assert.equal(state.draft.name, '保留当前草稿')
   let release

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import MapCanvas from '../components/map/MapCanvas.vue'
 import LayerPanel from '../components/layers/LayerPanel.vue'
 import RegionPicker from '../components/map/RegionPicker.vue'
@@ -12,17 +12,18 @@ import { useDisplayRegions } from '../composables/useDisplayRegions'
 import type { DisplayRegion } from '../map/displayRegions'
 import ObjectPanel from '../components/map/ObjectPanel.vue'
 import PoiEditor from '../components/map/PoiEditor.vue'
+import TilesCalibrationPanel from '../components/map/TilesCalibrationPanel.vue'
 import PoiDetails from '../components/map/PoiDetails.vue'
 import NearbyPoiPanel from '../components/map/NearbyPoiPanel.vue'
-import { getNearbyPois } from '../api/api'
+import { calibrateTiles, getNearbyPois } from '../api/api'
 import type { NearbyPoi } from '../layers/types'
 import MapLegend from '../components/map/MapLegend.vue'
 import MapStatus from '../components/map/MapStatus.vue'
 import TimeAxis from '../components/common/TimeAxis.vue'
-import ComparisonView from '../components/map/ComparisonView.vue'
 import WorkspaceFeedback from '../components/common/WorkspaceFeedback.vue'
 import { campusRegions, demoRegion, resolveRegionTarget, type RegionTarget } from '../map/regions'
 import type { MapController, MapPoint } from '../map/mapController'
+import type { TilesCalibrationOffsets } from '../map/tilesCalibrationTypes'
 import type { BoundaryState } from '../map/regionBoundary'
 import type { LayerRecord, MapLayer, Selection, ObjectRecord, TilesPlacement } from '../layers/types'
 import { editablePoi } from '../map/poi'
@@ -34,7 +35,6 @@ import { moveTarget, orderedLayers } from '../layers/layerTree'
 import type { CampusKey } from '../map/campuses'
 import { readMapView, saveMapView, type NavigationReading } from '../map/mapNavigation'
 import type { TemporalContext } from '../temporal/temporalTypes'
-import { linkedCameras } from '../map/linkedCameras'
 import { useObjects } from '../composables/useObjects'
 import { useTemporalLayers } from '../composables/useTemporalLayers'
 
@@ -96,33 +96,17 @@ let plainView: { camera: CameraState; time: string; resolution: TemporalContext[
 const viewLayers = computed(() => sceneLayers.value ?? props.layers)
 let restoreVersion = 0
 let restoreAbort: AbortController | undefined
-let comparisonController: MapController | undefined
-const comparisonOpen = ref(false)
-const comparisonTime = ref<TemporalContext>({ time: '', resolution: 'hour' })
-const synchronizeCamera = linkedCameras(() => controller, () => comparisonController)
 const displayRegions = useDisplayRegions(() => props.active && props.backend === 'online', () => props.recovery)
 const { regions: projectRegions, loading: displayRegionsLoading, loadError: displayRegionsError } = displayRegions
 const selectedDisplayId = ref('')
 const selectedDisplay = computed(() => projectRegions.value?.find(region => region.id === selectedDisplayId.value))
 const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, () => props.active, () => projectRegions.value)
 const { mode: weatherMode, status: weatherStatus, display: shownWeather, region: weatherRegion, reference: weatherReference } = weather
-const movingCameras = new Set<'left' | 'right'>()
-let mirroringCamera = false
-function mirrorCamera(side: 'left' | 'right', camera: CameraState) {
-  if (mirroringCamera) return
-  mirroringCamera = true
-  try { synchronizeCamera(side, camera) } finally { mirroringCamera = false }
-}
-function cameraMoving(side: 'left' | 'right') {
-  movingCameras.add(side)
+let cameraInMotion = false
+function cameraMoving() {
+  cameraInMotion = true
   weather.moving()
 }
-function cameraSettled(side: 'left' | 'right') {
-  if (mirroringCamera) return
-  movingCameras.delete(side)
-  if (!movingCameras.size) weather.settled()
-}
-watch(comparisonOpen, open => { if (!open) cameraSettled('right') })
 const temporal = useTemporalLayers(() => viewLayers.value, () => controller)
 const { time, resolution, rate, playing, maximum, position, times, loading: timeLoading, metadataLoading,
   counts: timeCounts, errors: timeErrors, allMissing, dynamicLayers } = temporal
@@ -159,7 +143,118 @@ const inspectedSelection = computed<Selection | null>(() => {
     detailError: detailError.value,
   }
 })
-const poiAllowed = computed(() => props.backend === 'online' && !sceneLayers.value && !comparisonOpen.value)
+const poiAllowed = computed(() => props.backend === 'online' && !sceneLayers.value)
+const calibration = shallowRef<{ layer: MapLayer; id: string; version: string; revision: number } | null>(null)
+const calibrationBusy = ref(false)
+const calibrationError = ref('')
+const calibrationNotice = ref('')
+const refreshingCalibration = ref<{ id: string; revision: number } | null>(null)
+const blockedTilesAsset = computed(() => calibration.value?.id ?? refreshingCalibration.value?.id)
+const emptyOffsets = (): TilesCalibrationOffsets => ({ east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 })
+const calibrationOffsets = ref<Record<keyof TilesCalibrationOffsets, number | ''>>(emptyOffsets())
+const calibrationMatrix = shallowRef<number[] | null>(null)
+const canPickCalibrationPivot = computed(() => !!calibrationMatrix.value && Object.values(calibrationOffsets.value).every(value => value === 0))
+const allowCalibration = computed(() => poiAllowed.value && !calibration.value && !calibrationBusy.value && !refreshingCalibration.value)
+
+function previewCalibration() {
+  const values = calibrationOffsets.value
+  calibrationMatrix.value = Object.values(values).every(value => typeof value === 'number' && Number.isFinite(value))
+    ? controller?.updateTilesCalibration(values as TilesCalibrationOffsets) ?? null
+    : null
+}
+
+function cancelCalibration() {
+  if (!calibration.value || calibrationBusy.value) return
+  calibration.value = null
+  calibrationMatrix.value = null
+  controller?.endTilesCalibration()
+}
+
+function startCalibration(layer: MapLayer) {
+  if (!allowCalibration.value || !controller || !layer.tiles_calibration_allowed || !layer.asset_id || !layer.asset_version) return
+  if (is2D.value) { notice.value = '请切换到三维视图后校准模型。'; return }
+  if (poiDraft.value) return
+  closeObjects()
+  calibrationOffsets.value = emptyOffsets()
+  calibrationNotice.value = ''
+  calibrationError.value = ''
+  const draft = { layer, id: layer.asset_id, version: layer.asset_version, revision: layer.tiles_revision ?? 0 }
+  calibration.value = draft
+  if (!controller.beginTilesCalibration(layer, {
+    moved(east, north) {
+      if (calibration.value !== draft || calibrationBusy.value) return
+      Object.assign(calibrationOffsets.value, { east, north })
+      previewCalibration()
+    },
+    invalidated() {
+      if (calibration.value !== draft) return
+      calibration.value = null
+      calibrationMatrix.value = null
+      if (!calibrationBusy.value) notice.value = '模型已移除或发生变化，校准预览已结束。'
+    },
+    notice(message) {
+      if (calibration.value !== draft) return
+      calibrationNotice.value = message
+      if (!message && !calibrationBusy.value) previewCalibration()
+    },
+  })) {
+    calibration.value = null
+    notice.value = calibrationNotice.value || '模型尚未就绪，暂时无法校准。'
+    return
+  }
+  previewCalibration()
+}
+
+function changeCalibration(key: keyof TilesCalibrationOffsets, value: number | '') {
+  if (!calibration.value || calibrationBusy.value) return
+  calibrationOffsets.value[key] = value
+  previewCalibration()
+}
+
+function pickCalibrationPivot(kind: 'pivot' | 'ground' = 'pivot') {
+  if (calibrationBusy.value || !(kind === 'pivot' ? canPickCalibrationPivot.value : calibrationMatrix.value)) return
+  controller?.pickTilesCalibrationPivot(kind)
+  previewCalibration()
+}
+
+async function publishCalibration(mode: 'update' | 'copy', name = '') {
+  const draft = calibration.value
+  if (!draft || !calibrationMatrix.value || calibrationBusy.value) return
+  name = name.trim()
+  if (mode === 'copy' && !name) return
+  calibrationBusy.value = true
+  calibrationError.value = ''
+  calibrationNotice.value = '正在采样调整后落点的地形…'
+  try {
+    const placement = await controller?.prepareTilesCalibration()
+    if (calibration.value !== draft) return
+    if (!placement) throw new Error('校准预览已变化，请重试。')
+    calibrationNotice.value = mode === 'copy' ? '正在复制并保存新资产…' : '正在更新原资产…'
+    const version = await calibrateTiles(draft.id, {
+      ...placement, base_version: draft.version, base_revision: draft.revision,
+      ...(mode === 'copy' ? { mode, name } : { mode }),
+    })
+    if (mode === 'update') refreshingCalibration.value = { id: draft.id, revision: version.revision ?? draft.revision + 1 }
+    calibration.value = null
+    calibrationMatrix.value = null
+    controller?.endTilesCalibration()
+    notice.value = mode === 'copy' ? `已另存「${name}」，可在「我的数据」中登记到地图。` : '原资产已更新，正在刷新引用图层。'
+    emit('refresh')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '无法保存校准，请重试。'
+    if (calibration.value === draft) calibrationError.value = message
+    else notice.value = message
+  } finally {
+    calibrationBusy.value = false
+    calibrationNotice.value = ''
+  }
+}
+
+watch(() => props.layers.map(layer => [layer.asset_id, layer.tiles_revision]), () => {
+  const published = refreshingCalibration.value
+  if (published && !props.layers.some(layer => layer.asset_id === published.id
+    && (layer.tiles_revision ?? 0) < published.revision)) refreshingCalibration.value = null
+})
 const poiLayers = computed(() => viewLayers.value.filter(editablePoi))
 const inspectedPoiLayer = computed(() => queryLayers.value.find(layer => layer.id === inspectedSelection.value?.layerId && layer.category === 'POI'))
 const inspectedPoiDistance = computed(() => nearbyItems.value.find(item => item.object_id === inspectedSelection.value?.objectId)?.distance_m)
@@ -174,7 +269,7 @@ function closeNearby() {
   nearbyPoint.value = null
 }
 async function queryNearby(point: MapPoint) {
-  if (!props.active || comparisonOpen.value || poiDraft.value || drawing.value) return
+  if (!props.active || poiDraft.value || drawing.value) return
   const layers = viewLayers.value.filter(layer => layer.attached && layer.visible && layer.category === 'POI')
   if (!layers.length) { closeNearby(); return }
   closeNearby()
@@ -308,13 +403,14 @@ function zoomMap(direction: number) { cancelDraw(); controller?.zoom(direction) 
 function northMap() { cancelDraw(); controller?.north() }
 function tiltMap() { cancelDraw(); controller?.tilt() }
 function onEscape(event: KeyboardEvent) {
-  if (event.key !== 'Escape') return
-  if (poiDraft.value) cancelPoi()
+  if (!props.active || event.key !== 'Escape') return
+  if (calibration.value) cancelCalibration()
+  else if (poiDraft.value) cancelPoi()
   else if (drawing.value) cancelDraw()
 }
 function onVisibility() { if (document.hidden) temporal.pause() }
 onMounted(() => { window.addEventListener('keydown', onEscape); document.addEventListener('visibilitychange', onVisibility) })
-onBeforeUnmount(() => { closeNearby(); ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
+onBeforeUnmount(() => { cancelCalibration(); closeNearby(); ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
 watch([objectsOpen, activeLayerId, selectedId, areaIds, () => selection.value?.resourceType === '3dtiles', () => props.active], () => {
   // The indexed ID identifies the whole asset; the controller owns the actual map pick.
   if (selection.value?.resourceType === '3dtiles' && objectsOpen.value) return
@@ -342,27 +438,11 @@ function onMapReady(value: MapController) {
 function onNavigation(value: NavigationReading, settled: boolean) {
   navigation.value = value
   is2D.value = value.camera.scene_mode === '2d'
-  if (comparisonOpen.value) mirrorCamera('left', value.camera)
   if (settled) {
-    cameraSettled('left')
+    cameraInMotion = false
+    weather.settled()
     try { saveMapView(window.localStorage, { camera: value.camera, region: selectedRegion.value }) } catch { /* Browser storage may be disabled. */ }
   }
-}
-function comparisonReady(value: MapController) { comparisonController = value; if (controller) mirrorCamera('left', controller.getCamera()) }
-function onComparisonNavigation(value: NavigationReading, settled: boolean) {
-  mirrorCamera('right', value.camera)
-  if (settled) cameraSettled('right')
-}
-function toggleComparison() {
-  if (!comparisonOpen.value && (!navigation.value || is2D.value !== (navigation.value.camera.scene_mode === '2d'))) return
-  temporal.pause()
-  if (comparisonOpen.value) { comparisonOpen.value = false; comparisonController = undefined }
-  else {
-    closeObjects()
-    comparisonTime.value = { time: times.value.at(-1) ?? time.value, resolution: resolution.value }
-    comparisonOpen.value = true
-  }
-  void nextTick(() => controller?.resume())
 }
 function selectRegion(region: RegionTarget) {
   cancelDraw()
@@ -376,7 +456,7 @@ function selectRegion(region: RegionTarget) {
   updateBoundary(true)
 }
 function captureDisplayView() {
-  if (!controller || movingCameras.size) return null
+  if (!controller || cameraInMotion) return null
   const extent = controller.getDisplayRegionExtent()
   return extent ? { ...extent, camera: controller.getCamera() } : null
 }
@@ -434,6 +514,8 @@ function home() {
   controller?.home()
 }
 function toggleMode() {
+  if (calibrationBusy.value) return
+  cancelCalibration()
   cancelDraw()
   is2D.value = !is2D.value
   controller?.setMode(is2D.value)
@@ -484,8 +566,6 @@ function clearScene() {
   restoreAbort?.abort()
   temporal.pause()
   closeObjects()
-  comparisonOpen.value = false
-  comparisonController = undefined
   if (sceneLayers.value) for (const layer of sceneLayers.value) controller?.remove(layer)
   sceneLayers.value = null
   sceneRecord.value = null
@@ -508,10 +588,9 @@ async function restoreWorkspace(scene: SceneRecord | null, address: WorkspaceAdd
   }
   const prepared = scene ? await prepareSceneLayers(scene.layers, props.layers, restoreAbort.signal) : null
   if (version !== restoreVersion || !controller) return
+  cancelCalibration()
   closeObjects()
   temporal.pause()
-  comparisonOpen.value = false
-  comparisonController = undefined
   if (prepared) {
     if (!sceneLayers.value) plainView = { camera: controller.getCamera(), time: time.value, resolution: resolution.value }
     emit('sceneMode', true)
@@ -543,11 +622,6 @@ async function restoreWorkspace(scene: SceneRecord | null, address: WorkspaceAdd
     updateBoundary()
   } else if (camera) controller.setCamera(camera)
   temporal.paint()
-  if (address.comparison) {
-    comparisonTime.value = { ...address.comparison }
-    comparisonOpen.value = true
-    await nextTick()
-  }
   controller.resume()
 }
 function captureWorkspace(): WorkspaceCapture {
@@ -555,7 +629,6 @@ function captureWorkspace(): WorkspaceCapture {
   const camera = controller.getCamera()
   const current_time = time.value || null
   return { page: 'map', camera, time: current_time, resolution: resolution.value, run_id: null,
-    comparison: comparisonOpen.value ? { ...comparisonTime.value } : null,
     scene: { name: sceneRecord.value?.name ?? '地图画面', camera, current_time, run_id: null,
       layers: captureLayers(viewLayers.value.filter(layer => layer.map_attached ?? layer.attached)), network: null, origin: null, destination: null,
       blocked_edges: [], params: { mode: 'car' }, seed: 0 } }
@@ -579,14 +652,15 @@ function captureView() {
   if (!controller) throw new Error('地图尚未就绪')
   return { camera: controller.getCamera(), region: selectedRegion.value }
 }
-defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace, cancelRestore, isReady: () => !!controller })
+defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace, cancelRestore, blockedTilesAsset,
+  isReady: () => !!controller, canCapture: () => !!controller && !blockedTilesAsset.value })
 </script>
 
 <template>
   <div class="map-workspace" :style="{ '--time-axis-height': `${timeAxisHeight}px` }" aria-label="地图工作台视图">
-    <div class="primary-map" :class="{ split: comparisonOpen }"><MapCanvas
+    <div class="primary-map"><MapCanvas
       :weather-effect="shownWeather.effect" track-weather
-      @camera-move="cameraMoving('left')" @weather-resize="weather.resized"
+      @camera-move="cameraMoving" @weather-resize="weather.resized"
       @ready="onMapReady"
       @selection="onMapSelection"
       @notice="notice = $event"
@@ -595,12 +669,9 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @navigation="onNavigation"
       @ground="queryNearby"
     /></div>
-    <ComparisonView v-if="comparisonOpen && navigation" :active="active" :layers="viewLayers" :camera="navigation.camera" :initial-time="comparisonTime" :recovery="recovery"
-      :weather-effect="shownWeather.effect" @camera-move="cameraMoving('right')"
-      @ready="comparisonReady" @navigation="onComparisonNavigation" @time="comparisonTime = $event" />
-    <WeatherControl class="map-weather" :class="{ comparing: comparisonOpen }" compact v-model:mode="weatherMode"
+    <WeatherControl class="map-weather" compact v-model:mode="weatherMode"
       :weather="shownWeather" :status="weatherStatus" :region="weatherRegion?.name" :reference="weatherReference" />
-    <LayerPanel v-if="!comparisonOpen"
+    <LayerPanel
       v-model:open="sidebar"
       v-model:filter="filter"
       :layers="viewLayers"
@@ -608,6 +679,8 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       :catalog-error="catalogError"
       :ordering="ordering"
       :order-error="orderError"
+      :allow-calibration="allowCalibration"
+      :blocked-tiles-asset="blockedTilesAsset"
       @add="emit('add')"
       @refresh="emit('refresh')"
       @toggle="changeLayer($event, 'toggle')"
@@ -617,9 +690,10 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @opacity="setOpacity"
       @road-max-level="setRoadMaxLevel"
       @tiles-placement="setTilesPlacement"
+      @calibrate="startCalibration"
       @move="move"
     />
-    <RegionPicker v-if="!comparisonOpen"
+    <RegionPicker
       v-model:boundary-enabled="boundaryEnabled"
       :boundary-state="boundaryState"
       :selected="selectedRegion"
@@ -645,7 +719,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
         />
       </template>
     </RegionPicker>
-    <MapToolbar v-if="!comparisonOpen"
+    <MapToolbar
       class="browse-tools"
       :is2-d="is2D"
       :heading="navigation?.camera.heading ?? 0"
@@ -657,9 +731,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @tilt="tiltMap"
       @north="northMap"
     />
-    <button v-if="!comparisonOpen" class="object-trigger panel" :aria-expanded="objectsOpen" aria-label="打开对象查询" @click="toggleObjects">对象查询</button>
-    <button class="comparison-trigger panel" :class="{ comparing: comparisonOpen }" :disabled="!comparisonOpen && (!dynamicLayers.length || !navigation || is2D !== (navigation.camera.scene_mode === '2d'))" :aria-pressed="comparisonOpen" @click="toggleComparison">{{ comparisonOpen ? '退出时间对比' : '双视图时间对比' }}</button>
-    <span v-if="comparisonOpen" class="comparison-heading panel">左 / 右 · 同视角，时间独立</span>
+    <button class="object-trigger panel" :aria-expanded="objectsOpen" aria-label="打开对象查询" @click="toggleObjects">对象查询</button>
     <PoiDetails v-if="objectsOpen && inspectedPoiLayer && !poiDraft"
       :selection="inspectedSelection" :layer="inspectedPoiLayer" :distance="inspectedPoiDistance"
       :edit-poi="!!poiSelectionLayer" @close="closeObjects" @back="clearObjectSelection" @edit-poi="startPoi(true)" />
@@ -684,10 +756,12 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
     <PoiEditor v-if="poiDraft" v-show="!poiPicking" ref="poiEditor"
       :layers="poiLayers" :layer="poiDraft.layer" :object="poiDraft.object" :coordinates="poiDraft.coordinates"
       @pick="pickPoiPosition" @cancel="cancelPoi()" @saved="savePoi" @refresh="cancelPoi(); emit('refresh')" />
-    <MapLegend v-if="!objectsOpen && !comparisonOpen" :layers="viewLayers" :class="{ 'temporal-legend': dynamicLayers.length }" />
+    <TilesCalibrationPanel v-if="calibration" class="model-calibration" :name="calibration.layer.name" :offsets="calibrationOffsets"
+      :busy="calibrationBusy" :ready="!!calibrationMatrix" :can-pick="canPickCalibrationPivot" :message="calibrationNotice" :error="calibrationError"
+      @change="changeCalibration" @pick="pickCalibrationPivot" @cancel="cancelCalibration" @save="publishCalibration" />
+    <MapLegend v-if="!objectsOpen" :layers="viewLayers" :class="{ 'temporal-legend': dynamicLayers.length }" />
     <TimeAxis v-if="dynamicLayers.length || metadataLoading" :time="time" v-model:resolution="resolution" v-model:rate="rate"
       ref="timeAxis"
-      :class="{ 'comparison-time-left': comparisonOpen }" :label="comparisonOpen ? '左侧时间轴' : undefined"
       :playing="playing" :maximum="maximum" :position="position" :times="times" :loading="timeLoading" :metadata-loading="metadataLoading"
       :counts="timeCounts" :errors="timeErrors" :all-missing="allMissing"
       @select="temporal.setTime" @seek="temporal.seek" @step="temporal.step" @play="temporal.play" @pause="temporal.pause"
@@ -710,20 +784,15 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 </template>
 
 <style scoped>
+.model-calibration { position: absolute; z-index: 6; top: 166px; right: 72px; }
+@media (max-width: 760px) { .model-calibration { top: auto; bottom: 60px; right: 12px; max-height: 41vh; } }
 .poi-prompt { position: absolute; z-index: 6; bottom: 60px; left: 50%; transform: translateX(-50%); padding: 12px 16px; font-size: 12px; }
 .poi-prompt button { color: var(--blue); margin-left: 8px; }
 .object-trigger { position: absolute; z-index: 3; right: 78px; top: 84px; padding: 11px 15px; font-size: 11px; color: var(--blue); }
 .scene-banner { position: absolute; z-index: 4; top: 190px; right: 24px; padding: 10px 14px; display: flex; gap: 12px; font-size: 11px; }
 .scene-banner button { color: var(--blue); }
 .primary-map { position: absolute; inset: 0; }
-.primary-map.split { right: 50%; }
-.comparison-trigger { position: absolute; z-index: 3; right: 78px; top: 132px; padding: 11px 15px; font-size: 11px; color: var(--blue); }
-.comparison-trigger.comparing { top: 84px; right: 24px; }
-.comparison-trigger:disabled { opacity: .5; }
-.comparison-heading { position: absolute; left: 24px; top: 84px; padding: 11px 15px; font-size: 11px; color: #65788e; }
 .map-weather { position: absolute; z-index: 2; right: 185px; top: 84px; }
-.map-weather.comparing { right: 150px; }
-.comparison-time-left { left: 24px; right: calc(50% + 12px); }
 .temporal-legend { bottom: calc(var(--time-axis-height) + 58px); }
 .temporal-objects { max-height: max(100px, calc(100svh - var(--time-axis-height) - 192px)); }
 .map-workspace {
@@ -745,13 +814,9 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 .state-errors button { flex-shrink: 0; color: var(--blue); }
 @media (max-width: 760px) {
   .map-weather { right: 12px; top: 76px; z-index: 5; }
-  .map-weather.comparing { left: 12px; right: auto; }
   .browse-tools { top: 124px; }
-  .comparison-heading { display: none; }
 }
 @media (max-width: 600px) {
-  .primary-map.split { right: 0; bottom: 50%; }
-  .comparison-time-left { left: 12px; right: 64px; bottom: calc(50% + 52px); max-height: max(110px, calc(50svh - 140px)); }
   .map-workspace:has(> .time-axis) :deep(.layer-panel) {
     max-height: max(100px, calc(100svh - var(--time-axis-height) - 130px));
   }

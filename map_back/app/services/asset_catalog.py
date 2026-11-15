@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.services.assets import ensure_initial_version, external_registration_key, local_parts, lock_catalog, version_record
+from app.services.assets import calibrated_parts, ensure_initial_version, external_registration_key, local_parts, lock_catalog, version_record
 from app.schemas.assets import AssetRegisterInput
 from app.errors import ApiProblem
 from app.models import Asset, AssetVersion
@@ -20,7 +20,10 @@ def registered_asset(session: Session, identity: str):
 
 def register_asset(body: AssetRegisterInput, session: Session):
     lock_catalog(session)
-    parts = local_parts(body.location)
+    try:
+        parts = calibrated_parts(body.location) or local_parts(body.location)
+    except ValueError as error:
+        raise ApiProblem(422, "CONTENT_INVALID", str(error)) from error
     builtin_id = builtin_asset_for_url(body.location)
     if parts or builtin_id:
         asset = session.get(Asset, builtin_id or parts[0])

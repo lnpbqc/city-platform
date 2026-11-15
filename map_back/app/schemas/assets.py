@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.common import Bounds
+from app.schemas.common import Bounds, TilesGroundAnchor
 
 class AssetVersionRef(BaseModel):
     asset_id: str = Field(min_length=1)
@@ -16,6 +16,22 @@ class AssetRegisterInput(BaseModel):
     location: str = Field(min_length=1, max_length=2048)
     source: str = Field(default="", max_length=500)
     coordinate_description: str = Field(default="", max_length=1000)
+
+
+class TilesCalibrationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_version: str = Field(min_length=1, max_length=32)
+    base_revision: int = Field(ge=0, strict=True)
+    matrix: list[Annotated[float, Field(strict=True, allow_inf_nan=False)]] = Field(min_length=16, max_length=16)
+    mode: Literal["update", "copy"]
+    name: Annotated[str, Field(min_length=1, max_length=120)] | None = None
+    terrain_anchor: TilesGroundAnchor
+
+    @model_validator(mode="after")
+    def copy_requires_name(self):
+        if self.mode == "copy" and not (self.name and self.name.strip()):
+            raise ValueError("请为新资产填写名称")
+        return self
 
 
 class AssetVersionOutput(AssetVersionRef):
@@ -32,6 +48,9 @@ class AssetVersionOutput(AssetVersionRef):
     sha256: str | None
     file_checksums: list[dict] = Field(default_factory=list)
     bounds: Bounds | None
+    tiles_calibrated: bool = False
+    revision: int = 0
+    tiles_terrain_anchor: TilesGroundAnchor | None = None
     status: Literal["ready", "missing", "unsafe"]
     created_at: datetime
 
@@ -87,6 +106,9 @@ class AssetOutput(BaseModel):
     coordinate_description: str
     sha256: str | None
     bounds: Bounds | None
+    tiles_calibrated: bool = False
+    revision: int = 0
+    tiles_terrain_anchor: TilesGroundAnchor | None = None
 
     @field_validator("uploaded_at", "discovered_at")
     @classmethod

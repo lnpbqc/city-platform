@@ -188,6 +188,11 @@ def _merge_longitude(left, right):
     return merged[(index + 1) % len(merged)][0] - 180, merged[index][1] - 180
 
 
+def manifest_digest(manifest: list[dict]) -> str:
+    payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def build_metadata(root: Path, files: list[dict], entry_relative: str, kind: str, *, include_bounds: bool = True) -> dict:
     manifest = []
     for item in sorted(files, key=lambda value: value["path"]):
@@ -200,7 +205,6 @@ def build_metadata(root: Path, files: list[dict], entry_relative: str, kind: str
                 digest.update(chunk)
                 size += len(chunk)
         manifest.append({"path": item["path"], "size": size, "sha256": digest.hexdigest()})
-    encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     bounds = None
     if include_bounds and kind in ("geojson", "3dtiles"):
         try:
@@ -231,4 +235,4 @@ def build_metadata(root: Path, files: list[dict], entry_relative: str, kind: str
                     bounds = _tiles_bounds(document)
         except (OSError, ValueError, TypeError, OverflowError, RecursionError):
             bounds = None
-    return {"files": manifest, "sha256": hashlib.sha256(encoded).hexdigest(), "bounds": bounds}
+    return {"files": manifest, "sha256": manifest_digest(manifest), "bounds": bounds}

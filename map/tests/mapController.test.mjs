@@ -1,7 +1,10 @@
 import { beforeEach, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Color, EasingFunction, Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Quaternion } from 'cesium'
+import {
+  Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Color, EasingFunction, Ellipsoid, IntersectionTests, Resource,
+  Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Plane, Quaternion, Ray, Transforms,
+} from 'cesium'
 
 const deferred = () => {
   let resolve
@@ -19,6 +22,7 @@ beforeEach(t => {
   basemapTerrain = undefined
   terrainSamples = []
   tilesSamples = []
+  wgs84TilesNormals = false
   sampleTilesHeight = async () => 32
   frameTime = 0
   t.mock.method(performance, 'now', () => frameTime)
@@ -47,7 +51,7 @@ mock.module('../src/map/buildingTerrain.ts', {
 const flatTerrain = { name: 'ellipsoid' }
 const worldTerrain = { name: 'world', bounds: { minimum: 2, maximum: 30 } }
 let basemapTerrain
-let tilesSamples, sampleTilesHeight
+let tilesSamples, sampleTilesHeight, wgs84TilesNormals
 mock.module('../src/map/basemap.ts', {
   exports: { initializeBasemap: async () => basemapTerrain },
 })
@@ -221,7 +225,11 @@ class Handler {
 mock.module('cesium', {
   exports: {
     Viewer,
+    Resource,
     EasingFunction,
+    IntersectionTests,
+    Plane,
+    Transforms,
     Ion: {},
     Math: { toRadians: (value) => value, toDegrees: (value) => value },
     Cartographic: {
@@ -232,16 +240,21 @@ mock.module('cesium', {
       },
       fromDegrees: (longitude, latitude) => ({ longitude, latitude }),
     },
-    Ellipsoid: { WGS84: { maximumRadius: 6378137, geodeticSurfaceNormalCartographic: () => 1 } },
+    Ellipsoid: { WGS84: { maximumRadius: 6378137, geodeticSurfaceNormalCartographic: point => wgs84TilesNormals
+      ? Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(Wgs84Cartographic.fromDegrees(point.longitude, point.latitude)) : 1 } },
     Matrix3,
     PerspectiveFrustum,
     Quaternion,
-    Matrix4: {
-      clone: (matrix) => ({ ...matrix }),
-      equals: (left, right) => left.height === right.height,
-      getTranslation: RootMatrix.getTranslation,
-      fromTranslation: (height) => ({ height }),
-      multiply: (translation, original, result) => Object.assign(result, { height: translation.height + original.height }),
+    Matrix4: class extends RootMatrix {
+      static clone(matrix) { return matrix instanceof RootMatrix ? RootMatrix.clone(matrix) : { ...matrix } }
+      static equals(left, right) { return left instanceof RootMatrix ? RootMatrix.equals(left, right) : left.height === right.height }
+      static fromTranslation(value) { return value instanceof Vector ? RootMatrix.fromTranslation(value) : { height: value } }
+      static multiply(left, right, result) {
+        if (left instanceof RootMatrix) return RootMatrix.multiply(left, right, result)
+        if (right instanceof RootMatrix)
+          return RootMatrix.multiply(RootMatrix.fromTranslation(new Vector(0, 0, left.height)), right, new RootMatrix())
+        return Object.assign(result, { height: left.height + right.height })
+      }
     },
     sampleTerrainMostDetailed: async (terrain, [point]) => {
       tilesSamples.push({ terrain, ...point })
@@ -258,7 +271,9 @@ mock.module('cesium', {
           return Vector.distance(Vector.fromDegrees(a.longitude, a.latitude), Vector.fromDegrees(b.longitude, b.latitude))
         return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
       }
-      static fromDegrees(longitude, latitude, height) { return { longitude, latitude, height } }
+      static fromDegrees(longitude, latitude, height) {
+        return wgs84TilesNormals ? Vector.fromDegrees(longitude, latitude, height) : { longitude, latitude, height }
+      }
     },
     Color,
     GeoJsonDataSource,
@@ -758,6 +773,175 @@ test('tiles sample the model origin by default without blocking the initial load
   await controller.setTilesPlacement(layer, { tiles_height_offset_m: 2, tiles_ground_anchor: anchor, tiles_align_to_terrain: false })
   assert.equal(tile.modelMatrix.height, 7)
   assert.equal(tilesSamples.length, 2)
+  controller.destroy()
+})
+
+test('tiles calibration previews the same rigid matrix it returns for publication and restores the baseline', async () => {
+  const { controller, layer } = setup('3dtiles', undefined, undefined, { terrain: false })
+  layer.tiles_align_to_terrain = false
+  const tile = new Cesium3DTileset()
+  const point = Vector.fromDegrees(113.37, 23.04, 35)
+  const frame = Transforms.eastNorthUpToFixedFrame(point)
+  tile.root = { transform: RootMatrix.fromTranslation(point) }
+  tile.boundingSphere.center = point
+  tile.modelMatrix = RootMatrix.fromTranslation(new Vector(2, 3, 5))
+  const baseline = RootMatrix.clone(tile.modelMatrix)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  const moved = [], invalidations = [], messages = []
+  const options = { moved: (...value) => moved.push(value), invalidated: () => invalidations.push(true), notice: value => messages.push(value) }
+  assert.equal(controller.beginTilesCalibration(layer, options), true)
+  const handle = viewer.entities.values.at(-1)
+  const offsets = { east: 10, north: 20, up: 4, yaw: 35, pitch: 11, roll: -9 }
+  const serialized = controller.updateTilesCalibration(offsets)
+  assert.deepEqual(serialized, RootMatrix.pack(tile.modelMatrix, []))
+  const adjustedPivot = RootMatrix.multiplyByPoint(tile.modelMatrix, point, new Vector())
+  const placed = RootMatrix.multiplyByPoint(baseline, point, new Vector())
+  const applied = Vector.subtract(adjustedPivot, placed, new Vector())
+  const expected = RootMatrix.multiplyByPointAsVector(frame, new Vector(10, 20, 4), new Vector())
+  assert.ok(Vector.distance(applied, expected) < 0.001)
+  assert.equal(controller.updateTilesCalibration({ ...offsets, up: NaN }), null)
+  viewer.scene.pick = () => ({ id: handle })
+  const dragFrame = Transforms.eastNorthUpToFixedFrame(placed)
+  const normal = RootMatrix.multiplyByPointAsVector(dragFrame, Vector.UNIT_Z, new Vector())
+  const at = (x, y, h) => RootMatrix.multiplyByPoint(dragFrame, new Vector(x, y, h), new Vector())
+  viewer.camera.getPickRay = ({ x, y }) => new Ray(at(x, y, 100), Vector.negate(normal, new Vector()))
+  down({ position: { x: 10, y: 20 } })
+  assert.equal(viewer.scene.screenSpaceCameraController.enableInputs, false)
+  move({ endPosition: { x: 25, y: 17 } })
+  assert.ok(Math.abs(moved[0][0] - 25) < 1e-5 && Math.abs(moved[0][1] - 17) < 1e-5)
+  viewer.canvasEvents.get('pointercancel')()
+  assert.equal(viewer.scene.screenSpaceCameraController.enableInputs, true)
+  controller.endTilesCalibration()
+  assert.deepEqual(tile.modelMatrix, baseline)
+  assert.ok(!viewer.entities.values.includes(handle))
+  assert.equal(controller.beginTilesCalibration(layer, options), true)
+  controller.remove(layer)
+  assert.deepEqual(invalidations, [true])
+  assert.deepEqual(messages, [])
+  controller.destroy()
+})
+
+test('tiles calibration samples the moved anchor and keeps the same relative height on flat ground', async () => {
+  basemapTerrain = worldTerrain
+  wgs84TilesNormals = true
+  const { controller, layer } = setup('3dtiles')
+  const gate = deferred()
+  sampleTilesHeight = () => gate.promise
+  const tile = new Cesium3DTileset()
+  const location = Vector.fromDegrees(113.37, 23.04, 16)
+  tile.root = { transform: RootMatrix.fromTranslation(location) }
+  tile.boundingSphere.center = location
+  tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  const notices = []
+  const options = { moved() {}, invalidated() {}, notice: message => notices.push(message) }
+  assert.equal(controller.beginTilesCalibration(layer, options), false)
+  assert.match(notices[0], /等待/)
+  gate.resolve(32)
+  await flush()
+  const baseline = RootMatrix.clone(tile.modelMatrix)
+  assert.equal(controller.beginTilesCalibration(layer, options), true)
+  assert.deepEqual(controller.updateTilesCalibration({ east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 }),
+    RootMatrix.pack(baseline, []))
+  sampleTilesHeight = async () => { throw new Error('offline') }
+  controller.updateTilesCalibration({ east: 100, north: 0, up: 8, yaw: 0, pitch: 0, roll: 0 })
+  const preview = RootMatrix.clone(tile.modelMatrix)
+  await assert.rejects(controller.prepareTilesCalibration(), /地形/)
+  assert.deepEqual(tile.modelMatrix, preview)
+  sampleTilesHeight = async () => 43
+  const saved = await controller.prepareTilesCalibration()
+  assert.ok(saved.terrain_anchor.longitude > 113.37)
+  assert.equal(saved.terrain_anchor.height, 43)
+  const actual = RootMatrix.multiplyByPoint(RootMatrix.fromArray(saved.matrix), location, new Vector())
+  assert.ok(Math.abs(Wgs84Cartographic.fromCartesian(actual).height - 51) < 0.01)
+  await controller.setTerrain(false)
+  assert.deepEqual(tile.modelMatrix, preview)
+  controller.endTilesCalibration()
+  assert.notDeepEqual(tile.modelMatrix, baseline)
+  assert.equal(controller.beginTilesCalibration(layer, options), true)
+  controller.updateTilesCalibration({ east: 100, north: 0, up: 8, yaw: 0, pitch: 0, roll: 0 })
+  const fromFlat = await controller.prepareTilesCalibration()
+  const bakedFromFlat = RootMatrix.multiplyByPoint(RootMatrix.fromArray(fromFlat.matrix), location, new Vector())
+  assert.ok(Vector.distance(actual, bakedFromFlat) < 0.01)
+  controller.endTilesCalibration()
+
+  layer.tiles_calibrated = true
+  layer.tiles_terrain_anchor = saved.terrain_anchor
+  layer.tiles_revision = 4
+  layer.asset_source_kind = 'upload'
+  tileRequest = deferred()
+  const baked = new Cesium3DTileset()
+  baked.root = tile.root
+  baked.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(baked)
+  await controller.load(layer)
+  assert.equal(tileSource.queryParameters.revision, 4)
+  assert.equal(tileSource.getDerivedResource({ url: 'sub/tileset.json' }).queryParameters.revision, 4)
+  const flat = RootMatrix.multiplyByPoint(baked.modelMatrix, actual, new Vector())
+  assert.ok(Math.abs(Wgs84Cartographic.fromCartesian(flat).height - 8) < 0.01)
+  await controller.setTerrain(true)
+  assert.deepEqual(baked.modelMatrix, RootMatrix.IDENTITY)
+  controller.destroy()
+})
+
+test('a tileset without a georeferenced root can supply a separate ground point', async () => {
+  basemapTerrain = worldTerrain
+  wgs84TilesNormals = true
+  const { controller, layer } = setup('3dtiles', undefined, undefined, { terrain: false })
+  const tile = new Cesium3DTileset()
+  const ground = Vector.fromDegrees(113.375, 23.05, 5)
+  tile.root = { transform: RootMatrix.IDENTITY }
+  tile.boundingSphere.center = Vector.fromDegrees(113.37, 23.04, 75)
+  tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {} })
+  await assert.rejects(controller.prepareTilesCalibration(), /贴地点/)
+  controller.updateTilesCalibration({ east: 10, north: 20, up: 6, yaw: 0, pitch: 0, roll: 0 })
+  const previewGround = RootMatrix.multiplyByPoint(tile.modelMatrix, ground, new Vector())
+  controller.pickTilesCalibrationPivot('ground')
+  viewer.scene.pickPositionSupported = true
+  viewer.scene.pick = () => ({ primitive: tile })
+  viewer.scene.pickPosition = () => previewGround
+  click({ position: { x: 10, y: 11 } })
+  const saved = await controller.prepareTilesCalibration()
+  assert.ok(saved.terrain_anchor.longitude > 113.375)
+  const point = RootMatrix.multiplyByPoint(RootMatrix.fromArray(saved.matrix), ground, new Vector())
+  assert.ok(Math.abs(Wgs84Cartographic.fromCartesian(point).height - 38) < 0.01)
+  controller.destroy()
+})
+
+test('a calibration pivot must be picked on the edited model, even when its opacity is reduced', async () => {
+  const { controller, layer } = setup('3dtiles', undefined, undefined, { terrain: false })
+  layer.tiles_align_to_terrain = false
+  const tile = new Cesium3DTileset()
+  const origin = Vector.fromDegrees(113.37, 23.04, 35)
+  const picked = Vector.fromDegrees(113.375, 23.05, 41)
+  tile.root = { transform: RootMatrix.fromTranslation(origin) }
+  tile.boundingSphere.center = origin
+  tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  const notices = []
+  controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice: message => notices.push(message) })
+  controller.pickTilesCalibrationPivot()
+  viewer.scene.pickPositionSupported = true
+  viewer.scene.pickTranslucentDepth = false
+  viewer.scene.pick = () => ({ primitive: {} })
+  viewer.scene.pickPosition = () => {
+    assert.equal(viewer.scene.pickTranslucentDepth, true)
+    return picked
+  }
+  click({ position: { x: 10, y: 11 } })
+  assert.match(notices.at(-1), /未拾取/)
+  viewer.scene.pick = () => ({ primitive: tile })
+  click({ position: { x: 10, y: 11 } })
+  assert.equal(notices.at(-1), '')
+  assert.equal(viewer.scene.pickTranslucentDepth, false)
+  const adjustment = controller.updateTilesCalibration({ east: 0, north: 0, up: 0, yaw: 41, pitch: -8, roll: 5 })
+  assert.ok(Vector.distance(RootMatrix.multiplyByPoint(RootMatrix.fromArray(adjustment), picked, new Vector()), picked) < 1e-5)
   controller.destroy()
 })
 

@@ -138,6 +138,10 @@ def test_default_download_and_delete_preserve_source_bytes(client, layer_id):
         with ZipFile(io.BytesIO(response.content)) as archive:
             assert set(archive.namelist()) == set(before)
             assert {path: hashlib.sha256(archive.read(path)).hexdigest() for path in archive.namelist()} == before
+        current = client.get(f"/api/assets/{identity}/versions/1.0.0/download")
+        assert current.status_code == 200, current.text
+        with ZipFile(io.BytesIO(current.content)) as archive:
+            assert {path: hashlib.sha256(archive.read(path)).hexdigest() for path in archive.namelist()} == before
     assert client.delete(f"/api/assets/{identity}").status_code == 403
     assert {item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest() for item in files} == before
 

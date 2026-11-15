@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.database import FILES_DIR, STORAGE_DIR, SessionLocal
-from app.services.assets import asset_for_url, bind_asset_version, ensure_initial_version, inventory, lock_catalog
+from app.services.assets import (TILES_HEIGHT_FIELDS, asset_for_url, bind_asset_version, ensure_initial_version,
+                                 inventory, layer_has_calibrated_tiles, lock_catalog, set_calibrated_layer)
 from app.cruds.layers import next_layer_order
-from app.models import Asset, Layer
+from app.models import Asset, AssetVersion, Layer
 from app.schemas.layers import LayerInput, LayerMapStateInput, LayerOutput
 from app.schemas.poi import PoiChange
 from app.services.poi_mutations import rewrite as rewrite_poi
@@ -30,6 +31,8 @@ def create_layer(body: LayerInput, session: Session):
     asset_id = asset_for_url(session, body.url, body.type)
     layer = Layer(id=str(uuid4()), asset_id=asset_id,
                   asset_version=session.get(Asset, asset_id).current_version if asset_id else None, **body.model_dump())
+    if layer_has_calibrated_tiles(session, layer):
+        set_calibrated_layer(layer, session.get(AssetVersion, (asset_id, layer.asset_version)))
     layer.map_order = next_layer_order(session)
     layer.orderable = layer_orderable(session, layer)
     if asset_id:
@@ -230,6 +233,8 @@ def update_layer(layer_id: str, body: LayerInput, session: Session):
         layer.map_attached = False
     for key, value in body.model_dump().items():
         setattr(layer, key, value)
+    if layer_has_calibrated_tiles(session, layer):
+        set_calibrated_layer(layer, session.get(AssetVersion, (layer.asset_id, layer.asset_version)))
     if resource_changed:
         layer.orderable = layer_orderable(session, layer)
     session.commit()
@@ -242,7 +247,8 @@ def update_layer_map_state(layer_id: str, body: LayerMapStateInput, session: Ses
     layer = session.get(Layer, layer_id)
     if layer is None:
         raise HTTPException(404, "图层登记不存在")
-    for key, value in body.model_dump(exclude_unset=True).items():
+    exclude = TILES_HEIGHT_FIELDS if layer_has_calibrated_tiles(session, layer) else None
+    for key, value in body.model_dump(exclude_unset=True, exclude=exclude).items():
         setattr(layer, key, value)
     session.commit()
     session.refresh(layer)

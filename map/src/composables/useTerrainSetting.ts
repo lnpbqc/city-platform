@@ -5,7 +5,7 @@ function storage() {
   try { return typeof window === 'undefined' ? undefined : window.localStorage } catch { return undefined }
 }
 
-// One display preference shared by every map canvas (map, comparison and simulation views).
+// One display preference shared by map and simulation views.
 const terrainEnabled = ref(readTerrainEnabled(storage()))
 const terrainAvailable = ionTerrainConfigured({
   VITE_BASEMAP_PROVIDER: import.meta.env?.VITE_BASEMAP_PROVIDER,

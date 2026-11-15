@@ -12,21 +12,36 @@ import {
   ArrowUp,
   ArrowDown,
 } from '@lucide/vue'
-import { fetchLayerDownload, layerDownload } from '../../layers/layerDownload'
+import { fetchLayerDownload, layerDownload, startTilesZipDownload } from '../../layers/layerDownload'
 import type { MapLayer, TilesPlacement } from '../../layers/types'
 import { objectCountLabel } from '../../layers/layerTree'
 import RenderStatus from '../data/RenderStatus.vue'
 import TilesHeightSettings from './TilesHeightSettings.vue'
-const props = defineProps<{ layer: MapLayer; canMoveUp?: boolean; canMoveDown?: boolean; ordering?: boolean }>()
+const props = defineProps<{ layer: MapLayer; canMoveUp?: boolean; canMoveDown?: boolean; ordering?: boolean;
+  allowCalibration?: boolean; downloadBlocked?: boolean }>()
 const downloadTarget = computed(() => layerDownload(props.layer))
 const downloading = ref(false)
 const downloadError = ref('')
+const calibrationHint = computed(() => {
+  const layer = props.layer
+  if (!layer.tiles_calibration_allowed) return '上传本地 3D Tiles 副本后可校准。'
+  if (!layer.attached || !layer.visible) return '显示模型后可校准。'
+  if (layer.status === 'loading') return '等待模型加载后校准。'
+  if (layer.status !== 'ready') return '模型加载完成后可校准。'
+  if (layer.tilesTerrainNotice?.startsWith('正在采样')) return '等待地形采样后校准。'
+  return ''
+})
 async function download() {
   if (downloading.value) return
+  if (props.downloadBlocked) {
+    downloadError.value = '请先保存校准，或取消预览后再下载。'
+    return
+  }
   downloading.value = true
   downloadError.value = ''
   const target = downloadTarget.value
   try {
+    if ('native' in target) { await startTilesZipDownload(target); return }
     const blob = await fetchLayerDownload(target.url)
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
@@ -51,6 +66,7 @@ const emit = defineEmits<{
   opacity: [value: number]
   roadMaxLevel: [value: number]
   tilesPlacement: [value: TilesPlacement]
+  calibrate: []
   move: [direction: number]
 }>()
 function changeOpacity(event: Event) {
@@ -154,7 +170,7 @@ function changeOpacity(event: Event) {
           v-else-if="layer.id !== 'basemap'"
           :disabled="downloading"
           :aria-label="`${downloading ? '正在准备下载' : '下载'}${layer.name}`"
-          :title="downloadTarget.label"
+          :title="downloadBlocked ? '请先保存校准或取消预览' : downloadTarget.label"
           @click="download"
         >
           <LoaderCircle v-if="downloading" :size="13" class="spin" /><Download
@@ -202,7 +218,12 @@ function changeOpacity(event: Event) {
         <option :value="4">第 4 级 · 增加服务道路/步行等</option>
       </select>
     </label>
-    <TilesHeightSettings v-if="layer.type === '3dtiles'" :placement="layer" @save="emit('tilesPlacement', $event)" />
+    <TilesHeightSettings v-if="layer.type === '3dtiles' && !layer.tiles_calibrated && !downloadBlocked" :placement="layer" @save="emit('tilesPlacement', $event)" />
+    <div v-if="layer.type === '3dtiles' && (allowCalibration || !layer.tiles_calibration_allowed)" class="calibration-trigger">
+      <button v-if="layer.tiles_calibration_allowed" class="text-button" type="button" :disabled="!!calibrationHint"
+        :aria-describedby="calibrationHint ? `calibration-hint-${layer.id}` : undefined" @click="emit('calibrate')">校准模型</button>
+      <span v-if="calibrationHint" :id="`calibration-hint-${layer.id}`" class="calibration-hint">{{ calibrationHint }}</span>
+    </div>
     <p v-if="layer.source" class="layer-source" :title="layer.source">
       {{ layer.source }}
     </p>
@@ -383,4 +404,12 @@ function changeOpacity(event: Event) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.calibration-trigger {
+  margin: 6px 0 0 46px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.calibration-hint { font-size: 10px; color: #65758a; }
 </style>

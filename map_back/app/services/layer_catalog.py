@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.services.assets import check_published_entries, local_parts, lock_catalog, published_files
 from app.services.builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, RETIRED_LAYER_IDS, builtin_asset_id, ensure_builtin_assets
 from app.errors import ApiProblem, logger
-from app.models import Asset, BuiltinLayerState, Layer
+from app.models import Asset, AssetVersion, BuiltinLayerState, Layer
 from app.schemas.layers import LayerCatalogStateInput
 from app.services.object_index import index_asset, object_counts
 from app.schemas.layers import Campus
@@ -22,8 +22,11 @@ GROUPS = {"底图", "建筑", "道路", "POI", "水体", "专题", "仿真结果
 
 
 def initialize_catalog(session: Session):
+    from app.services.tiles_calibration import recover_tiles_publications
+
     started = perf_counter()
     lock_catalog(session)
+    recover_tiles_publications(session)
     ensure_catalog(session)
     logger.info("startup stage=catalog_bootstrap duration_ms=%.2f", (perf_counter() - started) * 1000)
     started = perf_counter()
@@ -102,8 +105,12 @@ def catalog_rows(session: Session, campus: Campus):
                        "map_attached": state.map_attached, "map_visible": state.map_visible,
                        "map_opacity": state.map_opacity, "road_max_level": state.road_max_level, "order": state.map_order,
                        **(state.tiles_placements or {}).get(campus, {})})
+    from app.services.assets import can_calibrate
+
     aliases = {"三维建筑": "建筑", "三维模型": "建筑", "线状网络": "道路"}
     for layer in session.scalars(select(Layer)):
+        model = (session.get(AssetVersion, (layer.asset_id, layer.asset_version))
+                 if layer.type == "3dtiles" and layer.asset_id and layer.asset_version else None)
         result.append({"id": layer.id, "name": layer.name,
                        "category": aliases.get(layer.category, layer.category),
                        "type": layer.type, "asset": {"asset_id": layer.asset_id, "version": layer.asset_version} if layer.asset_id else None,
@@ -112,7 +119,12 @@ def catalog_rows(session: Session, campus: Campus):
                        "map_attached": layer.map_attached, "map_visible": layer.map_visible,
                        "map_opacity": layer.map_opacity, "road_max_level": layer.road_max_level, "order": layer.map_order,
                        "tiles_height_offset_m": layer.tiles_height_offset_m, "tiles_ground_anchor": layer.tiles_ground_anchor,
-                       "tiles_align_to_terrain": layer.tiles_align_to_terrain})
+                       "tiles_align_to_terrain": layer.tiles_align_to_terrain,
+                       "tiles_calibrated": bool(model and model.tiles_calibrated),
+                       "tiles_revision": model.revision if model else 0,
+                       "tiles_terrain_anchor": model.tiles_terrain_anchor if model else None,
+                       "tiles_calibration_allowed": can_calibrate(session.get(Asset, layer.asset_id))
+                       if layer.type == "3dtiles" and layer.asset_id else False})
     from app.services.rendering import describe
 
     temporal = catalog_timeseries(session)
@@ -151,6 +163,9 @@ def update_catalog_state(layer_id: str, body: LayerCatalogStateInput, session: S
         for index, row in enumerate(rows):
             states[row["id"]].map_order = index
     changes = body.model_dump(exclude_unset=True, exclude={"order"})
+    if current.get("tiles_calibrated"):
+        from app.services.assets import TILES_HEIGHT_FIELDS
+        changes = {key: value for key, value in changes.items() if key not in TILES_HEIGHT_FIELDS}
     if isinstance(state, BuiltinLayerState):
         placement = {key: changes.pop(key) for key in ("tiles_height_offset_m", "tiles_ground_anchor", "tiles_align_to_terrain") if key in changes}
         if placement:

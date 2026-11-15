@@ -5,6 +5,7 @@ from datetime import timezone
 import shutil
 import stat
 import tempfile
+import re
 from pathlib import Path, PurePosixPath
 from threading import Lock
 from urllib.parse import unquote, urlsplit
@@ -22,6 +23,9 @@ from app.services.asset_metadata import build_metadata
 from app.services.builtin_assets import RETIRED_ASSET_IDS, builtin_asset_files, builtin_asset_for_url, builtin_asset_location
 
 _deletion_lock = Lock()
+TILES_VERSIONS_DIR = STORAGE_DIR / "tiles-versions"
+TILES_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+TILES_HEIGHT_FIELDS = {"tiles_height_offset_m", "tiles_ground_anchor", "tiles_align_to_terrain"}
 
 
 def lock_catalog(session: Session):
@@ -57,13 +61,17 @@ def directory(root: Path, identity: str):
 
 
 def inventory(root: Path, identity: str):
-    target = directory(root, identity)
+    return inventory_directory(directory(root, identity))
+
+
+def inventory_directory(target: Path):
     files = []
+    resolved = target.resolve()
 
     def walk(folder: Path):
         for child in folder.iterdir():
             info = reject_link(child)
-            if child.resolve().is_relative_to(target.resolve()) is False:
+            if not child.resolve().is_relative_to(resolved):
                 raise ValueError("资产内部路径越界")
             if stat.S_ISDIR(info.st_mode):
                 walk(child)
@@ -74,6 +82,52 @@ def inventory(root: Path, identity: str):
 
     walk(target)
     return sorted(files, key=lambda item: item["path"])
+
+
+def relative_asset_path(path: str):
+    parts = path.split("/")
+    if any(part in ("", ".", "..") or "\\" in part or ":" in part or "\x00" in part for part in parts):
+        raise ValueError("本地文件地址包含不安全路径")
+    return PurePosixPath(*parts).as_posix()
+
+
+def calibrated_parts(url: str):
+    parts = urlsplit(url)
+    match = re.fullmatch(r"/api/assets/([^/]+)/versions/([^/]+)/tiles/(.*)", parts.path)
+    if not match or parts.netloc or parts.scheme:
+        return None
+    identity, version, entry = match.groups()
+    if parts.query or parts.fragment or not valid_identity(identity) or not TILES_VERSION.fullmatch(version):
+        raise ValueError("校准版本入口无效")
+    return identity, version, relative_asset_path(unquote(entry))
+
+
+def version_directory(identity: str, version: str):
+    if not TILES_VERSION.fullmatch(version):
+        raise ValueError("资产版本号无效")
+    parent = directory(TILES_VERSIONS_DIR, identity)
+    target = parent / version
+    if not stat.S_ISDIR(reject_link(target).st_mode) or target.resolve().parent != parent.resolve():
+        raise ValueError("校准版本目录无效")
+    return target
+
+
+def version_file(root: Path, relative: str):
+    parts = PurePosixPath(relative_asset_path(relative)).parts
+    current = root
+    for part in parts[:-1]:
+        current /= part
+        if not stat.S_ISDIR(reject_link(current).st_mode):
+            raise ValueError("资产文件的上级路径不是目录")
+    path = current / parts[-1]
+    if not stat.S_ISREG(reject_link(path).st_mode):
+        raise ValueError("资产包含非常规文件")
+    return path
+
+
+def can_calibrate(asset: Asset | None) -> bool:
+    return bool(asset and asset.type == "3dtiles" and asset.source_kind == "upload"
+                and not asset.protected and asset.status == "active" and valid_identity(asset.id))
 
 
 def detect_entry(identity: str, files: list[dict]):
@@ -130,6 +184,22 @@ def published_geojson_identity(session: Session, identity: str, relative_path: s
 
 
 def asset_for_url(session: Session, url: str, kind: str):
+    try:
+        calibrated = calibrated_parts(url)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    if calibrated:
+        identity, version, entry = calibrated
+        asset = session.get(Asset, identity)
+        record = session.get(AssetVersion, (identity, version))
+        if (not can_calibrate(asset) or kind != "3dtiles" or not record or not record.tiles_calibrated
+                or calibrated_parts(record.entry_url) != calibrated):
+            raise HTTPException(422, "校准模型入口不存在或不可用")
+        try:
+            version_file(version_directory(identity, version), entry)
+        except (OSError, ValueError) as error:
+            raise HTTPException(422, "校准模型入口无法读取") from error
+        return identity
     builtin_id = builtin_asset_for_url(url)
     if builtin_id:
         asset = session.get(Asset, builtin_id)
@@ -196,6 +266,13 @@ def published_files(asset: Asset, entry_url: str | None = None):
     entry_url = asset.entry_url if entry_url is None else entry_url
     if asset.source_kind == "default":
         return builtin_asset_files(asset.id, entry_url)
+    calibrated = calibrated_parts(entry_url) if entry_url else None
+    if calibrated:
+        identity, version, entry = calibrated
+        if identity != asset.id:
+            raise ValueError("资产入口与目录标识不一致")
+        root = version_directory(identity, version)
+        return root, inventory_directory(root), entry
     files = inventory(FILES_DIR, asset.id)
     parts = local_parts(entry_url) if entry_url else None
     if parts and parts[0] != asset.id:
@@ -212,6 +289,11 @@ def check_published_entries(session: Session):
         try:
             if asset.source_kind == "default":
                 root, entry = builtin_asset_location(asset.id, asset.entry_url)
+            elif asset.entry_url and (calibrated := calibrated_parts(asset.entry_url)):
+                identity, version, entry = calibrated
+                if identity != asset.id:
+                    raise ValueError("资产入口与目录标识不一致")
+                root = version_directory(identity, version)
             else:
                 parts = local_parts(asset.entry_url) if asset.entry_url else None
                 if (asset.entry_url and not parts) or (parts and parts[0] != asset.id):
@@ -295,6 +377,8 @@ def version_record(asset: Asset, version: AssetVersion):
             "byte_size": None if external else sum(item["size"] for item in version.file_manifest) if version.file_manifest is not None else version.byte_size,
             "file_count": None if external else len(version.file_manifest) if version.file_manifest is not None else version.file_count,
             "sha256": version.sha256, "file_checksums": version.file_manifest or [], "bounds": version.bounds,
+            "tiles_calibrated": version.tiles_calibrated,
+            "revision": version.revision, "tiles_terrain_anchor": version.tiles_terrain_anchor,
             "status": {"active": "ready", "missing": "missing"}.get(asset.status, "unsafe"),
             "created_at": created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at.astimezone(timezone.utc)}
 
@@ -307,6 +391,22 @@ def bind_asset_version(session: Session, layer: Layer, asset_id: str | None, rep
     layer.asset_id = asset_id
 
 
+def layer_has_calibrated_tiles(session: Session, layer: Layer) -> bool:
+    if layer.asset_id and layer.asset_version:
+        return bool(session.scalar(select(AssetVersion.tiles_calibrated)
+                                   .where(AssetVersion.asset_id == layer.asset_id,
+                                          AssetVersion.version == layer.asset_version)))
+    return False
+
+
+def set_calibrated_layer(layer: Layer, version: AssetVersion) -> None:
+    layer.asset_version = version.version
+    layer.url = version.entry_url
+    layer.tiles_height_offset_m = 0
+    layer.tiles_ground_anchor = None
+    layer.tiles_align_to_terrain = False
+
+
 def asset_record(session: Session, asset: Asset, detail=False, inspect_files=True):
     from app.services.rendering import describe, expired_source
     fields = ("id", "original_name", "type", "entry_url", "byte_size", "file_count", "uploaded_at", "discovered_at", "status", "error", "current_version", "source_kind", "protected", "name", "source", "coordinate_description")
@@ -315,6 +415,9 @@ def asset_record(session: Session, asset: Asset, detail=False, inspect_files=Tru
     expired = expired_source(session, asset.id, asset.current_version)
     result['render'] = describe(session, asset.id, asset.current_version)
     result.update(sha256=version.sha256 if version else None, bounds=version.bounds if version else None)
+    result["tiles_calibrated"] = bool(version and version.tiles_calibrated)
+    result["revision"] = version.revision if version else 0
+    result["tiles_terrain_anchor"] = version.tiles_terrain_anchor if version else None
     files = []
     if asset.source_kind == "external":
         result.update(byte_size=None, file_count=None)
@@ -354,14 +457,17 @@ def reconcile(session: Session):
             session.add(asset)
             discovered += 1
         try:
-            files = inventory(FILES_DIR, child.name)
             if discovered_asset:
+                files = inventory(FILES_DIR, child.name)
                 asset.type, asset.entry_url = detect_entry(child.name, files)
+                parts = local_parts(asset.entry_url) if asset.entry_url else None
+                entry = parts[1] if parts else ""
+            else:
+                _, files, entry = published_files(asset)
             asset.byte_size = sum(item["size"] for item in files)
             asset.file_count = len(files)
             asset.status, asset.error = "active", ""
-            parts = local_parts(asset.entry_url) if asset.entry_url else None
-            if parts and parts[1] not in {item["path"] for item in files} and not expired_source(session, asset.id, asset.current_version):
+            if entry and entry not in {item["path"] for item in files} and not expired_source(session, asset.id, asset.current_version):
                 asset.status, asset.error = "missing", "图层入口文件缺失"
         except HTTPException as error:
             asset.status, asset.error = "unsafe", str(error.detail)[:1000]
@@ -391,8 +497,8 @@ def reconcile(session: Session):
         except HTTPException:
             # Keep known references even when files are unavailable or unsafe.
             try:
-                parts = local_parts(layer.url)
-            except HTTPException:
+                parts = calibrated_parts(layer.url) or local_parts(layer.url)
+            except (HTTPException, ValueError):
                 parts = None
             try:
                 builtin_id = builtin_asset_for_url(layer.url)
@@ -411,6 +517,14 @@ def delete_asset(session: Session, identity: str):
     # deletions so a duplicate request cannot race a retry or the final commit.
     with _deletion_lock:
         _delete_asset(session, identity)
+
+
+def tiles_zip_filename(asset: Asset) -> str:
+    name = asset.name or Path((asset.original_name or "模型").replace("\\", "/")).stem
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name).strip().strip(".")
+    if name.lower().endswith(".zip"):
+        name = name[:-4]
+    return f"{name or '模型'}.zip"
 
 
 def prepare_download(session: Session, identity: str):
@@ -450,7 +564,8 @@ def prepare_download(session: Session, identity: str):
                 with ZipFile(target, "w", compression=ZIP_DEFLATED, compresslevel=1) as archive:
                     for item in files:
                         archive.write(root / item["path"], item["path"])
-                filename = Path((asset.original_name or "dataset.zip").replace("\\", "/")).stem + ".zip"
+                filename = (tiles_zip_filename(asset) if version and version.tiles_calibrated else
+                            Path((asset.original_name or "dataset.zip").replace("\\", "/")).stem + ".zip")
                 media_type = "application/zip"
             else:
                 raise HTTPException(409, "未识别的数据类型，不能下载")
@@ -507,6 +622,10 @@ def _delete_asset(session: Session, identity: str):
         reject_link(STORAGE_DIR)
         staging.mkdir(exist_ok=True)
         reject_link(staging)
+        versions = TILES_VERSIONS_DIR / identity
+        if versions.exists() or versions.is_symlink() or versions.is_junction():
+            inventory(TILES_VERSIONS_DIR, identity)
+            shutil.rmtree(directory(TILES_VERSIONS_DIR, identity))
         published = FILES_DIR / identity
         staged = staging / identity
         if published.exists() or published.is_symlink() or published.is_junction():

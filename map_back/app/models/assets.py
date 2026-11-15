@@ -39,3 +39,6 @@ class AssetVersion(Base):
     sha256: Mapped[str | None] = mapped_column(String(64))
     file_manifest: Mapped[list[dict] | None] = mapped_column(JSON)
     bounds: Mapped[dict | None] = mapped_column(JSON)
+    tiles_calibrated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tiles_terrain_anchor: Mapped[dict | None] = mapped_column(JSON)
