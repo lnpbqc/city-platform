@@ -25,9 +25,9 @@ from pydantic import BaseModel, Field
 from shapely import get_coordinates, line_merge, make_valid, remove_repeated_points, set_precision
 from shapely.geometry import MultiLineString, mapping, shape
 
-from app.geojson_stream import features
-from app.poi_style import poi_style
-from app.road_style import RANK, classification, road_groups, signature
+from app.services.geojson_stream import features
+from app.services.poi_style import poi_style
+from app.services.road_style import RANK, classification, road_groups, signature
 
 TOOL_VERSION = '2.79.0'
 RECIPE = 'geojson-v2'
