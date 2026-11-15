@@ -1,5 +1,6 @@
 import type { AssetDetail, AssetRecord, AssetQuery, AssetRegisterInput, AssetVersionRecord, Page, StatsOverview, LayerInput, LayerRecord, LayerCatalogRecord, LayerMapState, Bookmark, BookmarkInput, ObjectRecord, ObjectQuery, GeometryDocument } from '../layers/types'
 import type { CampusKey } from '../map/campuses'
+import type { DisplayRegion, DisplayRegionView } from '../map/displayRegions'
 import type { SceneInput, SceneRecord, NetworkRecord, RunInput, RunRecord, RunSnapshot, RunResult, RunQuery } from '../simulation/simulationTypes'
 import type { TemporalContext, TimeLayerQuery, TimeSeriesQuery, TimeSeriesRecord } from '../temporal/temporalTypes'
 import { publishApiEvent } from './apiEvents.ts'
@@ -85,6 +86,13 @@ async function request<T>(url: string, options?: RequestInit, format: 'json' | '
   }
 }
 export const getLayers = () => request<LayerRecord[]>('/api/layers')
+const displayRegionsPath = '/api/display-regions'
+export const getDisplayRegions = () => request<DisplayRegion[]>(displayRegionsPath)
+export const saveDisplayRegion = (body: { name: string } | DisplayRegionView | (DisplayRegionView & { name: string }), id?: string) =>
+  request<DisplayRegion>(id ? `${displayRegionsPath}/${encodeURIComponent(id)}` : displayRegionsPath,
+    { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+export const deleteDisplayRegion = (id: string) =>
+  request<void>(`${displayRegionsPath}/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getLayerCatalog = (campus: CampusKey, signal?: AbortSignal) =>
   request<LayerCatalogRecord[]>(`/api/layers/catalog?campus=${encodeURIComponent(campus)}`, { signal })
 export const saveCatalogMapState = (id: string, body: Partial<LayerMapState> & { order?: number }, campus: CampusKey = 'university-town') =>

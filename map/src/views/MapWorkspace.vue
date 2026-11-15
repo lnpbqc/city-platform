@@ -3,10 +3,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MapCanvas from '../components/map/MapCanvas.vue'
 import LayerPanel from '../components/layers/LayerPanel.vue'
 import RegionPicker from '../components/map/RegionPicker.vue'
+import DisplayRegionPanel from '../components/map/DisplayRegionPanel.vue'
 import BookmarkPanel from '../components/map/BookmarkPanel.vue'
 import MapToolbar from '../components/map/MapToolbar.vue'
 import WeatherControl from '../components/map/WeatherControl.vue'
 import { useWeatherView } from '../composables/useWeatherView'
+import { useDisplayRegions } from '../composables/useDisplayRegions'
+import type { DisplayRegion } from '../map/displayRegions'
 import ObjectPanel from '../components/map/ObjectPanel.vue'
 import PoiEditor from '../components/map/PoiEditor.vue'
 import PoiDetails from '../components/map/PoiDetails.vue'
@@ -18,7 +21,7 @@ import MapStatus from '../components/map/MapStatus.vue'
 import TimeAxis from '../components/common/TimeAxis.vue'
 import ComparisonView from '../components/map/ComparisonView.vue'
 import WorkspaceFeedback from '../components/common/WorkspaceFeedback.vue'
-import { demoRegion, resolveRegionTarget, type RegionTarget } from '../map/regions'
+import { campusRegions, demoRegion, resolveRegionTarget, type RegionTarget } from '../map/regions'
 import type { MapController, MapPoint } from '../map/mapController'
 import type { BoundaryState } from '../map/regionBoundary'
 import type { LayerRecord, MapLayer, Selection, ObjectRecord, TilesPlacement } from '../layers/types'
@@ -97,8 +100,12 @@ let comparisonController: MapController | undefined
 const comparisonOpen = ref(false)
 const comparisonTime = ref<TemporalContext>({ time: '', resolution: 'hour' })
 const synchronizeCamera = linkedCameras(() => controller, () => comparisonController)
-const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, () => props.active)
-const { mode: weatherMode, status: weatherStatus, display: shownWeather } = weather
+const displayRegions = useDisplayRegions(() => props.active && props.backend === 'online', () => props.recovery)
+const { regions: projectRegions, loading: displayRegionsLoading, loadError: displayRegionsError } = displayRegions
+const selectedDisplayId = ref('')
+const selectedDisplay = computed(() => projectRegions.value?.find(region => region.id === selectedDisplayId.value))
+const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, () => props.active, () => projectRegions.value)
+const { mode: weatherMode, status: weatherStatus, display: shownWeather, region: weatherRegion, reference: weatherReference } = weather
 const movingCameras = new Set<'left' | 'right'>()
 let mirroringCamera = false
 function mirrorCamera(side: 'left' | 'right', camera: CameraState) {
@@ -361,26 +368,54 @@ function selectRegion(region: RegionTarget) {
   cancelDraw()
   closeNearby()
   if (region.sampleKey) emit('campus', region.sampleKey)
+  selectedDisplayId.value = ''
   selectedRegion.value = region
   clearObjectSelection()
   is2D.value = false
   controller?.goToRegion(region)
   updateBoundary(true)
 }
+function captureDisplayView() {
+  if (!controller || movingCameras.size) return null
+  const extent = controller.getDisplayRegionExtent()
+  return extent ? { ...extent, camera: controller.getCamera() } : null
+}
+function openDisplayRegion(region: DisplayRegion) {
+  if (!controller) return false
+  cancelDraw()
+  controller.cancelPointPicking()
+  closeNearby()
+  clearObjectSelection()
+  selectedDisplayId.value = region.id
+  const campus = campusRegions.find(item => item.id === region.id)
+  if (campus?.sampleKey) {
+    selectedRegion.value = campus
+    emit('campus', campus.sampleKey)
+  }
+  updateBoundary()
+  return controller.flyToCamera(region.camera)
+}
 function selectPoint(point: MapPoint) {
   cancelDraw()
   closeNearby()
   clearObjectSelection()
+  selectedDisplayId.value = ''
   is2D.value = false
   controller?.goToPoint(point)
 }
 function updateBoundary(frame = false) {
   void controller?.setRegionBoundary(
-    boundaryEnabled.value ? selectedRegion.value.id : null,
+    boundaryEnabled.value && !selectedDisplay.value ? selectedRegion.value.id : null,
     frame,
   )
 }
 watch(boundaryEnabled, () => updateBoundary())
+watch(projectRegions, () => {
+  if (selectedDisplayId.value && !selectedDisplay.value) {
+    selectedDisplayId.value = ''
+    updateBoundary()
+  }
+})
 watch(
   () => props.active,
   async (active) => {
@@ -391,6 +426,7 @@ watch(
   },
 )
 function home() {
+  if (selectedDisplay.value) { openDisplayRegion(selectedDisplay.value); return }
   cancelDraw()
   closeNearby()
   clearObjectSelection()
@@ -498,6 +534,7 @@ async function restoreWorkspace(scene: SceneRecord | null, address: WorkspaceAdd
   const instant = address.time ?? scene?.current_time
   if (instant) temporal.setTime(instant)
   else if (address.region_id) temporal.seek(0)
+  selectedDisplayId.value = ''
   const camera = address.camera ?? scene?.camera
   if (region && camera) {
     selectedRegion.value = region
@@ -561,7 +598,8 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
     <ComparisonView v-if="comparisonOpen && navigation" :active="active" :layers="viewLayers" :camera="navigation.camera" :initial-time="comparisonTime" :recovery="recovery"
       :weather-effect="shownWeather.effect" @camera-move="cameraMoving('right')"
       @ready="comparisonReady" @navigation="onComparisonNavigation" @time="comparisonTime = $event" />
-    <WeatherControl class="map-weather" :class="{ comparing: comparisonOpen }" compact v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus" />
+    <WeatherControl class="map-weather" :class="{ comparing: comparisonOpen }" compact v-model:mode="weatherMode"
+      :weather="shownWeather" :status="weatherStatus" :region="weatherRegion?.name" :reference="weatherReference" />
     <LayerPanel v-if="!comparisonOpen"
       v-model:open="sidebar"
       v-model:filter="filter"
@@ -585,10 +623,17 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       v-model:boundary-enabled="boundaryEnabled"
       :boundary-state="boundaryState"
       :selected="selectedRegion"
+      :display-label="selectedDisplay?.name"
       :sidebar="sidebar"
       @select="selectRegion"
+      @open="displayRegions.refresh"
       @retry-boundary="updateBoundary()"
     >
+      <template #display-regions="{ close }">
+        <DisplayRegionPanel :regions="projectRegions ?? []" :loading="displayRegionsLoading" :load-error="displayRegionsError"
+          :capture="captureDisplayView" :save="displayRegions.save" :remove="displayRegions.remove"
+          @open="openDisplayRegion($event) && close()" @retry="displayRegions.refresh" />
+      </template>
       <template #bookmarks>
         <BookmarkPanel
           :selected="selectedRegion"

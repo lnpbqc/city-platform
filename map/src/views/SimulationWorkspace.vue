@@ -4,6 +4,7 @@ import { LoaderCircle, Save, Play, Square, Plus, RefreshCw, Crosshair, History }
 import MapCanvas from '../components/map/MapCanvas.vue'
 import WeatherControl from '../components/map/WeatherControl.vue'
 import { useWeatherView } from '../composables/useWeatherView'
+import { useDisplayRegions } from '../composables/useDisplayRegions'
 import { noWeather } from '../map/weather'
 import RunHistoryPanel from '../components/simulation/RunHistoryPanel.vue'
 import ReplayControls from '../components/simulation/ReplayControls.vue'
@@ -50,8 +51,10 @@ const notice = ref('')
 const runStatus = ref<HTMLElement | null>(null)
 const preview = ref(true)
 const fixedWeather = computed(() => historical.value || !preview.value)
-const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, () => props.active && !fixedWeather.value)
-const { mode: weatherMode, status: weatherStatus } = weather
+const useLiveWeather = () => props.active && !fixedWeather.value
+const { regions: projectRegions } = useDisplayRegions(() => useLiveWeather() && props.backend === 'online', () => props.recovery)
+const weather = useWeatherView(() => controller?.getWeatherPoint() ?? null, useLiveWeather, () => projectRegions.value)
+const { mode: weatherMode, status: weatherStatus, region: weatherRegion, reference: weatherReference } = weather
 const shownWeather = computed(() => fixedWeather.value ? snapshot.value?.request.weather ?? noWeather : weather.display.value)
 function submit() { return submitRun(shownWeather.value) }
 const replayPositions = ref<{ baseline: number[] | null; blocked: number[] | null }>({ baseline: null, blocked: null })
@@ -277,7 +280,8 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
     <aside class="simulation-config panel" aria-label="仿真配置">
       <header><div><span class="eyebrow">SIMULATION</span><h1>仿真推演</h1></div><button class="icon-button" aria-label="新建场景" :disabled="configurationLocked" @click="newScene(); preview = true"><Plus :size="18" /></button></header>
       <p class="synthetic">{{ network?.synthetic ? '合成演示 · 校区附近路网' : '版本化路网' }}</p>
-      <WeatherControl class="simulation-weather" v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus" :fixed="fixedWeather" />
+      <WeatherControl class="simulation-weather" v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus"
+        :region="weatherRegion?.name" :reference="weatherReference" :fixed="fixedWeather" />
       <p v-if="loading || backend === 'loading'"><LoaderCircle :size="14" class="spin" />正在读取场景与路网…</p>
       <fieldset :disabled="configurationLocked">
         <label>已保存场景<select aria-label="选择场景" :value="sceneId" @change="selectScene"><option value="">新建场景</option><option v-for="scene in scenes" :key="scene.id" :value="scene.id">{{ scene.name }} · v{{ scene.version }}</option></select></label>

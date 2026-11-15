@@ -14,7 +14,7 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
-  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, comparisonReady, onComparisonNavigation, cameraMoving, shownWeather, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError }
+  return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, toggleComparison, comparisonOpen, comparisonReady, onComparisonNavigation, cameraMoving, shownWeather, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError, captureDisplayView, openDisplayRegion, home }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
@@ -35,10 +35,14 @@ function setup(options = {}) {
     cancellations: 0,
     initialize() {}, highlights: [], highlightObjects(...args) { this.highlights.push(args) }, objectPage() {}, setMode() {}, resume() {},
     cancelAreaSelection() { this.cancellations++; this.cancelled?.() },
+    cancelPointPicking() { this.pointMarker = null },
     beginAreaSelection(mode, callback, cancelled) { this.callback = callback; this.cancelled = cancelled },
     getCamera() { return this.camera ?? { longitude: 113, latitude: 23, height: 800, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' } },
     getWeatherPoint() { return options.weatherPoint?.() ?? null },
-    setCamera(camera) { this.camera = camera },
+    getDisplayRegionExtent() { return options.extent?.() ?? null },
+    setRegionBoundary() {},
+    setCamera(camera) { this.camera = camera; return true },
+    flyToCamera(camera) { return options.fly ? options.fly(camera) : this.setCamera(camera) },
     removed: [], remove(layer) { this.removed.push(layer.id); layer.attached = false },
     async load(layer) { layer.attached = true; layer.status = 'ready' }, appearance() {}, syncOrder() {},
   }
@@ -48,6 +52,7 @@ function setup(options = {}) {
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: hook => hooks.push(hook) }
     if (name === '../composables/useObjects') return { useObjects: () => objects }
     if (name === '../composables/useWeatherView') return { useWeatherView }
+    if (name === '../composables/useDisplayRegions') return { useDisplayRegions: () => ({ regions: vue.ref(options.displayRegions ?? []) }) }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
     if (name === '../map/linkedCameras') return { linkedCameras }
     if (name === '../map/poi') return poi
@@ -57,7 +62,7 @@ function setup(options = {}) {
     }
     if (name === '../layers/layerTree') return {}
     if (name === '../map/mapNavigation') return { readMapView: () => null }
-    if (name === '../map/regions') return { demoRegion: {} }
+    if (name === '../map/regions') return { demoRegion: {}, campusRegions: [{ id: 'demo-huangpu', sampleKey: 'huangpu' }] }
     if (name.endsWith('.vue')) return {}
     throw new Error(`Unexpected workspace dependency: ${name}`)
   }, () => props, () => (...args) => events.push(args), () => {}, {}, { localStorage: {}, removeEventListener() {} }, { removeEventListener() {} }))
@@ -232,6 +237,57 @@ test('failed or superseded scene preflight cannot replace the current map', asyn
   ctx.cleanup()
 })
 
+test('display areas capture and reopen both camera modes and keep the campus shortcut', t => {
+  let extent = null
+  const ctx = setup({ extent: () => extent })
+  t.after(ctx.cleanup)
+  assert.equal(ctx.panel.captureDisplayView(), null)
+  extent = { latitude: 23, longitude: 114, radius_m: 1700 }
+  const first = ctx.panel.captureDisplayView()
+  assert.deepEqual(first, { ...extent, camera: ctx.controller.getCamera() })
+  const flat = { ...first.camera, longitude: 114, height: 3500, scene_mode: '2d' }
+  ctx.controller.pointMarker = { longitude: 113, latitude: 23 }
+  ctx.panel.openDisplayRegion({ id: 'new', name: '广场', ...extent, camera: flat })
+  assert.deepEqual(ctx.panel.captureDisplayView().camera, flat)
+  assert.equal(ctx.controller.pointMarker, null)
+  ctx.panel.openDisplayRegion({ id: 'demo-huangpu', name: '黄埔校区', ...first })
+  assert.deepEqual(ctx.panel.captureDisplayView().camera, first.camera)
+  assert.deepEqual(ctx.events.filter(([type]) => type === 'campus'), [['campus', 'huangpu']])
+})
+
+test('display-region clicks and home fly without sampling weather or capturing an intermediate view', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_790_000_000_000 })
+  const requests = [], flights = []
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests.push(url)
+    return { ok: true, json: async () => ({ latitude: 24, longitude: 115, code: 71, is_day: true, valid_at: '2026-01-01T00:00:00Z' }) }
+  })
+  const target = { latitude: 24, longitude: 115, height: 700, heading: 0.5, pitch: -0.8, roll: 0, scene_mode: '3d' }
+  const region = { id: 'test-flight', name: '区域', latitude: 24, longitude: 115, radius_m: 1600, camera: target }
+  let point = null
+  const ctx = setup({
+    displayRegions: [region],
+    extent: () => point && region,
+    weatherPoint: () => point,
+    fly(camera) { flights.push(camera); ctx.panel.cameraMoving('left'); return true },
+  })
+  t.after(ctx.cleanup)
+  assert.equal(ctx.panel.openDisplayRegion(region), true)
+  assert.deepEqual(flights, [target])
+  point = region
+  ctx.panel.onNavigation({ camera: target }, false)
+  t.mock.timers.tick(2200)
+  assert.equal(ctx.panel.captureDisplayView(), null)
+  assert.deepEqual(requests, [])
+  ctx.panel.onNavigation({ camera: target }, true)
+  t.mock.timers.tick(600)
+  await new Promise(setImmediate)
+  assert.deepEqual(requests, ['/api/weather/current?lat=24&lon=115'])
+  assert.equal(ctx.panel.shownWeather.value.effect, 'snow')
+  ctx.panel.home()
+  assert.deepEqual(flights, [target, target])
+})
+
 test('comparison waits for the driving camera to settle and queries weather once', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_800_000_000_000 })
   const requests = []
@@ -240,7 +296,7 @@ test('comparison waits for the driving camera to settle and queries weather once
     return { ok: true, json: async () => ({ latitude: 23, longitude: 114, code: 71, is_day: true, valid_at: '2026-01-01T00:00:00Z' }) }
   })
   let point = { latitude: 23, longitude: 113 }
-  const ctx = setup({ weatherPoint: () => point })
+  const ctx = setup({ weatherPoint: () => point, displayRegions: [{ id: 'comparison', name: '对比区域', latitude: 23, longitude: 114, radius_m: 5000 }] })
   t.after(() => ctx.cleanup())
   ctx.controller.setCamera = camera => {
     ctx.controller.camera = camera

@@ -1,6 +1,6 @@
 export type WeatherEffect = 'none' | 'clear' | 'rain' | 'snow'
 export type WeatherMode = 'auto' | Exclude<WeatherEffect, 'none'>
-export type WeatherStatus = 'hidden' | 'loading' | 'ready' | 'unavailable'
+export type WeatherStatus = 'hidden' | 'outside' | 'loading' | 'ready' | 'limited' | 'unavailable'
 
 export interface WeatherPoint { latitude: number; longitude: number }
 export interface WeatherReading extends WeatherPoint {

@@ -1,7 +1,7 @@
 import { beforeEach, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Color, Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Quaternion } from 'cesium'
+import { Cartesian3 as Vector, Cartographic as Wgs84Cartographic, Color, EasingFunction, Math as Wgs84Math, Matrix3, Matrix4 as RootMatrix, PerspectiveFrustum, Quaternion } from 'cesium'
 
 const deferred = () => {
   let resolve
@@ -91,8 +91,9 @@ class Viewer {
     },
     globe: { pick: () => undefined, ellipsoid: {} },
     pick: () => undefined,
-    morphTo3D: () => { this.scene.mode = 3 },
-    morphTo2D: () => { this.scene.mode = 2 },
+    morphTo3D: () => { this.scene.mode = 3; this.scene.morphComplete.fire() },
+    morphTo2D: () => { this.scene.mode = 2; this.scene.morphComplete.fire() },
+    completeMorph: () => { this.scene.mode = 3; this.scene.morphComplete.fire() },
     morphComplete: event(),
     postUpdate: event(),
     postRender: event(),
@@ -125,6 +126,12 @@ class Viewer {
     },
     flyToBoundingSphere: (sphere, options) => {
       this.lastFlight = { sphere, options }
+    },
+    flyTo: (options) => { this.lastFlight = { options, mode: this.scene.mode } },
+    cancelFlight: () => {
+      const previous = this.lastFlight
+      this.lastFlight = undefined
+      previous?.options.cancel?.()
     },
     setView: (options) => {
       this.lastView = options
@@ -214,6 +221,7 @@ class Handler {
 mock.module('cesium', {
   exports: {
     Viewer,
+    EasingFunction,
     Ion: {},
     Math: { toRadians: (value) => value, toDegrees: (value) => value },
     Cartographic: {
@@ -245,7 +253,11 @@ mock.module('cesium', {
       static multiplyByScalar(value, scale, result) {
         return typeof value === 'number' ? value * scale : Vector.multiplyByScalar(value, scale, result)
       }
-      static distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) }
+      static distance(a, b) {
+        if (a.longitude !== undefined && b.longitude !== undefined)
+          return Vector.distance(Vector.fromDegrees(a.longitude, a.latitude), Vector.fromDegrees(b.longitude, b.latitude))
+        return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+      }
       static fromDegrees(longitude, latitude, height) { return { longitude, latitude, height } }
     },
     Color,
@@ -489,6 +501,78 @@ test('zoom framing leaves near, 2D and programmatic views alone and stops on rev
   assert.equal(viewer.canvasEvents.has('wheel'), false)
 })
 
+test('opening a saved camera cancels the previous region flight', () => {
+  const { controller } = setup()
+  controller.goToRegion({ latitude: 32, longitude: 103, range: 9000000, pitch: -90 })
+  assert.ok(viewer.lastFlight)
+  assert.equal(controller.setCamera({ longitude: 113, latitude: 23, height: 3200, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' }), true)
+  assert.equal(viewer.lastFlight, undefined)
+})
+
+test('display-region flights use an eased arc and settle only at the exact saved pose', () => {
+  const events = []
+  const { controller } = setup('geojson', undefined, (value, settled) => events.push({ value, settled }), {
+    onCameraMove: () => events.push('moving'),
+  })
+  const from = controller.getCamera()
+  const far = { ...from, longitude: 114.2, latitude: 22.3, height: 2100, heading: 0.9, pitch: -0.7, roll: 0.12 }
+  assert.equal(controller.flyToCamera(far), true)
+  const { options, mode } = viewer.lastFlight
+  assert.equal(mode, 3)
+  assert.equal(options.duration, 1.8)
+  assert.ok(options.maximumHeight > far.height)
+  assert.equal(options.easingFunction, EasingFunction.CUBIC_IN_OUT)
+  assert.deepEqual(options.destination, { longitude: far.longitude, latitude: far.latitude, height: far.height })
+  assert.deepEqual(options.orientation, { heading: far.heading, pitch: far.pitch, roll: far.roll })
+  viewer.scene.morphComplete.fire()
+  viewer.camera.moveEnd.fire()
+  assert.equal(events[0], 'moving')
+  assert.ok(events.slice(1).every(event => !event.settled))
+  viewer.camera.setView(options)
+  options.complete()
+  assert.deepEqual(events.at(-1), { value: { camera: far, pointer: null, scale: null }, settled: true })
+
+  const near = { ...far, longitude: 114.2001, scene_mode: '2d' }
+  assert.equal(controller.flyToCamera(near), true)
+  const flat = viewer.lastFlight
+  assert.equal(flat.mode, 2)
+  assert.equal(flat.options.duration, 1.1)
+  assert.equal(flat.options.maximumHeight, undefined)
+  assert.ok(events.slice(events.lastIndexOf('moving') + 1).every(event => !event.settled))
+  viewer.camera.setView(flat.options)
+  flat.options.complete()
+  assert.deepEqual(controller.getCamera(), near)
+
+  controller.flyToCamera({ ...near, latitude: near.latitude + 0.05 })
+  assert.equal(viewer.lastFlight.mode, 2, 'a saved 2D view also flies from an existing 2D view')
+})
+
+test('the latest display flight wins and map input cancels it without applying the target', t => {
+  const events = []
+  const { controller } = setup('geojson', undefined, (value, settled) => { if (settled) events.push(value.camera) })
+  const from = controller.getCamera()
+  controller.flyToCamera({ ...from, longitude: 114 })
+  const old = viewer.lastFlight.options
+  controller.flyToCamera({ ...from, longitude: 115 })
+  old.complete()
+  assert.deepEqual(events, [])
+  viewer.canvasEvents.get('pointerdown')()
+  assert.equal(viewer.lastFlight, undefined)
+  assert.deepEqual(events, [from])
+  controller.flyToCamera({ ...from, longitude: 116 })
+  viewer.canvasEvents.get('wheel')({ deltaY: -100 })
+  assert.equal(viewer.lastFlight, undefined)
+  assert.deepEqual(controller.getCamera(), from)
+
+  const previous = globalThis.window
+  t.after(() => { if (previous === undefined) delete globalThis.window; else globalThis.window = previous })
+  globalThis.window = { matchMedia: query => ({ matches: query === '(prefers-reduced-motion: reduce)' }) }
+  const flat = { ...from, scene_mode: '2d', longitude: 110, height: 1500 }
+  assert.equal(controller.flyToCamera(flat), true)
+  assert.equal(viewer.lastFlight, undefined)
+  assert.deepEqual(controller.getCamera(), flat)
+})
+
 test('automatic weather samples the center ground only at a local scale', () => {
   let moves = 0
   const { controller } = setup('geojson', undefined, undefined, { onCameraMove: () => moves++ })
@@ -500,6 +584,7 @@ test('automatic weather samples the center ground only at a local scale', () => 
   viewer.camera.moveStart.fire()
   assert.equal(moves, 1)
   assert.deepEqual(controller.getWeatherPoint(), { longitude: 0, latitude: 0 })
+  assert.deepEqual(controller.getDisplayRegionExtent(), { longitude: 0, latitude: 0, radius_m: 12000 })
   metersPerPixel = 100
   assert.equal(controller.getWeatherPoint(), null)
   viewer.scene.globe.pick = () => undefined

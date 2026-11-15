@@ -1,6 +1,7 @@
 import {
   Viewer,
   Math as CesiumMath,
+  EasingFunction,
   Cartesian2,
   Cartesian3,
   Cartographic,
@@ -614,16 +615,22 @@ export function createMapController(
     return (ray && viewer.scene.globe.pick(ray, viewer.scene))
       ?? viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid)
   }
-  function getWeatherPoint(): MapPoint | null {
+  function getDisplayRegionExtent() {
     const { clientWidth: width, clientHeight: height } = viewer.scene.canvas
     if (!alive || !width || !height || viewer.scene.mode === SceneMode.MORPHING) return null
     const center = groundAt(new Cartesian2(width / 2, height / 2))
     if (!center) return null
     const left = groundAt(new Cartesian2(width / 4, height / 2))
     const right = groundAt(new Cartesian2(width * 3 / 4, height / 2))
-    if (!left || !right || Cartesian3.distance(left, right) * 2 >= 50_000) return null
+    if (!left || !right) return null
+    const radius_m = Cartesian3.distance(left, right)
+    if (radius_m <= 0 || radius_m >= 25_000) return null
     const point = Cartographic.fromCartesian(center)
-    return point ? { longitude: CesiumMath.toDegrees(point.longitude), latitude: CesiumMath.toDegrees(point.latitude) } : null
+    return point ? { longitude: CesiumMath.toDegrees(point.longitude), latitude: CesiumMath.toDegrees(point.latitude), radius_m } : null
+  }
+  function getWeatherPoint(): MapPoint | null {
+    const extent = getDisplayRegionExtent()
+    return extent ? { longitude: extent.longitude, latitude: extent.latitude } : null
   }
   function navigation(settled = false) {
     if (!alive || viewer.scene.mode === SceneMode.MORPHING) return
@@ -639,8 +646,9 @@ export function createMapController(
       const start = Cartographic.fromCartesian(first), end = Cartographic.fromCartesian(second)
       scale = scaleForDistance(new EllipsoidGeodesic(start, end, viewer.scene.globe.ellipsoid).surfaceDistance)
     }
-    onNavigation({ camera: getCamera(), pointer, scale }, settled)
+    onNavigation({ camera: getCamera(), pointer, scale }, settled && !displayFlight)
   }
+  let displayFlight: symbol | undefined
   let zoomMotion: { position: Cartesian3; updated?: number; adjusting: boolean } | undefined
   let buttonZoom: { started: number; distance: number; applied: number } | undefined
   let zoomCameraChanged = false
@@ -723,7 +731,14 @@ export function createMapController(
     }
   }
   function onWheel(event: WheelEvent) {
-    if (event.deltaY) markZoom(event.deltaY > 0)
+    if (event.deltaY) {
+      cancelDisplayFlight()
+      markZoom(event.deltaY > 0)
+    }
+  }
+  function onPointerDown() {
+    cancelDisplayFlight()
+    stopAutoFrame()
   }
   // Cesium applies wheel, pinch and inertia before postUpdate, then draws the frame.
   const navigationCleanup = [viewer.scene.postUpdate.addEventListener(updateZoomFrame),
@@ -737,20 +752,69 @@ export function createMapController(
     }),
     viewer.scene.morphComplete.addEventListener(() => { navigation(true); refreshViewports() })]
   if (options.onCameraMove) navigationCleanup.push(viewer.camera.moveStart.addEventListener(options.onCameraMove))
+
+  function useCameraProjection(mode: CameraState['scene_mode']) {
+    if (viewer.scene.mode === SceneMode.MORPHING) viewer.scene.completeMorph()
+    if (mode === '2d' && viewer.scene.mode !== SceneMode.SCENE2D) viewer.scene.morphTo2D(0)
+    if (mode === '3d' && viewer.scene.mode !== SceneMode.SCENE3D) viewer.scene.morphTo3D(0)
+  }
+
   function setCamera(camera: CameraState) {
     if (!alive || !validCamera(camera)) return false
     stopAutoFrame()
-    if (camera.scene_mode === '2d') viewer.scene.morphTo2D(0)
-    else if (viewer.scene.mode !== SceneMode.SCENE3D) viewer.scene.morphTo3D(0)
+    displayFlight = undefined
+    viewer.camera.cancelFlight()
+    useCameraProjection(camera.scene_mode)
     viewer.camera.setView({ destination: Cartesian3.fromDegrees(camera.longitude, camera.latitude, camera.height),
       orientation: { heading: camera.heading, pitch: camera.pitch, roll: camera.roll } })
     viewer.scene.requestRender()
     navigation(true)
     return true
   }
+
+  function cancelDisplayFlight() {
+    if (displayFlight) viewer.camera.cancelFlight()
+  }
+
+  function flyToCamera(camera: CameraState) {
+    if (!alive || !validCamera(camera)) return false
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return setCamera(camera)
+
+    stopAutoFrame()
+    const flight = displayFlight = Symbol()
+    viewer.camera.cancelFlight()
+    options.onCameraMove?.()
+    useCameraProjection(camera.scene_mode)
+    const start = getCamera()
+    const distance = Cartesian3.distance(
+      Cartesian3.fromDegrees(start.longitude, start.latitude),
+      Cartesian3.fromDegrees(camera.longitude, camera.latitude),
+    )
+    const far = distance >= 1_000
+    const height = Math.max(start.height, camera.height)
+    // Raise local views above both endpoints. A view already at regional scale can descend directly.
+    const maximumHeight = far && height < 50_000
+      ? height + Math.min(500_000, Math.max(300, distance * 0.22))
+      : undefined
+    const settle = () => {
+      if (!alive || flight !== displayFlight) return
+      displayFlight = undefined
+      navigation(true)
+      refreshViewports()
+    }
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(camera.longitude, camera.latitude, camera.height),
+      orientation: { heading: camera.heading, pitch: camera.pitch, roll: camera.roll },
+      duration: far ? 1.8 : 1.1, easingFunction: EasingFunction.CUBIC_IN_OUT, maximumHeight,
+      complete: settle, cancel: settle,
+    })
+    viewer.scene.requestRender()
+    return true
+  }
+
   function north() { setCamera({ ...getCamera(), heading: 0, roll: 0 }) }
   function clearPointer() { pointerPosition = undefined; navigation() }
-  viewer.scene.canvas.addEventListener?.('pointerdown', stopAutoFrame)
+  viewer.scene.canvas.addEventListener?.('pointerdown', onPointerDown)
   viewer.scene.canvas.addEventListener?.('wheel', onWheel)
   viewer.scene.canvas.addEventListener?.('mouseleave', clearPointer)
 
@@ -1719,6 +1783,7 @@ export function createMapController(
   }, ScreenSpaceEventType.LEFT_UP)
 
   function zoom(direction: number) {
+    cancelDisplayFlight()
     const remaining = buttonZoom ? buttonZoom.distance - buttonZoom.applied : 0
     markZoom(direction < 0)
     const distance = Math.max(
@@ -1731,6 +1796,7 @@ export function createMapController(
     viewer.scene.requestRender()
   }
   function setMode(twoD: boolean) {
+    cancelDisplayFlight()
     stopAutoFrame()
     options.onCameraMove?.()
     if (twoD) viewer.scene.morphTo2D(0.6)
@@ -1772,13 +1838,14 @@ export function createMapController(
     showSimulation(null)
     showReplay({ baseline: null, blocked: null })
     alive = false
+    cancelDisplayFlight()
     pickVersion++
     roadPickAbort?.abort()
     boundaryVersion++
     boundaryAbort?.abort()
     for (const entry of entries.values()) { entry.version++; entry.abort.abort(); entry.viewAbort?.abort(); for (const cleanup of entry.cleanup) cleanup() }
     for (const cleanup of navigationCleanup) cleanup()
-    viewer.scene.canvas.removeEventListener?.('pointerdown', stopAutoFrame)
+    viewer.scene.canvas.removeEventListener?.('pointerdown', onPointerDown)
     viewer.scene.canvas.removeEventListener?.('wheel', onWheel)
     viewer.scene.canvas.removeEventListener?.('mouseleave', clearPointer)
     entries.clear()
@@ -1841,8 +1908,10 @@ export function createMapController(
       } else if (homeRegion) goToRegion(homeRegion)
     },
     getCamera,
+    getDisplayRegionExtent,
     getWeatherPoint,
     setCamera,
+    flyToCamera,
     north,
     beginPointPicking,
     beginAreaSelection,

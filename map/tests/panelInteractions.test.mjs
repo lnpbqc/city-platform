@@ -26,13 +26,20 @@ function component(name) {
 }
 const walk = n => [n, ...(n.children ?? []).flatMap(walk)]
 const text = n => `${n.text ?? ''}${(n.children ?? []).map(text).join('')}`
-const components = { ObjectPanel: component('ObjectPanel'), TimeAxis: component('TimeAxis'), WeatherControl: component('WeatherControl') }
+const components = { ObjectPanel: component('ObjectPanel'), TimeAxis: component('TimeAxis'), WeatherControl: component('WeatherControl'), DisplayRegionPanel: component('DisplayRegionPanel') }
 const label = value => n => n.props['aria-label'] === value
 const cls = value => n => String(n.props.class).split(' ').includes(value)
 const tick = async () => { await vue.nextTick(); await vue.nextTick() }
 function mount(name, initial, handlers = {}) {
   let focused
-  const node = tag => ({ tag, props: {}, children: [], style: {}, dataset: {}, scrollTop: 0, focus() { focused = this }, querySelectorAll() { return walk(this).filter(n => n.props['data-object-id']) } })
+  const node = tag => ({
+    tag, props: {}, children: [], style: {}, dataset: {}, scrollTop: 0, listeners: {},
+    get isConnected() { return Boolean(this.parent) },
+    focus() { focused = this },
+    addEventListener(event, handler) { this.listeners[event] = handler },
+    getRootNode() { return { activeElement: focused } },
+    querySelectorAll() { return walk(this).filter(n => n.props['data-object-id']) },
+  })
   const renderer = vue.createRenderer({
     createElement: node, createText: text => ({ ...node('#text'), text }), createComment: () => node('#comment'),
     setText: (n, t) => { n.text = t }, setElementText: (n, t) => { n.text = t; n.children = [] },
@@ -44,11 +51,94 @@ function mount(name, initial, handlers = {}) {
   const props = vue.reactive(initial), root = node('root'), events = []
   const app = renderer.createApp({ render: () => vue.h(components[name], { ...props, ...Object.fromEntries(Object.entries(handlers).map(([key, fn]) => [key, (...args) => { events.push([key, ...args]); fn(...args) }])) }) })
   app.mount(root)
-  return { props, root, events, focused: () => focused, find: fn => walk(root).find(fn), close: () => app.unmount() }
+  return { props, root, events, focused: () => vue.toRaw(focused), find: fn => walk(root).find(fn), close: () => app.unmount() }
 }
 
+test('display regions open and manage independently, with one disclosure and Escape focus return', async t => {
+  const first = { id: 'first', name: '一个在窄屏上会截断的展示区域名称' }
+  const second = { id: 'second', name: '第二个区域' }
+  const ctx = mount('DisplayRegionPanel', {
+    regions: [first, second], loading: false, loadError: '', capture: () => null, save: async () => {}, remove: async () => {},
+  }, { onOpen() {} })
+  t.after(ctx.close)
+  const one = ctx.find(label(`管理${first.name}`))
+  const two = ctx.find(label(`管理${second.name}`))
+  const locate = ctx.find(n => n.props.title === first.name)
+  assert.equal(one.tag, 'button')
+  assert.equal(one.props['aria-expanded'], false)
+  one.props.onClick({ currentTarget: one })
+  await tick()
+  assert.equal(one.props['aria-expanded'], true)
+  assert.equal(ctx.find(n => n.props.id === one.props['aria-controls']).parent, one.parent.parent)
+  assert.deepEqual(ctx.events, [])
+  two.props.onClick({ currentTarget: two })
+  await tick()
+  assert.equal(one.props['aria-expanded'], false)
+  assert.equal(two.props['aria-expanded'], true)
+  const panel = ctx.find(label('展示区域'))
+  let stopped = false
+  panel.props.onKeydown({ key: 'Escape', stopPropagation() { stopped = true } })
+  await tick()
+  assert.equal(stopped, true)
+  assert.equal(two.props['aria-expanded'], false)
+  assert.equal(ctx.focused(), two)
+  locate.props.onClick()
+  assert.deepEqual(ctx.events.map(([action, region]) => [action, region.id]), [['onOpen', first.id]])
+})
+
+test('display region controls save, rename, update and confirm deletion', async t => {
+  const region = { id: 'one', name: '旧名称' }
+  const view = { latitude: 23, longitude: 114, radius_m: 1000, camera: {} }
+  const saved = [], removed = []
+  const ctx = mount('DisplayRegionPanel', {
+    regions: [region], loading: false, loadError: '', capture: () => view,
+    save: async (body, id) => saved.push([body, id]), remove: async id => removed.push(id),
+  })
+  t.after(ctx.close)
+  const click = title => ctx.find(n => n.tag === 'button' && text(n).trim() === title).props.onClick()
+  const submit = async title => {
+    await tick()
+    const field = ctx.find(n => n.tag === 'input')
+    assert.equal(ctx.focused(), field)
+    field.value = title
+    field.listeners.input({ target: field })
+    await tick()
+    ctx.find(n => n.tag === 'form').props.onSubmit({ preventDefault() {} })
+    await tick()
+  }
+  const manage = async () => {
+    const trigger = ctx.find(label('管理旧名称'))
+    if (!trigger.props['aria-expanded']) trigger.props.onClick({ currentTarget: trigger })
+    await tick()
+  }
+  click('保存当前视角')
+  await submit('新区域')
+  await manage()
+  click('改名')
+  await submit('新名称')
+  await manage()
+  click('更新为当前视角')
+  await tick()
+  await manage()
+  click('删除')
+  await tick()
+  assert.deepEqual(removed, [])
+  assert.equal(ctx.focused().text, '取消')
+  ctx.find(label('展示区域')).props.onKeydown({ key: 'Escape', stopPropagation() {} })
+  await tick()
+  assert.equal(ctx.focused(), ctx.find(label('管理旧名称')))
+  assert.equal(ctx.find(n => n.tag === 'button' && text(n) === '确认删除'), undefined)
+  await manage()
+  click('删除')
+  await tick()
+  click('确认删除')
+  await tick()
+  assert.deepEqual(saved, [[{ ...view, name: '新区域' }, undefined], [{ name: '新名称' }, 'one'], [view, 'one']])
+  assert.deepEqual(removed, ['one'])
+})
+
 test('weather selector can override automatic weather and history shows the saved source', async t => {
-  const ctx = mount('WeatherControl', { compact: true, mode: 'auto', status: 'ready', weather: {
+  const ctx = mount('WeatherControl', { compact: true, mode: 'auto', status: 'ready', region: '黄埔校区', weather: {
     source: 'open-meteo', effect: 'rain', reading: { code: 61, valid_at: '2026-01-01T00:15:00Z' },
   } }, { 'onUpdate:mode': mode => { ctx.props.mode = mode } })
   t.after(ctx.close)
@@ -57,7 +147,7 @@ test('weather selector can override automatic weather and history shows the save
   button.props.onClick()
   await tick()
   assert.equal(button.props['aria-expanded'], true)
-  assert.match(text(ctx.root), /镜头中心天气 · 小雨.*08:15.*Open-Meteo/)
+  assert.match(text(ctx.root), /黄埔校区 · 小雨.*08:15.*Open-Meteo/)
   const select = ctx.find(label('天气模式'))
   assert.deepEqual(select.children.filter(node => node.tag === 'option').map(node => node.props.value), ['auto', 'clear', 'rain', 'snow'])
   select.props.onChange({ target: { value: 'snow' } })
@@ -67,6 +157,17 @@ test('weather selector can override automatic weather and history shows the save
   await tick()
   assert.equal(ctx.find(label('天气模式')), undefined)
   assert.match(text(ctx.root), /运行天气 · 小雨/)
+})
+
+test('weather status distinguishes an uncovered view, throttling and an earlier reading', async t => {
+  const ctx = mount('WeatherControl', { mode: 'auto', status: 'outside', weather: weather.noWeather })
+  t.after(ctx.close)
+  assert.match(text(ctx.root), /未进入展示区域/)
+  ctx.props.status = 'limited'
+  ctx.props.region = '香港维港'
+  ctx.props.reference = { code: 61, valid_at: '2026-01-01T00:15:00Z' }
+  await tick()
+  assert.match(text(ctx.root), /香港维港 · 天气服务限流.*上次更新.*小雨.*08:15/)
 })
 
 test('results enter loading details; return preserves filters, range, page, scroll and keyboard focus', async t => {

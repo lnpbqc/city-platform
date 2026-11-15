@@ -28,6 +28,7 @@ beforeEach(() => {
   globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} }
 })
 mock.module('../src/api/api.ts', { exports: {
+  getDisplayRegions: async () => [], saveDisplayRegion: async () => {}, deleteDisplayRegion: async () => {},
   ApiError: class extends Error { constructor(message, status, detail, code, traceId) { super(`${message} ${code ?? ''} ${traceId ?? ''}`); this.status = status; this.code = code } },
   getScenes: async query => { ++catalogReads; return catalogHandler(query) },
   getNetworks: async query => ({ ...query, total: 1, items: [network] }),

@@ -11,8 +11,6 @@ import {
 } from '@lucide/vue'
 import {
   chinaRegion,
-  campusRegions,
-  demonstrationRegions,
   createRegionIndex,
   type RegionCatalog,
   type RegionIndex,
@@ -24,6 +22,7 @@ const props = defineProps<{
   selected: RegionTarget
   sidebar: boolean
   boundaryState: BoundaryState
+  displayLabel?: string
 }>()
 const boundaryEnabled = defineModel<boolean>('boundaryEnabled', {
   required: true,
@@ -31,6 +30,7 @@ const boundaryEnabled = defineModel<boolean>('boundaryEnabled', {
 const emit = defineEmits<{
   select: [region: RegionTarget]
   retryBoundary: []
+  open: []
 }>()
 const open = ref(false)
 const query = ref('')
@@ -91,12 +91,14 @@ function toggle() {
     query.value = ''
     synchronize()
     void loadCatalog()
+    emit('open')
   }
 }
 function choose(target: RegionTarget) {
   emit('select', target)
-  open.value = false
+  close()
 }
+function close() { open.value = false }
 function locate(id: string) {
   if (index.value) choose(index.value.target(id))
 }
@@ -123,11 +125,11 @@ onBeforeUnmount(() => abort?.abort())
       aria-label="选择中国城市和地区"
       @click="toggle"
     >
-      <MapPin :size="14" /><span class="region-label">{{ selected.label }}</span
+      <MapPin :size="14" /><span class="region-label">{{ displayLabel ?? selected.label }}</span
       ><span class="region-crs">WGS84</span><ChevronDown :size="13" />
     </button>
     <slot name="bookmarks" /></div>
-    <div v-if="!selected.id.startsWith('demo-')" class="boundary-control panel">
+    <div v-if="!displayLabel && !selected.id.startsWith('demo-')" class="boundary-control panel">
       <label
         ><input
           v-model="boundaryEnabled"
@@ -165,23 +167,9 @@ onBeforeUnmount(() => abort?.abort())
           <X :size="16" />
         </button>
       </header>
+      <slot name="display-regions" :close="close" />
       <div class="quick-regions">
-        <button v-for="region in demonstrationRegions" :key="region.id" @click="choose(region)">
-          <LocateFixed :size="14" />{{ region.label }}
-        </button>
-        <button @click="choose(chinaRegion)">
-          <Globe2 :size="14" />全国概览</button
-        ><button
-          v-for="region in campusRegions"
-          :key="region.id"
-          @click="choose(region)"
-        >
-          <LocateFixed :size="14" />{{
-            region.sampleKey === 'university-town'
-              ? '大学城校区（默认）'
-              : '黄埔校区'
-          }}
-        </button>
+        <button type="button" @click="choose(chinaRegion)"><Globe2 :size="14" />全国概览</button>
       </div>
       <p v-if="loading" class="region-message" role="status">
         <LoaderCircle :size="15" class="spin" />正在读取本地地区目录…
