@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useId } from 'vue'
 import {
   MapPin,
   ChevronDown,
@@ -33,6 +33,11 @@ const emit = defineEmits<{
   open: []
 }>()
 const open = ref(false)
+const activeTab = ref<'display' | 'administrative'>('display')
+const tabId = useId()
+const trigger = ref<HTMLButtonElement>()
+const displayTab = ref<HTMLButtonElement>()
+const administrativeTab = ref<HTMLButtonElement>()
 const query = ref('')
 const province = ref('')
 const city = ref('')
@@ -85,20 +90,37 @@ async function loadCatalog() {
     loading.value = false
   }
 }
+function activateTab(tab: typeof activeTab.value) {
+  activeTab.value = tab
+  if (tab === 'administrative' && !error.value) void loadCatalog()
+  void nextTick(() => (tab === 'display' ? displayTab.value : administrativeTab.value)?.focus())
+}
+function navigateTabs(event: KeyboardEvent) {
+  const next = event.key === 'Home' ? 'display'
+    : event.key === 'End' ? 'administrative'
+    : event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+      ? (activeTab.value === 'display' ? 'administrative' : 'display') : undefined
+  if (!next) return
+  event.preventDefault()
+  activateTab(next)
+}
 function toggle() {
-  open.value = !open.value
-  if (open.value) {
-    query.value = ''
-    synchronize()
-    void loadCatalog()
-    emit('open')
-  }
+  if (open.value) { close(); return }
+  open.value = true
+  query.value = ''
+  synchronize()
+  activateTab('display')
+  emit('open')
 }
 function choose(target: RegionTarget) {
   emit('select', target)
   close()
 }
-function close() { open.value = false }
+function close() {
+  if (!open.value) return
+  open.value = false
+  void nextTick(() => trigger.value?.focus())
+}
 function locate(id: string) {
   if (index.value) choose(index.value.target(id))
 }
@@ -116,9 +138,10 @@ onBeforeUnmount(() => abort?.abort())
   <div
     class="region-picker"
     :class="{ shifted: sidebar }"
-    @keydown.esc="open = false"
+    @keydown.esc="close"
   >
     <div class="region-head"><button
+      ref="trigger"
       class="region-trigger panel"
       :aria-expanded="open"
       aria-controls="region-options"
@@ -162,149 +185,165 @@ onBeforeUnmount(() => abort?.abort())
         <button
           class="icon-button"
           aria-label="关闭地区选择"
-          @click="open = false"
+          @click="close"
         >
           <X :size="16" />
         </button>
       </header>
-      <slot name="display-regions" :close="close" />
-      <div class="quick-regions">
-        <button type="button" @click="choose(chinaRegion)"><Globe2 :size="14" />全国概览</button>
+      <div class="region-tabs" role="tablist" aria-label="地区定位方式" @keydown="navigateTabs">
+        <button ref="displayTab" :id="`${tabId}-display-tab`" type="button" role="tab"
+          :aria-selected="activeTab === 'display'" :aria-controls="`${tabId}-display-panel`"
+          :tabindex="activeTab === 'display' ? 0 : -1" @click="activateTab('display')">展示区域</button>
+        <button ref="administrativeTab" :id="`${tabId}-administrative-tab`" type="button" role="tab"
+          :aria-selected="activeTab === 'administrative'" :aria-controls="`${tabId}-administrative-panel`"
+          :tabindex="activeTab === 'administrative' ? 0 : -1" @click="activateTab('administrative')">行政区定位</button>
       </div>
-      <p v-if="loading" class="region-message" role="status">
-        <LoaderCircle :size="15" class="spin" />正在读取本地地区目录…
-      </p>
-      <div v-else-if="error" class="region-error" role="alert">
-        {{ error }}<button @click="loadCatalog">重新加载</button>
+      <div v-show="activeTab === 'display'" :id="`${tabId}-display-panel`" class="region-tab-panel"
+        role="tabpanel" :aria-labelledby="`${tabId}-display-tab`">
+        <slot name="display-regions" :close="close" />
       </div>
-      <template v-else-if="catalog">
-        <label class="region-search"
-          ><Search :size="15" /><input
-            v-model="query"
-            aria-label="搜索中国地区"
-            placeholder="搜索省、市、区县或行政代码" /><button
-            v-if="query"
-            class="icon-button"
-            aria-label="清空地区搜索"
-            @click="query = ''"
-          >
-            <X :size="13" /></button
-        ></label>
-        <div v-if="query.trim()" class="region-results">
-          <p>
-            {{
-              results.length
-                ? `找到 ${results.length} 个地区${results.length > 20 ? '，显示前 20 个' : ''}`
-                : '未找到匹配地区'
-            }}
-          </p>
-          <button
-            v-for="region in results.slice(0, 20)"
-            :key="region.id"
-            @click="locate(region.id)"
-          >
-            <span>{{ pathLabel(region.id) }}</span
-            ><small>{{ region.id }}</small>
-          </button>
+      <div v-show="activeTab === 'administrative'" :id="`${tabId}-administrative-panel`"
+        class="region-tab-panel region-administrative map-panel-scroll" role="tabpanel"
+        :aria-labelledby="`${tabId}-administrative-tab`" tabindex="0">
+        <div class="quick-regions">
+          <button type="button" @click="choose(chinaRegion)"><Globe2 :size="14" />全国概览</button>
         </div>
-        <form v-else class="region-form" @submit.prevent="locate(chosen)">
-          <label
-            >省 / 自治区 / 直辖市 / 特别行政区<select
-              v-model="province"
-              aria-label="选择省级地区"
-              @change="changeProvince"
+        <p v-if="loading" class="region-message" role="status">
+          <LoaderCircle :size="15" class="spin" />正在读取本地地区目录…
+        </p>
+        <div v-else-if="error" class="region-error" role="alert">
+          {{ error }}<button @click="loadCatalog">重新加载</button>
+        </div>
+        <template v-else-if="catalog">
+          <label class="region-search"
+            ><Search :size="15" /><input
+              v-model="query"
+              aria-label="搜索中国地区"
+              placeholder="搜索省、市、区县或行政代码" /><button
+              v-if="query"
+              class="icon-button"
+              aria-label="清空地区搜索"
+              @click="query = ''"
             >
-              <option value="">请选择省级地区</option>
-              <option
-                v-for="region in provinces"
-                :key="region.id"
-                :value="region.id"
-              >
-                {{ region.name }}
-              </option>
-            </select></label
-          >
-          <div class="region-grid">
-            <label
-              >城市<select
-                v-model="city"
-                aria-label="选择城市"
-                :disabled="!cities.length"
-                @change="changeCity"
-              >
-                <option value="">
-                  {{
-                    !province
-                      ? '请先选省级地区'
-                      : cities.length
-                        ? '全省 / 省直管地区'
-                        : '无市级目录'
-                  }}
-                </option>
-                <option
-                  v-for="region in cities"
-                  :key="region.id"
-                  :value="region.id"
-                >
-                  {{ region.name }}
-                </option>
-              </select></label
+              <X :size="13" /></button
+          ></label>
+          <div v-if="query.trim()" class="region-results">
+            <p>
+              {{
+                results.length
+                  ? `找到 ${results.length} 个地区${results.length > 20 ? '，显示前 20 个' : ''}`
+                  : '未找到匹配地区'
+              }}
+            </p>
+            <button
+              v-for="region in results.slice(0, 20)"
+              :key="region.id"
+              @click="locate(region.id)"
             >
-            <label
-              >区 / 县<select
-                v-model="district"
-                aria-label="选择区县"
-                :disabled="!districts.length"
-              >
-                <option value="">
-                  {{ districts.length ? '全部 / 不限' : '暂无区县目录' }}
-                </option>
-                <option
-                  v-for="region in districts"
-                  :key="region.id"
-                  :value="region.id"
-                >
-                  {{ region.name }}
-                </option>
-              </select></label
-            >
+              <span>{{ pathLabel(region.id) }}</span
+              ><small>{{ region.id }}</small>
+            </button>
           </div>
-          <p
-            v-if="province && !cities.length && !districts.length"
-            class="region-message"
-          >
-            来源未提供该地区的下级目录，可定位当前地区。
-          </p>
-          <button
-            class="primary-button region-locate"
-            type="submit"
-            :disabled="!chosen"
-          >
-            <LocateFixed :size="15" />定位所选地区
-          </button>
-        </form>
-        <footer>
-          目录：DataV GeoAtlas ·
-          {{ catalog.retrievedAt.slice(0, 10) }}
-          快照<br />边界：DataV GeoAtlas · 联网按需加载，近似转换至
-          WGS84，仅用于定位参考。校区快捷入口切换公开轮廓白模，不显示行政边界；用户数据保持原位置。
-        </footer>
-      </template>
+          <form v-else class="region-form" @submit.prevent="locate(chosen)">
+            <label
+              >省 / 自治区 / 直辖市 / 特别行政区<select
+                v-model="province"
+                aria-label="选择省级地区"
+                @change="changeProvince"
+              >
+                <option value="">请选择省级地区</option>
+                <option
+                  v-for="region in provinces"
+                  :key="region.id"
+                  :value="region.id"
+                >
+                  {{ region.name }}
+                </option>
+              </select></label
+            >
+            <div class="region-grid">
+              <label
+                >城市<select
+                  v-model="city"
+                  aria-label="选择城市"
+                  :disabled="!cities.length"
+                  @change="changeCity"
+                >
+                  <option value="">
+                    {{
+                      !province
+                        ? '请先选省级地区'
+                        : cities.length
+                          ? '全省 / 省直管地区'
+                          : '无市级目录'
+                    }}
+                  </option>
+                  <option
+                    v-for="region in cities"
+                    :key="region.id"
+                    :value="region.id"
+                  >
+                    {{ region.name }}
+                  </option>
+                </select></label
+              >
+              <label
+                >区 / 县<select
+                  v-model="district"
+                  aria-label="选择区县"
+                  :disabled="!districts.length"
+                >
+                  <option value="">
+                    {{ districts.length ? '全部 / 不限' : '暂无区县目录' }}
+                  </option>
+                  <option
+                    v-for="region in districts"
+                    :key="region.id"
+                    :value="region.id"
+                  >
+                    {{ region.name }}
+                  </option>
+                </select></label
+              >
+            </div>
+            <p
+              v-if="province && !cities.length && !districts.length"
+              class="region-message"
+            >
+              来源未提供该地区的下级目录，可定位当前地区。
+            </p>
+            <button
+              class="primary-button region-locate"
+              type="submit"
+              :disabled="!chosen"
+            >
+              <LocateFixed :size="15" />定位所选地区
+            </button>
+          </form>
+          <footer>
+            目录：DataV GeoAtlas ·
+            {{ catalog.retrievedAt.slice(0, 10) }}
+            快照<br />边界：DataV GeoAtlas · 联网按需加载，近似转换至
+            WGS84，仅用于定位参考。校区快捷入口切换公开轮廓白模，不显示行政边界；用户数据保持原位置。
+          </footer>
+        </template>
+      </div>
     </section>
   </div>
 </template>
 
 <style scoped>
 .region-picker {
+  --region-left: 78px;
   position: absolute;
   z-index: 4;
   top: 84px;
-  left: 78px;
+  left: var(--region-left);
   max-width: calc(100% - 160px);
   transition: left 0.25s;
 }
 .region-picker.shifted {
-  left: 344px;
+  --region-left: 344px;
   max-width: calc(100% - 420px);
 }
 .region-trigger {
@@ -367,38 +406,60 @@ onBeforeUnmount(() => abort?.abort())
   color: #99a4b3;
 }
 .region-menu {
-  width: 360px;
-  max-width: calc(100vw - 36px);
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - var(--region-left) - 12px));
   margin-top: 8px;
-  padding: 16px 18px;
   max-height: calc(100svh - 190px);
-  overflow-y: auto;
+  overflow: hidden;
   animation: panel-in 0.2s ease-out;
 }
 .region-menu header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  flex: none;
+  padding: 10px 14px 6px;
 }
 .region-menu h2 {
   font-size: 14px;
   font-weight: 550;
 }
+.region-tabs {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 0 14px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.region-tabs button {
+  flex: 1 1 0;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: #53657e;
+  font-size: 12px;
+}
+.region-tabs [aria-selected='true'] {
+  background: #edf3fc;
+  color: var(--blue);
+  font-weight: 600;
+}
+.region-tab-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.region-administrative { display: block; padding: 12px 14px; }
+.region-administrative:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .quick-regions {
   display: flex;
   flex-wrap: wrap;
   gap: 9px;
-  padding-bottom: 15px;
-  border-bottom: 1px solid var(--line);
 }
 .quick-regions button {
-  font-size: 10px;
+  font-size: 11px;
   gap: 6px;
   background: #f2f6fc;
   padding: 7px 10px;
   border-radius: 5px;
-  color: #6882a8;
+  color: #425874;
 }
 .region-search {
   display: flex;
@@ -409,7 +470,7 @@ onBeforeUnmount(() => abort?.abort())
   border: 1px solid #edf0f4;
   border-radius: 5px;
   padding: 0 9px;
-  margin: 15px 0;
+  margin: 12px 0;
   color: #94a2b5;
 }
 .region-search input {
@@ -418,7 +479,7 @@ onBeforeUnmount(() => abort?.abort())
   border: 0;
   background: none;
   outline: none;
-  font-size: 11px;
+  font-size: 12px;
   color: #34455b;
 }
 .region-search:focus-within {
@@ -431,14 +492,14 @@ onBeforeUnmount(() => abort?.abort())
 .region-form {
   display: flex;
   flex-direction: column;
-  gap: 13px;
+  gap: 10px;
 }
 .region-form label {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  font-size: 10px;
-  color: #8190a4;
+  font-size: 11px;
+  color: #53657e;
   min-width: 0;
 }
 .region-form select {
@@ -450,7 +511,7 @@ onBeforeUnmount(() => abort?.abort())
   padding: 0 7px;
   background: white;
   color: #3f526b;
-  font-size: 11px;
+  font-size: 12px;
 }
 .region-form select:disabled {
   color: #a6b0bd;
@@ -458,7 +519,7 @@ onBeforeUnmount(() => abort?.abort())
 }
 .region-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .region-locate {
@@ -469,13 +530,9 @@ onBeforeUnmount(() => abort?.abort())
   margin-top: 16px;
   padding-top: 11px;
   border-top: 1px solid var(--line);
-  font-size: 9px;
-  color: #9aa6b5;
-  line-height: 1.8;
-}
-.region-results {
-  max-height: 280px;
-  overflow: auto;
+  font-size: 10px;
+  color: #687994;
+  line-height: 1.6;
 }
 .region-results > p,
 .region-message {
@@ -499,6 +556,8 @@ onBeforeUnmount(() => abort?.abort())
   border-bottom: 1px solid #f0f3f7;
   font-size: 11px;
 }
+.region-results > button span { min-width: 0; overflow-wrap: anywhere; }
+.region-results > button:focus-visible { outline-offset: -1px; }
 .region-results small {
   color: #a1acbb;
   font-size: 9px;
@@ -516,16 +575,16 @@ onBeforeUnmount(() => abort?.abort())
 }
 @media (min-width: 1500px) {
   .region-picker.shifted {
-    left: 358px;
+    --region-left: 358px;
   }
 }
 @media (max-width: 900px) {
   .region-picker {
     top: 76px;
-    left: 64px;
+    --region-left: 64px;
   }
   .region-picker.shifted {
-    left: 304px;
+    --region-left: 304px;
     max-width: calc(100% - 370px);
   }
 }
@@ -548,7 +607,12 @@ onBeforeUnmount(() => abort?.abort())
     top: 115px;
     left: 12px;
     width: calc(100% - 24px);
-    max-width: none;
+    max-height: calc(100svh - 127px);
   }
+}
+@media (pointer: coarse) {
+  .region-tabs button, .region-menu .icon-button, .quick-regions button, .region-form select { min-height: 44px; }
+  .region-search { height: 44px; }
+  .region-search .icon-button { min-height: 36px; width: 36px; }
 }
 </style>

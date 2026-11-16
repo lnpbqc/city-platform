@@ -119,9 +119,8 @@ test('overview shows real object and run totals and failed statistics leave asse
 
 test('asset and registration empty states distinguish forbidden, failed, empty and filtered results', async t => {
   const ctx = await setup(t)
-  assert.equal(ctx.state.tab, 'assets')
-  assert.match(ctx.text(), /点位资产/)
-  ctx.state.changeTab('records'); await flush()
+  assert.equal(ctx.state.tab, 'records')
+  assert.match(ctx.text(), /图层登记\s*0.*场景\s*4.*资产目录\s*61/)
   ctx.props.catalogError = '无权限：目录读取受限'; await flush()
   assert.match(ctx.text(), /无权限查看图层登记/)
   assert.doesNotMatch(ctx.text(), /还没有图层登记/)

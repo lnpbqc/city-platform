@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from '@lucide/vue'
 import LayerItem from './LayerItem.vue'
-import type { MapLayer, TilesPlacement } from '../../layers/types'
+import type { MapLayer } from '../../layers/types'
 import { layerGroups, moveTarget } from '../../layers/layerTree'
 const props = defineProps<{
   layers: MapLayer[]
@@ -36,7 +36,6 @@ const emit = defineEmits<{
   remove: [layer: MapLayer]
   opacity: [layer: MapLayer, value: number]
   roadMaxLevel: [layer: MapLayer, value: number]
-  tilesPlacement: [layer: MapLayer, value: TilesPlacement]
   calibrate: [layer: MapLayer]
   move: [layer: MapLayer, direction: number]
 }>()
@@ -107,7 +106,7 @@ function toggleGroup(category: string) {
         自定义
       </button>
     </div>
-    <div class="layer-scroll">
+    <div class="layer-scroll map-panel-scroll" role="region" aria-label="图层列表" tabindex="0">
       <div v-if="!visibleLayers.length" class="empty-state">
         <Layers :size="28" /><strong>{{
           search ? '没有匹配的图层' : '当前没有地图图层'
@@ -149,7 +148,6 @@ function toggleGroup(category: string) {
             @remove="emit('remove', layer)"
             @opacity="emit('opacity', layer, $event)"
             @road-max-level="emit('roadMaxLevel', layer, $event)"
-            @tiles-placement="emit('tilesPlacement', layer, $event)"
             @calibrate="emit('calibrate', layer)"
             @move="emit('move', layer, $event)"
           />
@@ -302,12 +300,9 @@ function toggleGroup(category: string) {
   inset-inline: 0;
 }
 .layer-scroll {
-  overflow-y: auto;
-  min-height: 0;
-  scrollbar-width: thin;
-  scrollbar-color: #dbe2ec transparent;
-  padding: 7px 0 14px;
+  padding: 7px 4px 14px;
 }
+.layer-scroll:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .group-title {
   height: 37px;
   display: flex;
@@ -407,5 +402,14 @@ function toggleGroup(category: string) {
     width: min(280px, calc(100% - 72px));
     max-height: calc(100svh - 155px);
   }
+}
+@media (max-height: 560px) {
+  .panel-heading { height: 43px; padding-inline: 12px; }
+  .panel-body-top { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0; }
+  .add-data { flex: none; width: auto; height: 32px; padding-inline: 8px; }
+  .search-field { flex: 1; min-width: 0; height: 32px; margin-top: 0; padding-inline: 7px; }
+  .layer-tabs { margin-top: 4px; }
+  .layer-tabs button { height: 30px; }
+  .panel-footer { padding-block: 4px; }
 }
 </style>

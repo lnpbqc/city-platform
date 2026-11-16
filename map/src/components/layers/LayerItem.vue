@@ -11,12 +11,12 @@ import {
   ArrowUpRight,
   ArrowUp,
   ArrowDown,
+  SlidersHorizontal,
 } from '@lucide/vue'
 import { fetchLayerDownload, layerDownload, startTilesZipDownload } from '../../layers/layerDownload'
-import type { MapLayer, TilesPlacement } from '../../layers/types'
+import type { MapLayer } from '../../layers/types'
 import { objectCountLabel } from '../../layers/layerTree'
 import RenderStatus from '../data/RenderStatus.vue'
-import TilesHeightSettings from './TilesHeightSettings.vue'
 const props = defineProps<{ layer: MapLayer; canMoveUp?: boolean; canMoveDown?: boolean; ordering?: boolean;
   allowCalibration?: boolean; downloadBlocked?: boolean }>()
 const downloadTarget = computed(() => layerDownload(props.layer))
@@ -65,7 +65,6 @@ const emit = defineEmits<{
   remove: []
   opacity: [value: number]
   roadMaxLevel: [value: number]
-  tilesPlacement: [value: TilesPlacement]
   calibrate: []
   move: [direction: number]
 }>()
@@ -109,7 +108,7 @@ function changeOpacity(event: Event) {
           :size="18"
       /></span>
       <div class="layer-name">
-        <strong>{{ layer.name }}</strong
+        <strong :title="layer.name">{{ layer.name }}</strong
         ><span
           >{{ layer.id === 'basemap' ? '影像服务' : layer.type === '3dtiles' ? '3D Tiles' : 'GeoJSON' }}<i>·</i
           >{{
@@ -218,10 +217,11 @@ function changeOpacity(event: Event) {
         <option :value="4">第 4 级 · 增加服务道路/步行等</option>
       </select>
     </label>
-    <TilesHeightSettings v-if="layer.type === '3dtiles' && !layer.tiles_calibrated && !downloadBlocked" :placement="layer" @save="emit('tilesPlacement', $event)" />
-    <div v-if="layer.type === '3dtiles' && (allowCalibration || !layer.tiles_calibration_allowed)" class="calibration-trigger">
-      <button v-if="layer.tiles_calibration_allowed" class="text-button" type="button" :disabled="!!calibrationHint"
-        :aria-describedby="calibrationHint ? `calibration-hint-${layer.id}` : undefined" @click="emit('calibrate')">校准模型</button>
+    <div v-if="layer.type === '3dtiles'" class="calibration-trigger">
+      <button v-if="layer.tiles_calibration_allowed" class="calibration-button" type="button" :disabled="!allowCalibration || !!calibrationHint"
+        :aria-describedby="calibrationHint ? `calibration-hint-${layer.id}` : undefined" @click="emit('calibrate')">
+        <SlidersHorizontal :size="14" aria-hidden="true" />校准模型
+      </button>
       <span v-if="calibrationHint" :id="`calibration-hint-${layer.id}`" class="calibration-hint">{{ calibrationHint }}</span>
     </div>
     <p v-if="layer.source" class="layer-source" :title="layer.source">
@@ -236,11 +236,12 @@ function changeOpacity(event: Event) {
 </template>
 
 <style scoped>
-.layer-metadata { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; margin: 5px 0 5px 30px; font-size: 9px; color: #7a879a; }
 .layer-item {
-  padding: 6px 16px 10px;
-  border-bottom: 1px solid #f1f4f8;
+  --layer-inset: 36px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--line);
 }
+.layer-metadata { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; margin: 5px 0 2px var(--layer-inset); font-size: 11px; color: #62748b; }
 .layer-main {
   display: flex;
   align-items: center;
@@ -248,9 +249,11 @@ function changeOpacity(event: Event) {
   min-height: 38px;
 }
 .visibility-button {
-  width: 22px;
+  width: 28px;
+  height: 30px;
   padding: 0;
-  color: #a5afbc;
+  border-radius: 5px;
+  color: #687d99;
   flex-shrink: 0;
 }
 .visibility-button.enabled {
@@ -295,17 +298,18 @@ function changeOpacity(event: Event) {
   min-width: 0;
 }
 .layer-name strong {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .layer-name > span {
-  font-size: 9px;
-  color: #99a3b2;
+  font-size: 11px;
+  color: #65758a;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
 }
 .layer-name i {
@@ -314,22 +318,23 @@ function changeOpacity(event: Event) {
 .locate-button {
   margin-left: auto;
   flex-shrink: 0;
-  width: 24px;
+  width: 28px;
 }
 .layer-detail {
-  padding-left: 60px;
+  margin-left: var(--layer-inset);
   display: flex;
   align-items: center;
-  min-height: 22px;
-  gap: 5px;
+  flex-wrap: wrap;
+  min-height: 28px;
+  gap: 4px 8px;
   justify-content: space-between;
 }
 .status {
-  font-size: 9px;
+  font-size: 11px;
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #9aa6b5;
+  color: #65758a;
   white-space: nowrap;
 }
 .status i {
@@ -339,7 +344,7 @@ function changeOpacity(event: Event) {
   border-radius: 50%;
 }
 .status.ready {
-  color: #699a8d;
+  color: #36776b;
 }
 .status.loading {
   color: #447ed4;
@@ -351,65 +356,87 @@ function changeOpacity(event: Event) {
 }
 .layer-actions {
   display: flex;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 2px;
   align-items: center;
+  margin-left: auto;
 }
 .layer-actions button,
 .layer-actions a {
-  font-size: 9px;
-  padding: 2px;
-  color: #9aa6b5;
-  min-width: 13px;
-}
-.layer-actions a {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  color: #61748d;
+  font-size: 11px;
+}
+.layer-actions :is(button:not(:disabled), a):hover,
+.visibility-button:hover {
+  color: var(--blue);
+  background: #edf3fc;
 }
 .road-level-control { display: grid; gap: 4px; margin-top: 8px; font-size: 11px; }
 .road-level-control select { width: 100%; min-width: 0; font: inherit; }
 .opacity-control {
   display: flex;
   align-items: center;
-  gap: 9px;
-  font-size: 9px;
-  color: #a0aab8;
-  margin: 6px 0 0 60px;
+  gap: 8px;
+  font-size: 11px;
+  color: #65758a;
+  margin: 5px 0 0 var(--layer-inset);
 }
 .opacity-control input {
-  height: 3px;
   flex: 1;
   min-width: 20px;
+  margin: 0;
 }
 .opacity-control output {
-  font-size: 9px;
-  min-width: 28px;
+  min-width: 32px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #8190a4;
+  color: #65758a;
 }
 .detached .layer-name strong {
   color: #7d8b9e;
 }
 .layer-error {
-  margin: 6px 0 0 60px;
+  margin: 6px 0 0 var(--layer-inset);
   font-size: 10px;
   line-height: 1.6;
   color: #c05a55;
   overflow-wrap: anywhere;
 }
 .layer-source {
-  font-size: 9px;
-  color: #a1acba;
-  margin: 7px 0 0 60px;
+  font-size: 11px;
+  color: #65758a;
+  margin: 7px 0 0 var(--layer-inset);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .calibration-trigger {
-  margin: 6px 0 0 46px;
+  margin: 8px 0 0 var(--layer-inset);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 4px 8px;
 }
-.calibration-hint { font-size: 10px; color: #65758a; }
+.calibration-button {
+  min-height: 28px;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid #dce7f7;
+  border-radius: 5px;
+  background: #f2f6fc;
+  color: var(--blue);
+  font-size: 11px;
+}
+.calibration-hint { font-size: 11px; color: #65758a; overflow-wrap: anywhere; }
+@media (max-width: 380px) {
+  .layer-item { padding-inline: 8px; }
+  .layer-detail, .layer-metadata, .opacity-control, .calibration-trigger { margin-left: 0; }
+}
 </style>

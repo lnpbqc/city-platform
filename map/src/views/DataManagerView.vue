@@ -42,8 +42,8 @@ const emit = defineEmits<{
   refresh: []
   openScene: [scene: SceneRecord]
 }>()
-const tabs = ['assets', 'records', 'scenes'] as const
-const tab = ref<typeof tabs[number]>('assets')
+const tabs = ['records', 'scenes', 'assets'] as const
+const tab = ref<typeof tabs[number]>('records')
 const sceneCount = ref<number | null>(null)
 const sceneQuery = ref('')
 const sceneJump = ref(0)
@@ -262,19 +262,6 @@ watch(
           @keydown="navigateTabs"
         >
           <button
-            id="asset-tab"
-            role="tab"
-            :aria-selected="tab === 'assets'"
-            :tabindex="tab === 'assets' ? 0 : -1"
-            aria-controls="asset-panel"
-            :class="{ active: tab === 'assets' }"
-            @click="changeTab('assets')"
-          >
-            <FolderOpen :size="16" />资产目录<span>{{
-              stats?.asset_count ?? total
-            }}</span>
-          </button>
-          <button
             id="record-tab"
             role="tab"
             :aria-selected="tab === 'records'"
@@ -288,6 +275,19 @@ watch(
           <button id="scene-tab" role="tab" :aria-selected="tab === 'scenes'" :tabindex="tab === 'scenes' ? 0 : -1"
             aria-controls="scene-panel" :class="{ active: tab === 'scenes' }" @click="changeTab('scenes')">
             <Layers :size="16" />场景<span>{{ sceneCount ?? '—' }}</span>
+          </button>
+          <button
+            id="asset-tab"
+            role="tab"
+            :aria-selected="tab === 'assets'"
+            :tabindex="tab === 'assets' ? 0 : -1"
+            aria-controls="asset-panel"
+            :class="{ active: tab === 'assets' }"
+            @click="changeTab('assets')"
+          >
+            <FolderOpen :size="16" />资产目录<span>{{
+              stats?.asset_count ?? total
+            }}</span>
           </button>
         </div>
         <div v-if="tab !== 'scenes'" class="table-tools">

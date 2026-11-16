@@ -1,33 +1,36 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, useId } from 'vue'
 import { ChevronDown } from '@lucide/vue'
 import type { MapLayer } from '../../layers/types'
 const props = defineProps<{ layers: MapLayer[] }>()
 const showLegend = ref(true)
-const legend = computed(() =>
-  props.layers.filter(
-    (layer) => layer.id !== 'basemap' && layer.attached && layer.visible && layer.status === 'ready',
-  ),
-)
+const entriesId = useId()
+const legend = computed(() => props.layers.flatMap(layer => {
+  if (layer.id === 'basemap' || layer.type !== 'geojson' || !layer.attached || !layer.visible || layer.status !== 'ready') return []
+  const bins = layer.legend?.filter(item => item.label !== '缺测') ?? []
+  if (new Set(bins.map(item => item.color)).size < 2) return []
+  const unit = layer.unit && !bins.every(item => item.label.endsWith(` ${layer.unit}`)) ? layer.unit : ''
+  return [{ id: layer.id, name: layer.name, unit, bins, missing: layer.legend?.some(item => item.label === '缺测') }]
+}))
 </script>
 
 <template>
-  <aside class="legend panel">
+  <aside v-if="legend.length" class="legend panel" aria-label="专题图例">
     <button
       class="legend-heading"
       :aria-expanded="showLegend"
+      :aria-controls="entriesId"
       @click="showLegend = !showLegend"
     >
       <span>图例</span
       ><ChevronDown :size="14" :class="{ flipped: !showLegend }" />
     </button>
-    <div v-if="showLegend" class="legend-entries">
+    <div v-show="showLegend" :id="entriesId" class="legend-entries map-panel-scroll" tabindex="0" aria-label="专题颜色分档">
       <div v-for="layer in legend" :key="layer.id" class="legend-layer">
-        <strong>{{ layer.name }} <small>{{ layer.unit || '单位未提供' }}</small></strong>
-        <span v-for="(item, index) in layer.legend || []" :key="index"><i :style="{ background: item.color }"></i>{{ item.label }}{{ item.value == null ? '' : ` · ${item.value}` }}</span>
-        <span v-if="!layer.legend?.length" class="muted">未提供图例</span>
+        <strong>{{ layer.name }} <small v-if="layer.unit">{{ layer.unit }}</small></strong>
+        <span v-for="(item, index) in layer.bins" :key="index"><i :style="{ background: item.color }" aria-hidden="true"></i>{{ item.label }}</span>
+        <small v-if="layer.missing" class="legend-missing">缺测不绘制</small>
       </div>
-      <span v-if="!legend.length" class="muted">暂无可见图层</span>
     </div>
   </aside>
 </template>
@@ -38,9 +41,10 @@ const legend = computed(() =>
   right: 20px;
   bottom: 60px;
   min-width: 158px;
-  max-width: 240px;
+  max-width: min(240px, calc(100vw - 24px));
   z-index: 2;
   padding: 0 14px;
+  overflow: hidden;
 }
 .legend-heading {
   display: flex;
@@ -59,18 +63,21 @@ const legend = computed(() =>
   transform: rotate(180deg);
 }
 .legend-entries {
-  max-height: 260px;
-  overflow-y: auto;
+  max-height: min(260px, 36svh);
   display: flex;
   flex-direction: column;
   gap: 11px;
-  padding: 0 0 14px;
-  font-size: 10px;
-  color: #7a879a;
+  padding: 3px 6px 12px 0;
+  font-size: 11px;
+  color: #52657d;
+  overflow-wrap: anywhere;
 }
+.legend-entries:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .legend-layer { display: grid; gap: 6px; }
 .legend-layer strong { font-weight: 500; }
-.legend-layer small { margin-left: 6px; color: #8d9baa; }
+.legend-layer small { color: #63758b; }
+.legend-layer strong small { margin-left: 4px; }
+.legend-missing { font-size: 11px; }
 .legend-layer > span {
   display: flex;
   align-items: center;
@@ -94,7 +101,6 @@ const legend = computed(() =>
     max-width: 180px;
   }
   .legend-entries {
-    font-size: 9px;
     gap: 8px;
   }
 }

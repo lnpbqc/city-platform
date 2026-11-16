@@ -25,7 +25,7 @@ import { campusRegions, demoRegion, resolveRegionTarget, type RegionTarget } fro
 import type { MapController, MapPoint } from '../map/mapController'
 import type { TilesCalibrationOffsets } from '../map/tilesCalibrationTypes'
 import type { BoundaryState } from '../map/regionBoundary'
-import type { LayerRecord, MapLayer, Selection, ObjectRecord, TilesPlacement } from '../layers/types'
+import type { LayerRecord, MapLayer, Selection, ObjectRecord } from '../layers/types'
 import { editablePoi } from '../map/poi'
 import type { SceneRecord } from '../simulation/simulationTypes'
 import type { CameraState } from '../map/mapNavigation'
@@ -58,7 +58,6 @@ const emit = defineEmits<{
   remove: [layer: MapLayer]
   opacity: [layer: MapLayer, value: number]
   roadMaxLevel: [layer: MapLayer, value: number]
-  tilesPlacement: [layer: MapLayer, value: TilesPlacement]
   retryMapState: [layer: MapLayer]
   move: [layer: MapLayer, direction: number]
   sceneMode: [active: boolean]
@@ -153,6 +152,9 @@ const blockedTilesAsset = computed(() => calibration.value?.id ?? refreshingCali
 const emptyOffsets = (): TilesCalibrationOffsets => ({ east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 })
 const calibrationOffsets = ref<Record<keyof TilesCalibrationOffsets, number | ''>>(emptyOffsets())
 const calibrationMatrix = shallowRef<number[] | null>(null)
+const calibrationGroundSelected = ref(false)
+const calibrationSaveReady = computed(() => !!calibrationMatrix.value &&
+  (calibrationGroundSelected.value || Object.values(calibrationOffsets.value).some(value => value !== 0)))
 const canPickCalibrationPivot = computed(() => !!calibrationMatrix.value && Object.values(calibrationOffsets.value).every(value => value === 0))
 const allowCalibration = computed(() => poiAllowed.value && !calibration.value && !calibrationBusy.value && !refreshingCalibration.value)
 
@@ -176,6 +178,7 @@ function startCalibration(layer: MapLayer) {
   if (poiDraft.value) return
   closeObjects()
   calibrationOffsets.value = emptyOffsets()
+  calibrationGroundSelected.value = false
   calibrationNotice.value = ''
   calibrationError.value = ''
   const draft = { layer, id: layer.asset_id, version: layer.asset_version, revision: layer.tiles_revision ?? 0 }
@@ -196,6 +199,9 @@ function startCalibration(layer: MapLayer) {
       if (calibration.value !== draft) return
       calibrationNotice.value = message
       if (!message && !calibrationBusy.value) previewCalibration()
+    },
+    groundSelected() {
+      if (calibration.value === draft) calibrationGroundSelected.value = true
     },
   })) {
     calibration.value = null
@@ -219,7 +225,7 @@ function pickCalibrationPivot(kind: 'pivot' | 'ground' = 'pivot') {
 
 async function publishCalibration(mode: 'update' | 'copy', name = '') {
   const draft = calibration.value
-  if (!draft || !calibrationMatrix.value || calibrationBusy.value) return
+  if (!draft || !calibrationSaveReady.value || calibrationBusy.value) return
   name = name.trim()
   if (mode === 'copy' && !name) return
   calibrationBusy.value = true
@@ -547,10 +553,6 @@ function setRoadMaxLevel(layer: MapLayer, value: number) {
   if (!sceneLayers.value) { emit('roadMaxLevel', layer, value); return }
   controller?.setRoadMaxLevel(layer, value)
 }
-function setTilesPlacement(layer: MapLayer, value: TilesPlacement) {
-  if (!sceneLayers.value) { emit('tilesPlacement', layer, value); return }
-  void controller?.setTilesPlacement(layer, value)
-}
 function move(layer: MapLayer, direction: number) {
   if (!sceneLayers.value) { emit('move', layer, direction); return }
   const target = moveTarget(sceneLayers.value, layer, direction)
@@ -689,7 +691,6 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @remove="changeLayer($event, 'remove')"
       @opacity="setOpacity"
       @road-max-level="setRoadMaxLevel"
-      @tiles-placement="setTilesPlacement"
       @calibrate="startCalibration"
       @move="move"
     />
@@ -757,9 +758,10 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       :layers="poiLayers" :layer="poiDraft.layer" :object="poiDraft.object" :coordinates="poiDraft.coordinates"
       @pick="pickPoiPosition" @cancel="cancelPoi()" @saved="savePoi" @refresh="cancelPoi(); emit('refresh')" />
     <TilesCalibrationPanel v-if="calibration" class="model-calibration" :name="calibration.layer.name" :offsets="calibrationOffsets"
-      :busy="calibrationBusy" :ready="!!calibrationMatrix" :can-pick="canPickCalibrationPivot" :message="calibrationNotice" :error="calibrationError"
+      :busy="calibrationBusy" :ready="!!calibrationMatrix" :save-ready="calibrationSaveReady" :can-pick="canPickCalibrationPivot"
+      :message="calibrationNotice" :error="calibrationError"
       @change="changeCalibration" @pick="pickCalibrationPivot" @cancel="cancelCalibration" @save="publishCalibration" />
-    <MapLegend v-if="!objectsOpen" :layers="viewLayers" :class="{ 'temporal-legend': dynamicLayers.length }" />
+    <MapLegend v-if="!objectsOpen && !calibration" :layers="viewLayers" :class="{ 'temporal-legend': dynamicLayers.length }" />
     <TimeAxis v-if="dynamicLayers.length || metadataLoading" :time="time" v-model:resolution="resolution" v-model:rate="rate"
       ref="timeAxis"
       :playing="playing" :maximum="maximum" :position="position" :times="times" :loading="timeLoading" :metadata-loading="metadataLoading"
@@ -785,7 +787,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 
 <style scoped>
 .model-calibration { position: absolute; z-index: 6; top: 166px; right: 72px; }
-@media (max-width: 760px) { .model-calibration { top: auto; bottom: 60px; right: 12px; max-height: 41vh; } }
+@media (max-width: 760px) { .model-calibration { top: auto; bottom: 60px; right: 12px; } }
 .poi-prompt { position: absolute; z-index: 6; bottom: 60px; left: 50%; transform: translateX(-50%); padding: 12px 16px; font-size: 12px; }
 .poi-prompt button { color: var(--blue); margin-left: 8px; }
 .object-trigger { position: absolute; z-index: 3; right: 78px; top: 84px; padding: 11px 15px; font-size: 11px; color: var(--blue); }

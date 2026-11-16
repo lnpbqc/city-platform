@@ -886,6 +886,30 @@ test('tiles calibration samples the moved anchor and keeps the same relative hei
   controller.destroy()
 })
 
+for (const terrain of [true, false]) test(`a tileset without a georeferenced root saves yaw-only preview with terrain ${terrain}`, async () => {
+  basemapTerrain = worldTerrain
+  wgs84TilesNormals = true
+  const { controller, layer } = setup('3dtiles', undefined, undefined, { terrain })
+  const tile = new Cesium3DTileset()
+  const center = Vector.fromDegrees(113.37, 23.04, 75)
+  tile.root = { transform: RootMatrix.IDENTITY }
+  tile.boundingSphere.center = center
+  tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {} }), true)
+  const preview = controller.updateTilesCalibration({ east: 0, north: 0, up: 0, yaw: 6, pitch: 0, roll: 0 })
+  const saved = await controller.prepareTilesCalibration()
+  assert.ok(Math.abs(saved.terrain_anchor.longitude - 113.37) < 1e-6)
+  assert.equal(saved.terrain_anchor.height, 32)
+  if (terrain) assert.deepEqual(saved.matrix, preview)
+  else {
+    const point = RootMatrix.multiplyByPoint(RootMatrix.fromArray(saved.matrix), center, new Vector())
+    assert.ok(Math.abs(Wgs84Cartographic.fromCartesian(point).height - 107) < 0.01)
+  }
+  controller.destroy()
+})
+
 test('a tileset without a georeferenced root can supply a separate ground point', async () => {
   basemapTerrain = worldTerrain
   wgs84TilesNormals = true
@@ -897,8 +921,8 @@ test('a tileset without a georeferenced root can supply a separate ground point'
   tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
   tileRequest.resolve(tile)
   await controller.load(layer)
-  controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {} })
-  await assert.rejects(controller.prepareTilesCalibration(), /贴地点/)
+  let groundSelected = 0
+  controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {}, groundSelected: () => { groundSelected++ } })
   controller.updateTilesCalibration({ east: 10, north: 20, up: 6, yaw: 0, pitch: 0, roll: 0 })
   const previewGround = RootMatrix.multiplyByPoint(tile.modelMatrix, ground, new Vector())
   controller.pickTilesCalibrationPivot('ground')
@@ -906,6 +930,7 @@ test('a tileset without a georeferenced root can supply a separate ground point'
   viewer.scene.pick = () => ({ primitive: tile })
   viewer.scene.pickPosition = () => previewGround
   click({ position: { x: 10, y: 11 } })
+  assert.equal(groundSelected, 1)
   const saved = await controller.prepareTilesCalibration()
   assert.ok(saved.terrain_anchor.longitude > 113.375)
   const point = RootMatrix.multiplyByPoint(RootMatrix.fromArray(saved.matrix), ground, new Vector())

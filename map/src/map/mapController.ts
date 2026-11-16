@@ -92,6 +92,7 @@ type CalibrationCallbacks = {
   moved: (east: number, north: number) => void
   invalidated: () => void
   notice: (message: string) => void
+  groundSelected?: () => void
 }
 
 type TilesCalibration = {
@@ -104,7 +105,7 @@ type TilesCalibration = {
   callbacks: CalibrationCallbacks
   offsets: TilesCalibrationOffsets
   terrain: boolean
-  ground?: Cartesian3
+  ground: Cartesian3
   groundHeight?: number
   picking?: 'pivot' | 'ground'
   drag?: { plane: Plane; start: Cartesian3; east: number; north: number; previousInputs: boolean }
@@ -1038,7 +1039,7 @@ export function createMapController(
     if (layer.tiles_calibrated && !baked) return
     const { tiles_height_offset_m: offset, tiles_ground_anchor: manual, tiles_align_to_terrain: align } = tilesPlacement(layer, true)
     const anchor = baked ?? (align ? manual ?? layer.tilesModelOrigin : null)
-    layer.tilesTerrainNotice = align && !anchor ? '无法识别模型原点，可改用手动锚点。当前使用原始高度加手动偏移。' : ''
+    layer.tilesTerrainNotice = align && !anchor ? '无法识别模型原点，按源模型高程显示。' : ''
     if (!offset && !anchor && !entry.tilesPlacement) return
     const placement = entry.tilesPlacement ??= {
       original: Matrix4.clone(tileset.modelMatrix),
@@ -1125,8 +1126,6 @@ export function createMapController(
     const baseline = Matrix4.clone(tileset.modelMatrix)
     const baked = layer.tiles_calibrated ? layer.tiles_terrain_anchor : null
     const sourceAnchor = baked ?? layer.tiles_ground_anchor ?? layer.tilesModelOrigin
-    const ground = sourceAnchor ? Matrix4.multiplyByPoint(baseline,
-      Cartesian3.fromDegrees(sourceAnchor.longitude, sourceAnchor.latitude, sourceAnchor.height), new Cartesian3()) : undefined
     const groundHeight = entry?.tilesPlacement?.terrainHeight ?? sourceAnchor?.height
     const root = tileset.root?.transform
     const pivot = layer.tilesModelOrigin && root
@@ -1136,6 +1135,8 @@ export function createMapController(
       callbacks.notice('无法确定模型的旋转中心。')
       return false
     }
+    const ground = sourceAnchor ? Matrix4.multiplyByPoint(baseline,
+      Cartesian3.fromDegrees(sourceAnchor.longitude, sourceAnchor.latitude, sourceAnchor.height), new Cartesian3()) : Cartesian3.clone(pivot)
     viewer.camera.cancelFlight()
     cancelAreaSelection()
     cancelPointPicking()
@@ -1198,6 +1199,7 @@ export function createMapController(
       editing.ground = Matrix4.multiplyByPoint(toBaseline, point, new Cartesian3())
       editing.groundHeight = entries.get(editing.layer)?.tilesPlacement?.terrainHeight
         ?? Cartographic.fromCartesian(editing.ground).height - (editing.layer.tiles_height_offset_m ?? 0)
+      editing.callbacks.groundSelected?.()
     } else {
       editing.coordinates = calibrationFrame(point)
       editing.position.setValue(point)
@@ -1211,7 +1213,6 @@ export function createMapController(
   async function prepareTilesCalibration() {
     const editing = tilesCalibration
     if (!editing || editing.picking) return null
-    if (!editing.ground || editing.groundHeight === undefined) throw new Error('请先选择模型上的贴地点。')
     const preview = Matrix4.clone(editing.tileset.modelMatrix)
     const inverse = Matrix4.inverseTransformation(editing.baseline, new Matrix4())
     const adjustment = Matrix4.multiply(preview, inverse, new Matrix4())
@@ -1226,10 +1227,14 @@ export function createMapController(
       throw new Error('地形采样失败，请重试。')
     }
     if (tilesCalibration !== editing || editing.picking || !Matrix4.equals(editing.tileset.modelMatrix, preview)) return null
-    const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(point)
-    const translation = Matrix4.fromTranslation(Cartesian3.multiplyByScalar(up, height - editing.groundHeight, up))
-    const matrix = Matrix4.multiply(translation, preview, translation)
-    return { matrix: Matrix4.pack(matrix, []), terrain_anchor: { longitude, latitude, height } }
+    // Without a known contact point, use the model center to sample terrain and preserve the preview altitude.
+    const delta = height - (editing.groundHeight ?? (editing.terrain ? height : 0))
+    if (delta) {
+      const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(point)
+      const translation = Matrix4.fromTranslation(Cartesian3.multiplyByScalar(up, delta, up))
+      Matrix4.multiply(translation, preview, preview)
+    }
+    return { matrix: Matrix4.pack(preview, []), terrain_anchor: { longitude, latitude, height } }
   }
 
   function beginCalibrationDrag(screen: Cartesian2) {

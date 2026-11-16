@@ -110,60 +110,64 @@ async function requestDelete() {
 <template>
   <section class="display-regions" aria-label="展示区域" @keydown.esc="onEscape">
     <div class="display-heading">
-      <h3>展示区域</h3>
+      <h3>已保存视角</h3>
       <button ref="saveButton" type="button" class="display-save" :disabled="busy || loading || !!loadError" @click="begin()">
         <Plus :size="14" aria-hidden="true" />保存当前视角
       </button>
     </div>
-    <form v-if="edit && !edit.id" class="display-editor" @submit.prevent="submit">
-      <label :for="nameId">区域名称</label>
-      <input :id="nameId" ref="input" v-model="name" maxlength="120" required />
-      <button type="submit" class="display-action" :disabled="busy || !name.trim()">保存</button>
-      <button type="button" class="display-action" :disabled="busy" @click="edit = null; saveButton?.focus()">取消</button>
-    </form>
-    <p v-if="loading && !regions.length" role="status">正在读取展示区域…</p>
-    <p v-else-if="loadError" role="alert">{{ loadError }} <button type="button" class="display-action" @click="emit('retry')">重试</button></p>
-    <p v-else-if="!regions.length">暂无展示区域</p>
-    <ul v-if="regions.length">
-      <li v-for="region in regions" :key="region.id">
-        <div class="display-row">
-          <button type="button" class="display-location" :title="region.name" @click="emit('open', region)">
-            <LocateFixed :size="15" aria-hidden="true" /><span>{{ region.name }}</span>
-          </button>
-          <button type="button" class="icon-button display-manage" :aria-label="`管理${region.name}`" title="管理展示区域"
-            :aria-expanded="expanded === region.id" :aria-controls="`${panelId}-${region.id}`" :disabled="busy"
-            @click="toggleActions(region.id, $event)">
-            <Ellipsis :size="18" aria-hidden="true" />
-          </button>
-        </div>
-        <div v-show="expanded === region.id" :id="`${panelId}-${region.id}`" class="display-editor">
-          <form v-if="edit?.id === region.id" @submit.prevent="submit">
-            <label :for="nameId">区域名称</label>
-            <input :id="nameId" :ref="setRenameInput" v-model="name" maxlength="120" required />
-            <button type="submit" class="display-action" :disabled="busy || !name.trim()">保存</button>
-            <button type="button" class="display-action" :disabled="busy" @click="closeActions(true)">取消</button>
-          </form>
-          <div v-else-if="expanded === region.id && confirmDelete" class="display-actions">
-            <span>删除「{{ region.name }}」？</span>
-            <button type="button" class="display-action display-delete" :disabled="busy" @click="change(() => remove(region.id), '无法删除展示区域，请重试。')">确认删除</button>
-            <button ref="deleteCancel" type="button" class="display-action" :disabled="busy" @click="closeActions(true)">取消</button>
+    <div class="display-region-body map-panel-scroll" role="region" aria-label="展示区域列表" tabindex="0">
+      <form v-if="edit && !edit.id" class="display-editor" @submit.prevent="submit">
+        <label :for="nameId">区域名称</label>
+        <input :id="nameId" ref="input" v-model="name" maxlength="120" required />
+        <button type="submit" class="display-action" :disabled="busy || !name.trim()">保存</button>
+        <button type="button" class="display-action" :disabled="busy" @click="edit = null; saveButton?.focus()">取消</button>
+      </form>
+      <p v-if="loading && !regions.length" role="status">正在读取展示区域…</p>
+      <p v-else-if="loadError" role="alert">{{ loadError }} <button type="button" class="display-action" @click="emit('retry')">重试</button></p>
+      <p v-else-if="!regions.length">暂无展示区域</p>
+      <ul v-if="regions.length">
+        <li v-for="region in regions" :key="region.id">
+          <div class="display-row">
+            <button type="button" class="display-location" :title="region.name" @click="emit('open', region)">
+              <LocateFixed :size="15" aria-hidden="true" /><span>{{ region.name }}</span>
+            </button>
+            <button type="button" class="icon-button display-manage" :aria-label="`管理${region.name}`" title="管理展示区域"
+              :aria-expanded="expanded === region.id" :aria-controls="`${panelId}-${region.id}`" :disabled="busy"
+              @click="toggleActions(region.id, $event)">
+              <Ellipsis :size="18" aria-hidden="true" />
+            </button>
           </div>
-          <div v-else-if="expanded === region.id" class="display-actions">
-            <button type="button" class="display-action" :disabled="busy || loading" @click="begin(region)">改名</button>
-            <button type="button" class="display-action" :disabled="busy || loading" @click="update(region)">更新为当前视角</button>
-            <button type="button" class="display-action display-delete" :disabled="busy || loading" @click="requestDelete">删除</button>
+          <div v-show="expanded === region.id" :id="`${panelId}-${region.id}`" class="display-editor">
+            <form v-if="edit?.id === region.id" @submit.prevent="submit">
+              <label :for="nameId">区域名称</label>
+              <input :id="nameId" :ref="setRenameInput" v-model="name" maxlength="120" required />
+              <button type="submit" class="display-action" :disabled="busy || !name.trim()">保存</button>
+              <button type="button" class="display-action" :disabled="busy" @click="closeActions(true)">取消</button>
+            </form>
+            <div v-else-if="expanded === region.id && confirmDelete" class="display-actions">
+              <span>删除「{{ region.name }}」？</span>
+              <button type="button" class="display-action display-delete" :disabled="busy" @click="change(() => remove(region.id), '无法删除展示区域，请重试。')">确认删除</button>
+              <button ref="deleteCancel" type="button" class="display-action" :disabled="busy" @click="closeActions(true)">取消</button>
+            </div>
+            <div v-else-if="expanded === region.id" class="display-actions">
+              <button type="button" class="display-action" :disabled="busy || loading" @click="begin(region)">改名</button>
+              <button type="button" class="display-action" :disabled="busy || loading" @click="update(region)">更新为当前视角</button>
+              <button type="button" class="display-action display-delete" :disabled="busy || loading" @click="requestDelete">删除</button>
+            </div>
           </div>
-        </div>
-      </li>
-    </ul>
-    <p v-if="error" role="alert">{{ error }}</p>
+        </li>
+      </ul>
+      <p v-if="error" role="alert">{{ error }}</p>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.display-regions { display: grid; gap: 7px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+.display-regions { display: flex; flex-direction: column; min-height: 0; font-size: 12px; overflow-wrap: anywhere; }
+.display-region-body { display: grid; align-content: start; gap: 7px; padding: 4px 14px 12px; }
+.display-region-body:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .display-heading, .display-actions, form { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
-.display-heading { justify-content: space-between; }
+.display-heading { flex: none; justify-content: space-between; padding: 8px 14px 4px; }
 h3, ul, p { margin: 0; }
 h3 { font-size: 12px; }
 ul { padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 7px; }
@@ -175,6 +179,7 @@ li + li { border-top: 1px solid var(--line); }
 .display-location:hover { background: #f2f6fc; }
 .display-manage { width: 36px; height: 34px; color: #566b84; }
 .display-manage[aria-expanded="true"] { color: var(--blue); background: #edf3fc; }
+.display-location:focus-visible, .display-manage:focus-visible { outline-offset: -1px; }
 .display-save, .display-action { gap: 4px; min-height: 30px; padding: 4px 7px; border-radius: 5px; font-size: 11px; }
 .display-save { color: var(--blue); background: #eff4fb; }
 .display-action:hover:not(:disabled) { background: #edf3fc; }

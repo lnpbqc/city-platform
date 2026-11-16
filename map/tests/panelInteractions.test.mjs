@@ -7,6 +7,7 @@ import * as vue from 'vue'
 import * as temporal from '../src/temporal/temporal.ts'
 import * as poi from '../src/map/poi.ts'
 import * as weather from '../src/map/weather.ts'
+import * as regions from '../src/map/regions.ts'
 
 function component(name) {
   const { descriptor } = parse(readFileSync(new URL(`../src/components/${name === 'TimeAxis' ? 'common' : 'map'}/${name}.vue`, import.meta.url), 'utf8'))
@@ -18,6 +19,7 @@ function component(name) {
     if (path === '../../temporal/temporal') return temporal
     if (path === '../../map/poi') return poi
     if (path === '../../map/weather') return weather
+    if (path === '../../map/regions') return regions
     if (path === './FeatureInspector.vue') return component('FeatureInspector')
     if (path === '@lucide/vue') return new Proxy({}, { get: () => () => null })
     throw new Error(path)
@@ -26,7 +28,7 @@ function component(name) {
 }
 const walk = n => [n, ...(n.children ?? []).flatMap(walk)]
 const text = n => `${n.text ?? ''}${(n.children ?? []).map(text).join('')}`
-const components = { ObjectPanel: component('ObjectPanel'), TimeAxis: component('TimeAxis'), WeatherControl: component('WeatherControl'), DisplayRegionPanel: component('DisplayRegionPanel') }
+const components = { ObjectPanel: component('ObjectPanel'), TimeAxis: component('TimeAxis'), WeatherControl: component('WeatherControl'), DisplayRegionPanel: component('DisplayRegionPanel'), RegionPicker: component('RegionPicker') }
 const label = value => n => n.props['aria-label'] === value
 const cls = value => n => String(n.props.class).split(' ').includes(value)
 const tick = async () => { await vue.nextTick(); await vue.nextTick() }
@@ -35,6 +37,7 @@ function mount(name, initial, handlers = {}) {
   const node = tag => ({
     tag, props: {}, children: [], style: {}, dataset: {}, scrollTop: 0, listeners: {},
     get isConnected() { return Boolean(this.parent) },
+    get options() { return this.children.filter(child => child.tag === 'option') },
     focus() { focused = this },
     addEventListener(event, handler) { this.listeners[event] = handler },
     getRootNode() { return { activeElement: focused } },
@@ -53,6 +56,58 @@ function mount(name, initial, handlers = {}) {
   app.mount(root)
   return { props, root, events, focused: () => vue.toRaw(focused), find: fn => walk(root).find(fn), close: () => app.unmount() }
 }
+
+test('region picker defaults to display regions and separates administrative location with keyboard navigation', async t => {
+  const catalogRequest = t.mock.method(globalThis, 'fetch', async () => ({ ok: true, json: async () => ({
+    retrievedAt: '2026-10-22', regions: [{ id: '440000', parent: '100000', name: '广东省', level: 'province', longitude: 113, latitude: 23 }],
+  }) }))
+  const ctx = mount('RegionPicker', { selected: regions.demoRegion, sidebar: false, boundaryState: { status: 'idle' }, boundaryEnabled: false }, { onOpen() {}, onSelect() {} })
+  t.after(ctx.close)
+  const trigger = ctx.find(label('选择中国城市和地区'))
+  trigger.props.onClick(); await tick()
+  const tablist = ctx.find(n => n.props.role === 'tablist')
+  const displayTab = ctx.find(n => n.props.role === 'tab' && text(n) === '展示区域')
+  const adminTab = ctx.find(n => n.props.role === 'tab' && text(n) === '行政区定位')
+  const panel = tab => ctx.find(n => n.props.id === tab.props['aria-controls'])
+  assert.ok(tablist && displayTab && adminTab)
+  assert.equal(displayTab.props['aria-selected'], true)
+  assert.equal(ctx.focused(), displayTab)
+  assert.equal(panel(adminTab).style.display, 'none')
+  assert.equal(catalogRequest.mock.callCount(), 0)
+
+  const key = async key => {
+    let prevented = false
+    tablist.props.onKeydown({ key, preventDefault() { prevented = true } }); await tick()
+    assert.equal(prevented, true)
+  }
+  await key('ArrowRight')
+  await tick()
+  assert.equal(adminTab.props['aria-selected'], true)
+  assert.equal(ctx.focused(), adminTab)
+  assert.equal(panel(displayTab).style.display, 'none')
+  assert.equal(catalogRequest.mock.callCount(), 1)
+  const search = ctx.find(label('搜索中国地区'))
+  assert.equal(ctx.find(label('选择省级地区')).options[1].text, '广东省')
+  assert.equal(walk(panel(adminTab)).filter(cls('map-panel-scroll')).length, 1)
+  assert.equal(panel(adminTab).props.tabindex, '0')
+  search.value = '440000'; search.listeners.input({ target: search }); await tick()
+  assert.match(text(panel(adminTab)), /找到 1 个地区/)
+  assert.equal(ctx.find(label('选择省级地区')), undefined)
+
+  panel(adminTab).scrollTop = 80
+  await key('Home')
+  assert.equal(ctx.focused(), displayTab)
+  await key('End')
+  assert.equal(ctx.focused(), adminTab)
+  assert.equal(panel(adminTab).scrollTop, 80)
+  const national = ctx.find(n => n.tag === 'button' && text(n) === '全国概览')
+  national.props.onClick(); await tick()
+  assert.deepEqual(ctx.events, [['onOpen'], ['onSelect', regions.chinaRegion]])
+  assert.equal(ctx.find(n => n.props.role === 'tablist'), undefined)
+  assert.equal(ctx.focused(), trigger)
+  trigger.props.onClick(); await tick()
+  assert.equal(ctx.find(n => n.props.role === 'tab' && text(n) === '展示区域').props['aria-selected'], true)
+})
 
 test('display regions open and manage independently, with one disclosure and Escape focus return', async t => {
   const first = { id: 'first', name: '一个在窄屏上会截断的展示区域名称' }
@@ -76,6 +131,9 @@ test('display regions open and manage independently, with one disclosure and Esc
   assert.equal(one.props['aria-expanded'], false)
   assert.equal(two.props['aria-expanded'], true)
   const panel = ctx.find(label('展示区域'))
+  assert.equal(walk(panel).filter(cls('map-panel-scroll')).length, 1)
+  assert.equal(ctx.find(cls('display-heading')).parent, panel)
+  assert.equal(ctx.find(cls('display-region-body')).props.tabindex, '0')
   let stopped = false
   panel.props.onKeydown({ key: 'Escape', stopPropagation() { stopped = true } })
   await tick()

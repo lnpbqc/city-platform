@@ -139,6 +139,7 @@ test('saving a named calibration copy releases the original layer without waitin
   target.tiles_calibration_allowed = true
   target.tiles_revision = 2
   panel.startCalibration(target)
+  panel.changeCalibration('up', 2)
   await panel.publishCalibration('copy', '  校准样本  ')
   assert.equal(publishes[0][1].name, '校准样本')
   assert.equal(publishes[0][1].base_revision, 2)
@@ -147,6 +148,49 @@ test('saving a named calibration copy releases the original layer without waitin
   assert.equal(controller.calibration, null)
   assert.equal(target.tiles_revision, 2)
   assert.deepEqual(ctx.events.at(-1), ['refresh'])
+})
+
+test('numeric adjustments can be saved directly by either action', async t => {
+  const publishes = []
+  const ctx = setup({ calibrateTiles: async (...args) => { publishes.push(args); return { revision: 1 } } })
+  t.after(ctx.cleanup)
+  const { panel, props } = ctx
+  const target = props.layers[0]
+  target.tiles_calibration_allowed = true
+  for (const mode of ['copy', 'update']) {
+    panel.startCalibration(target)
+    panel.changeCalibration('yaw', 6)
+    await panel.publishCalibration(mode, '微调模型')
+  }
+  assert.deepEqual(publishes.map(([, body]) => [body.mode, body.matrix[3]]), [['copy', 6], ['update', 6]])
+})
+
+test('opening calibration, replacing only the pivot, and undoing offsets do not publish', async t => {
+  const publishes = []
+  const ctx = setup({ calibrateTiles: async (...args) => { publishes.push(args); return { revision: 1 } } })
+  t.after(ctx.cleanup)
+  const { controller, panel, props } = ctx
+  const target = props.layers[0]
+  target.tiles_calibration_allowed = true
+  panel.startCalibration(target)
+  await panel.publishCalibration('update')
+  await panel.publishCalibration('copy', '原模型副本')
+  assert.equal(publishes.length, 0)
+
+  panel.pickCalibrationPivot()
+  controller.picking = false
+  controller.calibration.notice('')
+  panel.changeCalibration('yaw', 6)
+  panel.changeCalibration('yaw', 0)
+  await panel.publishCalibration('update')
+  assert.equal(publishes.length, 0)
+
+  panel.pickCalibrationPivot('ground')
+  controller.picking = false
+  controller.calibration.groundSelected()
+  controller.calibration.notice('')
+  await panel.publishCalibration('update')
+  assert.equal(publishes.length, 1)
 })
 
 test('time axis height follows wrapping and releases its observer when hidden or unmounted', async t => {
