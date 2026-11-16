@@ -114,7 +114,7 @@ onBeforeUnmount(() => {
         </p>
         <p v-else-if="asset.type === '3dtiles' && asset.status === 'active' && asset.source_kind !== 'external' && asset.current_version">
           <button class="text-button" type="button" :disabled="zipDownloading" @click="downloadTiles">
-            {{ zipDownloading ? '正在准备下载…' : asset.tiles_calibrated ? '下载校准后的 ZIP' : '下载完整 ZIP' }}
+            {{ zipDownloading ? '正在校验模型文件…' : asset.tiles_calibrated ? '下载校准后的 ZIP' : '下载完整 ZIP' }}
           </button>
         </p>
         <p v-if="zipError" role="alert" class="detail-error">{{ zipError }}</p>

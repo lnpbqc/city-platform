@@ -4,7 +4,7 @@ import type { DisplayRegion, DisplayRegionView } from '../map/displayRegions'
 import type { SceneInput, SceneRecord, NetworkRecord, RunInput, RunRecord, RunSnapshot, RunResult, RunQuery } from '../simulation/simulationTypes'
 import type { TemporalContext, TimeLayerQuery, TimeSeriesQuery, TimeSeriesRecord } from '../temporal/temporalTypes'
 import { publishApiEvent } from './apiEvents.ts'
-import type { MapLayerReference, MapViewportResult, NearbyPoi, TilesGroundAnchor } from '../layers/types'
+import type { MapLayerReference, MapViewportResult, NearbyPoi, ObjectSummary, TilesGroundAnchor } from '../layers/types'
 
 export const getMapViewport = (body: MapLayerReference & { bbox: [number, number, number, number]; width: number; height: number; meters_per_pixel?: number; road_max_level?: number }, signal?: AbortSignal) =>
   request<MapViewportResult>('/api/map/viewport', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
@@ -218,7 +218,7 @@ export const reconcileAssets = () =>
   )
 export const deleteAsset = (id: string) =>
   request<void>(`/api/assets/${id}`, { method: 'DELETE' })
-export const getObjects = (query: ObjectQuery = {}, signal?: AbortSignal) => {
+export const getObjects = (query: ObjectQuery & { focus_id?: string } = {}, signal?: AbortSignal) => {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== '') params.set(key, String(value))
@@ -229,8 +229,8 @@ export const getObject = (id: string, signal?: AbortSignal, temporal?: TemporalC
   const params = temporal ? `?${new URLSearchParams({ time: temporal.time, resolution: temporal.resolution })}` : ''
   return request<ObjectRecord>(`/api/objects/${encodeURIComponent(id)}${params}`, { signal })
 }
-export const selectObjects = (query: ObjectQuery, geometry: GeometryDocument, signal?: AbortSignal) =>
-  request<Page<ObjectRecord>>('/api/objects/select', {
+export const selectObjects = (query: ObjectQuery & { include_summary?: boolean }, geometry: GeometryDocument, signal?: AbortSignal) =>
+  request<Page<ObjectRecord> & { summary?: ObjectSummary | null }>('/api/objects/select', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...query, geometry }), signal,
   })

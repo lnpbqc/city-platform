@@ -183,7 +183,23 @@ def published_geojson_identity(session: Session, identity: str, relative_path: s
     return None
 
 
+def geojson_version_parts(url: str):
+    parts = urlsplit(url)
+    match = re.fullmatch(r"/api/assets/([a-zA-Z0-9_-]{1,80})/versions/([a-zA-Z0-9._-]{1,32})/geojson", parts.path)
+    if match and not (parts.scheme or parts.netloc or parts.query or parts.fragment):
+        return match.groups()
+    return None
+
+
 def asset_for_url(session: Session, url: str, kind: str):
+    if reference := geojson_version_parts(url):
+        from app.services.geojson_snapshot import ready_snapshot
+        identity, version = reference
+        asset = session.get(Asset, identity)
+        if (kind != "geojson" or not asset or asset.type != kind or asset.status != "active"
+                or not session.get(AssetVersion, reference) or not ready_snapshot(session, identity, version)):
+            raise HTTPException(422, "GeoJSON 版本入口不存在或完整快照不可用")
+        return identity
     try:
         calibrated = calibrated_parts(url)
     except ValueError as error:
@@ -383,9 +399,11 @@ def version_record(asset: Asset, version: AssetVersion):
             "created_at": created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at.astimezone(timezone.utc)}
 
 
-def bind_asset_version(session: Session, layer: Layer, asset_id: str | None, replace=False):
+def bind_asset_version(session: Session, layer: Layer, asset_id: str | None, replace=False, *, url=None):
     if asset_id is None:
         layer.asset_version = None
+    elif (reference := geojson_version_parts(layer.url if url is None else url)) and reference[0] == asset_id:
+        layer.asset_version = reference[1]
     elif replace or layer.asset_id != asset_id or layer.asset_version is None:
         layer.asset_version = session.get(Asset, asset_id).current_version
     layer.asset_id = asset_id

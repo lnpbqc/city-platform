@@ -6,14 +6,17 @@ import stat
 import subprocess
 import sys
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from fastapi import HTTPException
 
 from app.services import layers, uploads
-from app.database import FILES_DIR, STORAGE_DIR
+from app.database import FILES_DIR, STORAGE_DIR, SessionLocal
 
 GEO = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"名称": "小样"}, "geometry": {"type": "Point", "coordinates": [114.16, 22.29]}}]}
 TILESET = {"asset": {"version": "1.1"}, "geometricError": 0, "root": {"boundingVolume": {"sphere": [0, 0, 0, 1]}, "geometricError": 0}}
@@ -143,6 +146,60 @@ def test_database_failure_removes_published_upload(client, monkeypatch):
     assert not list((STORAGE_DIR / "tmp").iterdir())
 
 
+def test_extract_checks_cancel_between_chunks(tmp_path):
+    archive, staging = tmp_path / "model.zip", tmp_path / "content"
+    archive.write_bytes(zip_data({"tileset.json": json.dumps(TILESET), "payload.bin": b"x" * (3 * 1024**2)}))
+
+    def cancel():
+        payload = staging / "payload.bin"
+        if payload.exists() and payload.stat().st_size >= 1024**2:
+            raise HTTPException(400, "上传已取消")
+
+    with pytest.raises(HTTPException, match="上传已取消"):
+        uploads.extract_tiles(archive, staging, cancel=cancel)
+    assert (staging / "payload.bin").stat().st_size == 1024**2
+
+
+def test_upload_serializes_published_directory_with_scan(client, monkeypatch):
+    from app.services import assets
+
+    moved, release, scanning = Event(), Event(), Event()
+    inventory = layers.inventory
+    lock_catalog = assets.lock_catalog
+
+    def pause_inventory(root, identity):
+        assert (root / identity / "data.geojson").is_file()
+        moved.set()
+        assert release.wait(10)
+        return inventory(root, identity)
+
+    def scanner_lock(session):
+        scanning.set()
+        lock_catalog(session)
+
+    def scan():
+        with SessionLocal() as session:
+            assets.reconcile(session)
+
+    monkeypatch.setattr(layers, "inventory", pause_inventory)
+    monkeypatch.setattr(assets, "lock_catalog", scanner_lock)
+    with ThreadPoolExecutor(2) as pool:
+        uploading = pool.submit(upload, client, json.dumps(GEO).encode())
+        try:
+            assert moved.wait(10)
+            reconciling = pool.submit(scan)
+            assert scanning.wait(10)
+            with closing(sqlite3.connect(STORAGE_DIR / "catalog.db", timeout=0)) as connection:
+                with pytest.raises(sqlite3.OperationalError, match="locked"):
+                    connection.execute("BEGIN IMMEDIATE")
+        finally:
+            release.set()
+        response = uploading.result(timeout=10)
+        reconciling.result(timeout=10)
+    assert response.status_code == 201, response.text
+    assert client.get(response.json()["url"]).json() == GEO
+
+
 @pytest.mark.parametrize("content", [b"broken", zip_data({"nested/no-entry.json": "{}"}), zip_data({"tileset.json": "{}"})])
 def test_bad_tileset(client, content):
     assert upload(client, content, "3dtiles", "city.zip").status_code == 422
@@ -175,3 +232,48 @@ def test_migration_round_trip(tmp_path):
     with closing(sqlite3.connect(tmp_path / "catalog.db")) as connection:
         head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (head,)
+
+
+def test_0021_retries_after_partial_migration(tmp_path):
+    environment = {**os.environ, "MAP_STORAGE_DIR": str(tmp_path)}
+
+    def upgrade(revision):
+        result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", revision],
+                                env=environment, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    upgrade("0020_tiles_calibration")
+    with closing(sqlite3.connect(tmp_path / "catalog.db")) as connection:
+        for trigger in ("asset_version_immutable", "asset_fingerprint_immutable", "asset_calibration_immutable"):
+            connection.execute(f"DROP TRIGGER {trigger}")
+        connection.execute("ALTER TABLE asset_versions ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+    upgrade("0021_tiles_working_asset")
+    with closing(sqlite3.connect(tmp_path / "catalog.db")) as connection:
+        names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert {"asset_version_immutable", "asset_fingerprint_immutable", "asset_calibration_immutable"} <= names
+        assert "tiles_terrain_anchor" in {row[1] for row in connection.execute("PRAGMA table_info(asset_versions)")}
+
+
+def test_0021_rolls_back_columns_and_triggers_on_interruption(tmp_path):
+    environment = {**os.environ, "MAP_STORAGE_DIR": str(tmp_path)}
+    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "0020_tiles_calibration"], env=environment, check=True)
+    interrupt = """
+from alembic import command
+from alembic.config import Config
+from alembic.operations import Operations
+
+original = Operations.add_column
+def fail(self, table, column, *args, **kwargs):
+    if column.name == 'tiles_terrain_anchor':
+        raise RuntimeError('migration interrupted')
+    return original(self, table, column, *args, **kwargs)
+Operations.add_column = fail
+command.upgrade(Config('alembic.ini'), '0021_tiles_working_asset')
+"""
+    result = subprocess.run([sys.executable, "-c", interrupt], env=environment, capture_output=True, text=True)
+    assert result.returncode != 0 and "migration interrupted" in result.stderr
+    with closing(sqlite3.connect(tmp_path / "catalog.db")) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0020_tiles_calibration",)
+        names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert {"asset_version_immutable", "asset_fingerprint_immutable", "asset_calibration_immutable"} <= names
+        assert "revision" not in {row[1] for row in connection.execute("PRAGMA table_info(asset_versions)")}

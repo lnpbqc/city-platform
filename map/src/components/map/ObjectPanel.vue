@@ -2,12 +2,13 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { X, Scan, Pentagon, Search, ArrowLeft } from '@lucide/vue'
 import FeatureInspector from './FeatureInspector.vue'
-import type { MapLayer, ObjectRecord, Selection } from '../../layers/types'
+import type { MapLayer, ObjectRecord, ObjectSummary, Selection } from '../../layers/types'
 
 const props = defineProps<{
   layers: MapLayer[]; layerId: string; items: ObjectRecord[]; total: number; page: number; pageSize: number
   loading: boolean; error: string; q: string; type: string; selectedId: string; selection: Selection | null
   area: boolean; drawing: 'box' | 'polygon' | null; progress: { loaded: number; total: number } | null
+  areaSummary?: ObjectSummary | null
   editPoi?: boolean
 }>()
 const emit = defineEmits<{
@@ -20,6 +21,18 @@ const results = ref<HTMLElement>()
 const details = ref<HTMLElement>()
 const back = ref<HTMLButtonElement>()
 const selectionLayer = computed(() => props.layers.find(layer => layer.id === props.selection?.layerId))
+const areaMetrics = computed(() => {
+  const groups = props.areaSummary?.types ?? []
+  const areas = groups.flatMap(group => group.area_m2 === null ? [] : [group.area_m2])
+  const lows = groups.flatMap(group => group.min_height_m === null ? [] : [group.min_height_m])
+  const highs = groups.flatMap(group => group.max_height_m === null ? [] : [group.max_height_m])
+  return {
+    area: areas.length ? areas.reduce((sum, value) => sum + value, 0) : null,
+    low: lows.reduce((minimum, value) => Math.min(minimum, value), Infinity),
+    high: highs.reduce((maximum, value) => Math.max(maximum, value), -Infinity),
+  }
+})
+const metric = (value: number) => value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 let lastObjectId = ''
 watch(() => props.selection ? `${props.selection.layerId}:${props.selection.objectId ?? props.selection.title}` : '', async (identity, previous) => {
   if (props.selectedId) lastObjectId = props.selectedId
@@ -61,6 +74,10 @@ watch(() => props.selection ? `${props.selection.layerId}:${props.selection.obje
       <p v-if="loading" class="object-hint" role="status">{{ progress ? `正在读取选择集 ${progress.loaded}/${progress.total || '…'}` : '正在读取对象…' }}</p>
       <p v-else-if="error" class="object-error" role="alert"><strong>{{ error.startsWith('无权限：') ? '无权限读取对象' : '对象加载失败' }}</strong> · {{ error }} <button @click="emit('retry')">重试查询</button></p>
       <p v-else class="object-count" role="status">{{ area ? '范围内' : '当前筛选' }}共 {{ total }} 个对象</p>
+      <p v-if="areaSummary && !loading && !error" class="object-count">
+        面积 {{ areaMetrics.area === null ? '未提供' : `${metric(areaMetrics.area)} m²` }} ·
+        高度 {{ Number.isFinite(areaMetrics.low) ? `${metric(areaMetrics.low)}–${metric(areaMetrics.high)} m` : '未提供' }}
+      </p>
       <div class="object-list" role="listbox" aria-label="对象列表">
         <button v-for="item in items" :key="item.object_id" :data-object-id="item.object_id" role="option" :aria-selected="selectedId === item.object_id" @click="emit('select', item)">
           <strong>{{ item.name ?? '名称未提供' }}</strong><span>{{ item.type }} · {{ item.object_id }}</span>

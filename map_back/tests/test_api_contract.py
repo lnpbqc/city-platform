@@ -67,10 +67,14 @@ def test_unexpected_error_is_logged_with_trace_without_leaking_details(client, c
     app.dependency_overrides[get_session] = fail
     try:
         with caplog.at_level(logging.ERROR), TestClient(app, raise_server_exceptions=False) as isolated:
-            response = isolated.get("/api/layers")
+            response = isolated.get("/api/layers", headers={"Origin": "http://127.0.0.1:5173"})
+            forbidden = isolated.get("/api/layers", headers={"Origin": "http://example.test"})
     finally:
         app.dependency_overrides.clear()
     assert response.status_code == 500
+    assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5173"
+    assert "x-trace-id" in response.headers["Access-Control-Expose-Headers"].lower()
+    assert "Access-Control-Allow-Origin" not in forbidden.headers
     body = response.json()
     assert body["code"] == "INTERNAL_ERROR"
     assert body["trace_id"] == response.headers["X-Trace-ID"]

@@ -9,8 +9,7 @@ from app.services.builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_ass
 from app.errors import ApiProblem
 from app.models import Asset, AssetVersion, Layer, ObjectIndex, Scene, SceneAssetReference, SpatialObject, Run, RunAssetReference
 from app.services.spatial import area_m2, clip_geometry, parse_bbox, representative_coordinates, selection_polygon
-from app.schemas.objects import ObjectFilters
-from app.schemas.objects import ObjectSelectionInput
+from app.schemas.objects import ObjectFilters, ObjectListFilters, ObjectSelectionInput
 
 def _available(session: Session, asset: Asset, version: str):
     if session.get(AssetVersion, (asset.id, version)) is None:
@@ -110,6 +109,12 @@ class Selection:
     clipped: dict[str, dict]
 
 
+def selected_rows(session, ids, *columns):
+    # Leave room under SQLite's 999-variable limit on older builds.
+    for start in range(0, len(ids), 900):
+        yield from session.execute(select(*columns).where(SpatialObject.id.in_(ids[start:start + 900])))
+
+
 def select_objects(session: Session, query: ObjectFilters, polygon: dict | None = None):
     try:
         mask = parse_bbox(query.bbox)
@@ -138,7 +143,7 @@ def select_objects(session: Session, query: ObjectFilters, polygon: dict | None 
             boundary.append(row.id)
     clipped = {}
     if boundary:
-        for identity, geometry in session.execute(select(SpatialObject.id, SpatialObject.geometry).where(SpatialObject.id.in_(boundary))):
+        for identity, geometry in selected_rows(session, boundary, SpatialObject.id, SpatialObject.geometry):
             result = clip_geometry(geometry, mask)
             if result is not None:
                 selected.add(identity)
@@ -176,10 +181,16 @@ def _page(session, query, selection):
             "total": len(selection.ids), "page": query.page, "page_size": query.page_size}
 
 
-def list_objects(query: ObjectFilters, session: Session):
+def list_objects(query: ObjectListFilters, session: Session):
+    focus = query.focus_id
     if query.bbox is None:
         filters = _conditions(session, query)
         total = session.scalar(_statement(func.count()).where(*filters))
+        if focus:
+            if session.scalar(_statement(SpatialObject.id).where(*filters, SpatialObject.id == focus)) is None:
+                raise ApiProblem(404, "OBJECT_NOT_FOUND", "对象不在当前查询结果中")
+            before = session.scalar(_statement(func.count()).where(*filters, SpatialObject.id < focus))
+            query = query.model_copy(update={"page": before // query.page_size + 1})
         start = (query.page - 1) * query.page_size
         rows = list(session.scalars(_statement(SpatialObject).where(*filters).order_by(SpatialObject.id)
                                    .offset(start).limit(query.page_size))) if start < total else []
@@ -189,29 +200,42 @@ def list_objects(query: ObjectFilters, session: Session):
             from app.services.timeseries import attach_temporal
             attach_temporal(session, items, query.time, query.resolution)
         return {'items': items, 'total': total, 'page': query.page, 'page_size': query.page_size}
-    return _page(session, query, select_objects(session, query))
+    selection = select_objects(session, query)
+    if focus:
+        try:
+            offset = selection.ids.index(focus)
+        except ValueError as error:
+            raise ApiProblem(404, "OBJECT_NOT_FOUND", "对象不在当前查询结果中") from error
+        query = query.model_copy(update={"page": offset // query.page_size + 1})
+    return _page(session, query, selection)
 
 
 def select_polygon(body: ObjectSelectionInput, session: Session):
-    query = ObjectFilters.model_validate(body.model_dump(exclude={"geometry"}))
-    return _page(session, query, select_objects(session, query, body.geometry.model_dump(exclude_none=True)))
+    query = ObjectFilters.model_validate(body.model_dump(exclude={"geometry", "include_summary"}))
+    selection = select_objects(session, query, body.geometry.model_dump(exclude_none=True))
+    result = _page(session, query, selection)
+    if body.include_summary:
+        result["summary"] = _summarize(session, selection)
+    return result
 
 
 def summarize_objects(query: ObjectFilters, session: Session):
-    selection = select_objects(session, query)
+    return _summarize(session, select_objects(session, query))
+
+
+def _summarize(session, selection):
     groups = {}
-    if selection.ids:
-        for row in session.execute(select(SpatialObject.id, SpatialObject.type, SpatialObject.area_m2, SpatialObject.height_m).where(SpatialObject.id.in_(selection.ids))):
-            group = groups.setdefault(row.type, {"type": row.type, "count": 0, "area_m2": None, "min_height_m": None, "max_height_m": None})
-            group["count"] += 1
-            area = row.area_m2
-            if area is not None and row.id in selection.clipped:
-                area = area_m2(selection.clipped[row.id]) or 0.0
-            if area is not None:
-                group["area_m2"] = (group["area_m2"] or 0) + area
-            if row.height_m is not None:
-                group["min_height_m"] = min(group["min_height_m"], row.height_m) if group["min_height_m"] is not None else row.height_m
-                group["max_height_m"] = max(group["max_height_m"], row.height_m) if group["max_height_m"] is not None else row.height_m
+    for row in selected_rows(session, selection.ids, SpatialObject.id, SpatialObject.type, SpatialObject.area_m2, SpatialObject.height_m):
+        group = groups.setdefault(row.type, {"type": row.type, "count": 0, "area_m2": None, "min_height_m": None, "max_height_m": None})
+        group["count"] += 1
+        area = row.area_m2
+        if area is not None and row.id in selection.clipped:
+            area = area_m2(selection.clipped[row.id]) or 0.0
+        if area is not None:
+            group["area_m2"] = (group["area_m2"] or 0) + area
+        if row.height_m is not None:
+            group["min_height_m"] = min(group["min_height_m"], row.height_m) if group["min_height_m"] is not None else row.height_m
+            group["max_height_m"] = max(group["max_height_m"], row.height_m) if group["max_height_m"] is not None else row.height_m
     return {"total": len(selection.ids), "types": [groups[key] for key in sorted(groups)]}
 
 

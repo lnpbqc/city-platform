@@ -18,7 +18,7 @@ from app.models import Asset, AssetVersion, Layer
 from app.schemas.assets import TilesCalibrationInput
 from app.services.asset_metadata import _tiles_bounds, manifest_digest
 from app.services.assets import (
-    can_calibrate, directory, local_parts, lock_catalog, published_files, reject_link,
+    calibrated_parts, can_calibrate, directory, local_parts, lock_catalog, published_files, reject_link,
     set_calibrated_layer, valid_identity, version_directory, version_file, version_record,
 )
 from app.services.object_index import index_asset
@@ -43,8 +43,13 @@ def _current(session, asset_id, body):
             (version and version.revision != body.base_revision)):
         raise ApiProblem(409, "ASSET_VERSION_CONFLICT", "模型已更新，请重新加载后校准",
                          {"current_version": asset.current_version, "revision": version.revision if version else None})
-    if not version or not version.file_manifest or not version.entry_url or not local_parts(version.entry_url):
-        raise ApiProblem(409, "TILES_SOURCE_UNAVAILABLE", "模型缺少可校准的原目录，旧校准版请先恢复原包")
+    if not version or not version.file_manifest or not version.entry_url:
+        raise ApiProblem(409, "TILES_SOURCE_UNAVAILABLE", "模型缺少可校准的目录或文件清单")
+    local = local_parts(version.entry_url)
+    legacy = calibrated_parts(version.entry_url) if not local else None
+    if not ((local and local[0] == asset_id) or
+            (legacy and legacy[:2] == (asset_id, version.version) and version.tiles_calibrated)):
+        raise ApiProblem(409, "TILES_SOURCE_UNAVAILABLE", "模型入口与当前资产版本不一致")
     return asset, version
 
 
@@ -107,7 +112,9 @@ def recover_tiles_publications(session: Session):
         else:
             current = session.get(AssetVersion, (identity, data["version"]))
             if current and current.revision < data["revision"]:
-                _restore_manifests(work, directory(FILES_DIR, identity), data["paths"])
+                legacy = calibrated_parts(current.entry_url) if current.entry_url else None
+                root = version_directory(identity, current.version) if legacy else directory(FILES_DIR, identity)
+                _restore_manifests(work, root, data["paths"])
         shutil.rmtree(work)
 
 
@@ -189,7 +196,8 @@ def publish_calibration(session: Session, asset_id: str, body: TilesCalibrationI
             asset.byte_size, asset.file_count = size, len(manifest)
             session.flush()
             if not copying:
-                for layer in session.scalars(select(Layer).where(Layer.asset_id == asset_id)):
+                for layer in session.scalars(select(Layer).where(Layer.asset_id == asset_id,
+                                                                 Layer.asset_version == version.version)):
                     set_calibrated_layer(layer, version)
             state = index_asset(session, asset, version)
             if not state or state.status != "ready":

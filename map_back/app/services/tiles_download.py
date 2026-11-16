@@ -47,26 +47,37 @@ def download_version(session, asset_id, version=None, *, revision=None, snapshot
             if identity != asset_id:
                 raise ValueError("模型版本入口与记录不一致")
             root = directory(FILES_DIR, asset_id)
-        signature = next(item for item in record.file_manifest if item["path"] == entry)
-        with version_file(root, entry).open("rb") as handle:
-            if hashlib.file_digest(handle, "sha256").hexdigest() != signature["sha256"]:
-                raise ValueError("模型入口清单与已发布版本不一致")
-        if snapshot:
-            temporary = temporary_tile_directory("tiles-download-")
-            for item in files:
-                source = version_file(root, item["path"])
-                target = temporary / item["path"]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if asset.source_kind == "default":
-                    shutil.copyfile(source, target)
-                else:
-                    os.link(source, target, follow_symlinks=False)
-    except (OSError, ValueError, TypeError, StopIteration) as error:
+        if not any(item["path"] == entry for item in files):
+            raise ValueError("入口不在资产清单中")
+        filename = quote(tiles_zip_filename(asset))
+        temporary = temporary_tile_directory("tiles-download-")
+        for item in files:
+            source = version_file(root, item["path"])
+            target = temporary / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if asset.source_kind == "default":
+                shutil.copyfile(source, target)
+            else:
+                os.link(source, target, follow_symlinks=False)
+    except (OSError, ValueError, TypeError) as error:
         if temporary:
             shutil.rmtree(temporary, ignore_errors=True)
-        raise ApiProblem(409, "ASSET_CONTENT_CHANGED", "无法读取已发布的模型入口清单") from error
-    filename = quote(tiles_zip_filename(asset))
-    session.rollback()
+        raise ApiProblem(409, "ASSET_CONTENT_CHANGED", "无法读取已发布的模型文件") from error
+    finally:
+        session.rollback()
+    try:
+        for item in files:
+            path = item["path"]
+            with version_file(temporary, path).open("rb") as source:
+                if (os.fstat(source.fileno()).st_size != item["size"] or
+                        hashlib.file_digest(source, "sha256").hexdigest() != item["sha256"]):
+                    raise ValueError("模型文件与清单不一致")
+    except (OSError, ValueError) as error:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise ApiProblem(409, "ASSET_CONTENT_CHANGED", f"模型文件无法通过校验：{path}") from error
+    if not snapshot:
+        shutil.rmtree(temporary, ignore_errors=True)
+        temporary = None
     return temporary, files, {"Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
                               "Cache-Control": "no-store"}
 

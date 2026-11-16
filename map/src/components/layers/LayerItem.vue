@@ -168,7 +168,7 @@ function changeOpacity(event: Event) {
         <button
           v-else-if="layer.id !== 'basemap'"
           :disabled="downloading"
-          :aria-label="`${downloading ? '正在准备下载' : '下载'}${layer.name}`"
+          :aria-label="`${downloading ? ('native' in downloadTarget ? '正在校验模型文件' : '正在准备下载') : '下载'} ${layer.name}`"
           :title="downloadBlocked ? '请先保存校准或取消预览' : downloadTarget.label"
           @click="download"
         >

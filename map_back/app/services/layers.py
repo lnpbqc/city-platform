@@ -1,6 +1,5 @@
 import asyncio
 from threading import Event, Lock
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -29,15 +28,15 @@ from app.services.layer_catalog import layer_orderable
 def create_layer(body: LayerInput, session: Session):
     lock_catalog(session)
     asset_id = asset_for_url(session, body.url, body.type)
-    layer = Layer(id=str(uuid4()), asset_id=asset_id,
-                  asset_version=session.get(Asset, asset_id).current_version if asset_id else None, **body.model_dump())
+    layer = Layer(id=str(uuid4()), **body.model_dump())
+    bind_asset_version(session, layer, asset_id)
     if layer_has_calibrated_tiles(session, layer):
         set_calibrated_layer(layer, session.get(AssetVersion, (asset_id, layer.asset_version)))
     layer.map_order = next_layer_order(session)
     layer.orderable = layer_orderable(session, layer)
     if asset_id:
         started = perf_counter()
-        state = index_asset(session, session.get(Asset, asset_id))
+        state = index_asset(session, session.get(Asset, asset_id), session.get(AssetVersion, (asset_id, layer.asset_version)))
         if session.info.get("upload"):
             logger.info("upload asset_id=%s stage=object_index duration_ms=%.2f", asset_id, (perf_counter() - started) * 1000)
             if not state or state.status != "ready":
@@ -50,6 +49,8 @@ def create_layer(body: LayerInput, session: Session):
     if callback := session.info.get("before_publish"):
         callback()
     session.commit()
+    if session.info.get("upload"):
+        session.info["upload_committed"] = True
     session.refresh(layer)
     return layer
 
@@ -152,7 +153,7 @@ def _publish_received(identity, temporary, published, target, filename, name, ty
         if type == "geojson":
             validate_geojson(target, point_only=category.strip() == "POI")
         else:
-            target = extract_tiles(target, content)
+            target = extract_tiles(target, content, cancel=cancel)
         logger.info("upload asset_id=%s stage=validate_or_extract duration_ms=%.2f", identity, (perf_counter() - started) * 1000)
         relative = target.relative_to(content).as_posix()
         try:
@@ -161,11 +162,10 @@ def _publish_received(identity, temporary, published, target, filename, name, ty
             raise RequestValidationError(error.errors()) from error
         cancel()
         started = perf_counter()
-        shutil.move(str(content), str(published))
         with SessionLocal() as session:
             session.info["upload"] = True
             session.info["before_publish"] = final_cancel
-            result = _publish_asset(session, body, identity, published, filename, type, coordinate_description, poi_target, cancel)
+            result = _publish_asset(session, body, identity, content, published, filename, type, coordinate_description, poi_target, cancel)
             logger.info("upload asset_id=%s stage=publish_total duration_ms=%.2f", identity, (perf_counter() - started) * 1000)
             return LayerOutput.model_validate(result)
     finally:
@@ -173,7 +173,8 @@ def _publish_received(identity, temporary, published, target, filename, name, ty
         _import_lock.release()
 
 
-def _publish_asset(session, body, identity, published, filename, type, coordinate_description, poi_target, cancel):
+def _publish_asset(session, body, identity, content, published, filename, type, coordinate_description, poi_target, cancel):
+    owns_directory = False
     try:
         lock_catalog(session)
         layer = None
@@ -190,6 +191,11 @@ def _publish_asset(session, body, identity, published, filename, type, coordinat
                 raise HTTPException(422, "只能编辑本地上传的 POI 图层")
             body.name, body.source = layer.name, layer.source
             coordinate_description = previous.coordinate_description
+        if session.get(Asset, identity) is not None or published.exists() or published.is_symlink():
+            raise ApiProblem(409, "ASSET_PUBLISH_CONFLICT", "上传目录已被占用，请重新上传")
+        cancel()
+        content.rename(published)
+        owns_directory = True
         files = inventory(FILES_DIR, identity)
         original_name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1][:255] or None
         asset = Asset(id=identity, original_name=original_name, name=body.name, source=body.source,
@@ -217,8 +223,11 @@ def _publish_asset(session, body, identity, published, filename, type, coordinat
             return result
         return create_layer(body, session)
     except Exception:
-        session.rollback()
-        cleanup(published)
+        try:
+            if owns_directory and not session.info.get("upload_committed"):
+                cleanup(published)
+        finally:
+            session.rollback()
         raise
 
 
@@ -227,7 +236,7 @@ def update_layer(layer_id: str, body: LayerInput, session: Session):
     layer = session.get(Layer, layer_id)
     if layer is None:
         raise HTTPException(404, "图层登记不存在")
-    bind_asset_version(session, layer, asset_for_url(session, body.url, body.type), replace=layer.url != body.url)
+    bind_asset_version(session, layer, asset_for_url(session, body.url, body.type), replace=layer.url != body.url, url=body.url)
     resource_changed = layer.url != body.url or layer.type != body.type
     if resource_changed:
         layer.map_attached = False

@@ -111,6 +111,10 @@ def test_exact_seven_days_expiry_keeps_canonical_export_and_restart(client, tmp_
     restored = client.post('/api/layers', json={name: layer[name] for name in ('name', 'type', 'category', 'source', 'url')})
     assert restored.status_code == 201, restored.text
     assert restored.json()['asset_id'] == layer['asset_id']
+    canonical = client.post('/api/layers', json={'name': '完整快照', 'type': 'geojson', 'url': export})
+    assert canonical.status_code == 201, canonical.text
+    assert (canonical.json()['asset_id'], canonical.json()['asset_version']) == (layer['asset_id'], layer['asset_version'])
+    assert client.post('/api/layers', json={'name': '错误类型', 'type': '3dtiles', 'url': export}).status_code == 422
     with TestClient(app) as restarted:
         assert restarted.get(f"/api/assets/{layer['asset_id']}").json()['status'] == 'active'
         assert restarted.get(export).json() == GEO
@@ -138,6 +142,52 @@ def test_unsafe_source_never_expires(client, tmp_path, unsafe):
     assert source_path(layer).is_file()
     with SessionLocal() as session:
         assert session.get(RenderJob, key).source_state == 'retained'
+
+
+def test_same_size_changed_upload_is_preserved_when_retention_expires(client, tmp_path, caplog):
+    layer, key, archive = published(client, tmp_path)
+    source = source_path(layer)
+    before = source.read_bytes()
+    changed = before[:-1] + b' '
+    assert before != changed and len(before) == len(changed)
+    source.write_bytes(changed)
+    with SessionLocal() as session:
+        expiry = session.get(RenderJob, key).source_expires_at
+    rendering.expire_sources(expiry)
+    assert source.read_bytes() == changed
+    assert client.get(f'/api/render-files/{key}/map.pmtiles').content == archive
+    assert '保留原文件' in caplog.text
+    with SessionLocal() as session:
+        job = session.get(RenderJob, key)
+        assert (job.status, job.source_state) == ('succeeded', 'retained')
+
+
+@pytest.mark.parametrize('expired', [False, True])
+def test_extrusion_height_excludes_legacy_flat_archive(client, tmp_path, monkeypatch, expired):
+    geometry = {'type': 'Polygon', 'coordinates': [[[114, 22], [115, 22], [115, 23], [114, 22]]]}
+    document = {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'geometry': geometry,
+        'properties': {'height_m': 0, 'map_extrude_height_m': 20}}]}
+    with monkeypatch.context() as legacy:
+        legacy.setattr(rendering, 'eligible', lambda *_: True)
+        layer, key, _ = published(client, tmp_path, document)
+    asset_id, version = layer['asset_id'], layer['asset_version']
+    with SessionLocal() as session:
+        if expired:
+            session.get(RenderJob, key).source_state = 'expired'
+            session.commit()
+            source_path(layer).unlink()
+        assert rendering.enqueue(session, asset_id, version) is None
+        render = rendering.describe(session, asset_id, version)
+        assert render['url'] is None and render['status'] == 'cancelled'
+        assert render['source_state'] == ('expired' if expired else 'retained')
+    assert client.get(f'/api/render-files/{key}/map.pmtiles').status_code == 404
+    viewport = client.post('/api/map/viewport', json={'layer_id': layer['id'], 'asset_id': asset_id, 'version': version,
+        'bbox': [113, 21, 116, 24], 'width': 640, 'height': 480, 'meters_per_pixel': 500})
+    assert viewport.status_code == 200, viewport.text
+    [feature] = viewport.json()['features']
+    assert feature['geometry']['type'] == 'Polygon' and feature['properties']['map_extrude_height_m'] == 20
+    exported = client.get(f'/api/assets/{asset_id}/versions/{version}/geojson').json()
+    assert exported == document
 
 
 def test_retention_recovers_both_sides_of_interrupted_commit(client, tmp_path):

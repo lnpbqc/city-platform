@@ -9,7 +9,7 @@ from app.services.builtin_assets import BUILTIN_LAYERS, CAMPUS_KEYS, builtin_ass
 from app.errors import ApiProblem
 from app.models import Asset, AssetVersion, Layer, ObjectIndex, SpatialObject, TimeSeriesSnapshot
 from app.schemas.objects import ObjectFilters
-from app.services.object_queries import layer_reference, select_objects
+from app.services.object_queries import layer_reference, select_objects, selected_rows
 from app.schemas.timeseries import LayerTimeQuery
 from app.schemas.timeseries import Resolution
 from app.schemas.timeseries import TimeSeriesQuery
@@ -159,12 +159,15 @@ def get_timeseries(query: TimeSeriesQuery, session: Session):
     if snapshot is None or not snapshot.document:
         raise ApiProblem(409, "TIMESERIES_UNAVAILABLE", "该资产版本没有可用时序数据")
     selection = select_objects(session, ObjectFilters(layer_id=query.layer_id, **query.model_dump(exclude={"layer_id"})))
-    rows = {row.id: row for row in session.scalars(select(SpatialObject).where(SpatialObject.id.in_(selection.ids)))} if selection.ids else {}
     time, values = values_at(snapshot, query.time, query.resolution)
+    geometry_ids = [identity for identity in selection.ids if values.get(identity) is not None
+                    and identity not in selection.clipped]
+    geometries = {identity: geometry for identity, geometry in
+                  selected_rows(session, geometry_ids, SpatialObject.id, SpatialObject.geometry)}
     items = []
     for identity in selection.ids:
         value = values.get(identity)
         items.append({"object_id": identity, "value": value, "missing": value is None,
-                      "geometry": selection.clipped.get(identity, rows[identity].geometry) if value is not None else None})
+                      "geometry": selection.clipped.get(identity, geometries.get(identity)) if value is not None else None})
     return {"layer_id": query.layer_id, "asset": reference, "time": time, "resolution": query.resolution,
             "unit": snapshot.unit, "items": items}

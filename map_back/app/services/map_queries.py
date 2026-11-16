@@ -45,6 +45,10 @@ def bbox_windows(bbox):
     return [(west, south, east, north)] if west <= east else [(west, south, 180, north), (-180, south, east, north)]
 
 
+def viewport_contains_point(row, windows):
+    return any(west <= row.west <= east and south <= row.south <= north for west, south, east, north in windows)
+
+
 def vertices(geometry):
     if geometry.get('type') == 'GeometryCollection':
         return sum(vertices(child) for child in geometry.get('geometries', []))
@@ -202,6 +206,8 @@ def viewport(body: ViewportInput, session: Session):
         columns,rows = min(128,max(1,body.width//32)),min(128,max(1,body.height//32))
         cells = {}
         for row in candidates(session,body.asset_id,body.version,windows,point_only=True,properties=True):
+            if not viewport_contains_point(row, windows):
+                continue
             style = poi_style(json.loads(row.properties),mpp)
             if not style['eligible']:
                 continue
@@ -225,7 +231,9 @@ def viewport(body: ViewportInput, session: Session):
         def generic_features():
             yield from road_features(session, body, windows, mpp, mask, explicit_only=True)
             for row in candidates(session,body.asset_id,body.version,windows,properties=True,endpoints=True):
-                if row.geometry_type == 'Point' or not explicit_road(json.loads(row.properties)):
+                visible = (viewport_contains_point(row, windows) if row.geometry_type == 'Point'
+                           else not explicit_road(json.loads(row.properties)))
+                if visible:
                     yield feature_for(load_display(session,row.id),row.weight)
         display = generic_features()
     features,vertex_count,byte_count = [],0,128

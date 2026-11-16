@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from zipfile import ZipFile
 
-from sqlalchemy import select, exists, func
+from sqlalchemy import select, exists, func, and_, or_
 
 from app.database import SessionLocal, STORAGE_DIR
 from app.models import Asset, AssetVersion, Layer, ObjectIndex, SpatialObject, TimeSeriesSnapshot
@@ -115,19 +115,21 @@ def eligible(session, asset, version):
     if not index or index.status != 'ready' or session.get(TimeSeriesSnapshot, (asset.id, version)):
         return False
     # Extruded footprints must continue to use the existing terrain placement.
+    extrusion = func.json_extract(SpatialObject.properties, '$.map_extrude_height_m')
+    explicit_height = and_(func.json_type(SpatialObject.properties, '$.map_extrude_height_m').in_(('integer', 'real')),
+                           extrusion > 0, extrusion <= 1000)
     return not session.scalar(select(SpatialObject.id).where(SpatialObject.asset_id == asset.id,
-        SpatialObject.asset_version == version, SpatialObject.height_m > 0,
+        SpatialObject.asset_version == version, or_(SpatialObject.height_m > 0, explicit_height),
         func.json_extract(SpatialObject.geometry, '$.type').in_(('Polygon', 'MultiPolygon'))).limit(1))
 
 
 def enqueue(session, asset_id, version, category=''):
+    if not eligible(session, session.get(Asset, asset_id), version):
+        return None
     profile = profile_for(category)
     key = hashlib.sha256(f'{asset_id}:{version}:{profile}:{RECIPE}'.encode()).hexdigest()
     job = session.get(RenderJob, key)
     if job is None:
-        asset = session.get(Asset, asset_id)
-        if not eligible(session, asset, version):
-            return None
         ready_at, source_expires_at = session.execute(select(func.min(RenderJob.ready_at),
             func.min(RenderJob.source_expires_at)).where(RenderJob.asset_id == asset_id,
             RenderJob.version == version)).one()
@@ -147,9 +149,11 @@ def describe(session, asset_id, version, category=None):
     job = session.scalar(statement.order_by(RenderJob.ready_at.desc(), RenderJob.created_at.desc()).limit(1))
     if not job:
         return None
-    return {'key': job.key, 'status': job.status, 'stage': job.stage, 'error': job.error,
+    applicable = eligible(session, session.get(Asset, asset_id), version)
+    return {'key': job.key, 'status': job.status if applicable else 'cancelled',
+        'stage': job.stage if applicable else '该图层使用完整几何显示', 'error': job.error if applicable else '',
         'profile': job.profile, 'recipe': job.recipe, 'manifest': job.manifest,
-        'url': f'/api/render-files/{job.key}/map.pmtiles?v={job.sha256}' if job.status == 'succeeded' else None,
+        'url': f'/api/render-files/{job.key}/map.pmtiles?v={job.sha256}' if applicable and job.status == 'succeeded' else None,
         'byte_size': job.byte_size, 'source_state': job.source_state,
         'source_expires_at': job.source_expires_at.replace(tzinfo=timezone.utc).isoformat() if job.source_expires_at else None}
 
@@ -281,7 +285,7 @@ def cancel_asset(session, asset_id):
 
 
 def expire_sources(at=None):
-    from app.services.assets import _deletion_lock, lock_catalog, local_parts
+    from app.services.assets import _deletion_lock, directory, lock_catalog, local_parts, version_file
     from app.database import FILES_DIR
     from app.services.geojson_snapshot import ready_snapshot
     at = at or now()
@@ -312,14 +316,30 @@ def expire_sources(at=None):
             parts = local_parts(version.entry_url)
             if not parts or parts[0] != asset.id:
                 continue
-            source = (FILES_DIR / parts[0] / parts[1]).resolve()
-            if not source.is_relative_to((FILES_DIR / asset.id).resolve()):
-                raise ValueError('原文件清理路径越界')
             staged = STORAGE_DIR / 'expired-sources' / job.key
             staged.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_file():
-                source.rename(staged)
+            signature = next((file for file in version.file_manifest or [] if file['path'] == parts[1]), None)
+            if not signature or staged.exists():
+                logger.warning('原文件清单或暂存状态异常，保留原文件 asset_id=%s', asset.id)
+                continue
             try:
+                source = version_file(directory(FILES_DIR, asset.id), parts[1])
+                source.rename(staged)
+            except (OSError, ValueError):
+                logger.warning('无法暂存待清理文件，保留原文件 asset_id=%s', asset.id, exc_info=True)
+                continue
+            try:
+                try:
+                    with staged.open('rb') as stream:
+                        matches = (os.fstat(stream.fileno()).st_size == signature['size'] and
+                                   hashlib.file_digest(stream, 'sha256').hexdigest() == signature['sha256'])
+                except OSError:
+                    matches = False
+                if not matches:
+                    if not source.exists():
+                        staged.rename(source)
+                    logger.warning('原文件与发布指纹不符，保留原文件 asset_id=%s', asset.id)
+                    continue
                 for related in session.scalars(select(RenderJob).where(RenderJob.asset_id == job.asset_id,
                     RenderJob.version == job.version)):
                     related.source_state = 'expired'
@@ -328,7 +348,7 @@ def expire_sources(at=None):
                 session.commit()
             except Exception:
                 session.rollback()
-                if staged.exists():
+                if staged.exists() and not source.exists():
                     staged.rename(source)
                 raise
             staged.unlink(missing_ok=True)

@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from sqlalchemy import text
 from app.database import SessionLocal
 
@@ -17,6 +18,21 @@ def point(name, x=121.5, y=25, **properties):
 
 def reference(layer):
     return {'layer_id': layer['id'], 'asset_id': layer['asset_id'], 'version': layer['asset_version']}
+
+
+@pytest.mark.parametrize(('west', 'east', 'longitudes'), [
+    (121.49, 121.5, [121.5]),
+    (179.5, -179.5, [179.9, -179.5]),
+])
+def test_viewport_uses_true_point_bounds_before_budget(client, west, east, longitudes):
+    points = [point('inside', x, weight=1) for x in longitudes] + [point('outside', east + 0.000001, weight=99)]
+    for category in ('POI', '专题'):
+        layer = upload(client, points, category=category)
+        body = {**reference(layer), 'bbox': [west, 24.99, east, 25.01],
+                'width': 640, 'height': 480, 'meters_per_pixel': 0.5}
+        result = client.post('/api/map/viewport', json=body)
+        assert result.status_code == 200, result.text
+        assert sorted(item['geometry']['coordinates'][0] for item in result.json()['features']) == sorted(longitudes)
 
 
 def test_viewport_selects_weight_before_budget_and_preserves_original_identity(client):

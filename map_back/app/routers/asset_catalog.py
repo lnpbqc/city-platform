@@ -32,4 +32,5 @@ def get_version(asset_id: str, version: str, session: SessionDep):
 @router.get("/{asset_id}/versions/{version}/tiles/{path:path}")
 @router.head("/{asset_id}/versions/{version}/tiles/{path:path}", include_in_schema=False)
 def get_tiles_version_file(asset_id: str, version: str, path: str, session: SessionDep):
-    return FileResponse(get_calibrated_file(session, asset_id, version, path))
+    source = get_calibrated_file(session, asset_id, version, path)
+    return FileResponse(source, headers={"Cache-Control": "no-store"} if source.suffix.lower() == ".json" else None)

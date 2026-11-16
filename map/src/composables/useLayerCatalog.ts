@@ -9,7 +9,6 @@ import {
   type MapLayer,
   type LayerRecord,
   type LayerMapState,
-  type TilesPlacement,
 } from '../layers/types.ts'
 import type { CampusKey } from '../map/campuses'
 import { defaultCampus } from '../map/campuses.ts'
@@ -160,11 +159,6 @@ export function useLayerCatalog(
     layer.road_max_level = value
     getController()?.setRoadMaxLevel(layer, value)
     persistState(layer, stateFor(layer))
-  }
-  function changeTilesPlacement(layer: MapLayer, value: TilesPlacement) {
-    if (layer.builtin) persistState(layer, tilesPlacement(value), false, layer.campus ?? campus)
-    else persistState(layer, { ...stateFor(layer), ...tilesPlacement(value) })
-    void getController()?.setTilesPlacement(layer, value)
   }
   function flushPending() {
     for (const id of pendingStates.keys()) void flushState(id)
@@ -340,7 +334,6 @@ export function useLayerCatalog(
     removeFromMap,
     changeOpacity,
     changeRoadMaxLevel,
-    changeTilesPlacement,
     retryMapState,
     switchCampus,
     refreshCatalog,

@@ -52,4 +52,6 @@ test('calibration separates position and rotation and enables both save actions 
   const unchanged = await renderToString(createSSRApp(panel, { ...props, offsets: { ...props.offsets, yaw: 0 }, saveReady: false, canPick: true }))
   assert.match(unchanged, /<button[^>]*disabled[^>]*>更新原资产<\/button>/)
   assert.match(unchanged, /<button[^>]*disabled[^>]*>另存为新资产<\/button>/)
+  const failed = await renderToString(createSSRApp(panel, { ...props, error: '地形采样失败，请重试。' }))
+  assert.match(failed, /<\/div><footer[^>]*><p[^>]*role="alert"[^>]*>地形采样失败，请重试。<\/p>/)
 })

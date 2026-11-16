@@ -719,55 +719,32 @@ test('road ceiling defaults to two and survives a saved catalog refresh and remo
   second.app.unmount()
 })
 
-test('model placement persists with catalog state and clearing the anchor retains the offset', async () => {
-  records = [{ ...record, type: '3dtiles', map_attached: true }]
-  const first = setup()
-  await flush()
-  const layer = first.catalog.layers.value[0]
+test('legacy model placement is restored from catalog state with its offset and anchor', async () => {
   const anchor = { longitude: 113.36, latitude: 23.04, height: 18 }
-  first.catalog.changeTilesPlacement(layer, { tiles_height_offset_m: -1.5, tiles_ground_anchor: anchor })
+  records = [{ ...record, type: '3dtiles', map_attached: true, tiles_height_offset_m: -1.5,
+    tiles_ground_anchor: anchor, tiles_align_to_terrain: false }]
+  const { app, catalog } = setup()
   await flush()
-  assert.equal(saves.at(-1).tiles_height_offset_m, -1.5)
-  assert.deepEqual(saves.at(-1).tiles_ground_anchor, anchor)
-  first.app.unmount()
-  const second = setup()
-  await flush()
-  const restored = second.catalog.layers.value[0]
+  const restored = catalog.layers.value[0]
   assert.deepEqual(restored.tiles_ground_anchor, anchor)
-  second.catalog.changeTilesPlacement(restored, { tiles_height_offset_m: -1.5, tiles_ground_anchor: null, tiles_align_to_terrain: false })
-  await flush()
-  assert.equal(saves.at(-1).tiles_ground_anchor, null)
-  assert.equal(saves.at(-1).tiles_height_offset_m, -1.5)
-  assert.equal(saves.at(-1).tiles_align_to_terrain, false)
-  second.app.unmount()
-  const third = setup()
-  await flush()
-  assert.equal(third.catalog.layers.value[0].tiles_align_to_terrain, false)
-  third.app.unmount()
+  assert.equal(restored.tiles_height_offset_m, -1.5)
+  assert.equal(restored.tiles_align_to_terrain, false)
+  app.unmount()
 })
 
-test('pending built-in model placement stays with the campus that owns the anchor', async () => {
+test('previously saved built-in model placement is restored for its own campus', async () => {
+  const anchor = { longitude: 113.36, latitude: 23.04, height: 18 }
   records = [{ ...record, id: 'demo-buildings', type: '3dtiles', builtin: true, map_attached: true }]
   getLayersResult = async campus => [{ ...records[0], campus, url: `/samples/${campus}/tileset.json`,
+    ...(campus === 'university-town' ? { tiles_height_offset_m: 2, tiles_ground_anchor: anchor } : {}),
     asset: { asset_id: `${campus}-model`, version: '1.0.0' } }]
   const { app, catalog } = setup()
   await flush()
-  const destinations = []
-  let release
-  const gate = new Promise(resolve => { release = resolve })
-  saveResult = async (_id, value, campus) => {
-    destinations.push({ campus, offset: value.tiles_height_offset_m })
-    if (destinations.length === 1) await gate
-  }
   const layer = catalog.layers.value[0]
-  const anchor = { longitude: 113.36, latitude: 23.04, height: 18 }
-  catalog.changeTilesPlacement(layer, { tiles_height_offset_m: 1, tiles_ground_anchor: anchor })
-  catalog.changeTilesPlacement(layer, { tiles_height_offset_m: 2, tiles_ground_anchor: anchor })
+  assert.equal(layer.tiles_height_offset_m, 2)
+  assert.deepEqual(layer.tiles_ground_anchor, anchor)
   await catalog.switchCampus('huangpu')
   assert.equal(layer.tiles_height_offset_m, 0)
   assert.equal(layer.tiles_ground_anchor, null)
-  release()
-  await flush()
-  assert.deepEqual(destinations, [{ campus: 'university-town', offset: 1 }, { campus: 'university-town', offset: 2 }])
   app.unmount()
 })

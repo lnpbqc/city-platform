@@ -1,11 +1,10 @@
 from datetime import datetime
 from typing import Any, Literal
-from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from app.schemas.assets import AssetVersionRef
+from app.schemas.common import Page
 
 class Geometry(BaseModel):
     type: Literal["Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon", "GeometryCollection"]
@@ -72,5 +71,14 @@ class ObjectFilters(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100)
 
 
+class ObjectListFilters(ObjectFilters):
+    focus_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
 class ObjectSelectionInput(ObjectFilters):
     geometry: Geometry
+    include_summary: bool = False
+
+
+class ObjectSelectionPage(Page[ObjectOutput]):
+    summary: ObjectSummary | None = None

@@ -42,6 +42,7 @@ import type { Cesium3DTile, PolygonGraphics, TerrainProvider } from 'cesium'
 import type { RegionTarget } from './regions'
 import { fetchRegionBoundary, type BoundaryState } from './regionBoundary.ts'
 import { initializeBasemap } from './basemap.ts'
+import { ionTerrainConfigured } from './terrainSetting.ts'
 import { sampleBuildingTerrain, type TerrainBounds } from './buildingTerrain.ts'
 import { ApiError, getAssetVersion, getMapViewport, pickMapRoad, getRenderStatus, getRoadGroups } from '../api/api.ts'
 import type { TileViewport } from './tileViewport'
@@ -92,7 +93,6 @@ type CalibrationCallbacks = {
   moved: (east: number, north: number) => void
   invalidated: () => void
   notice: (message: string) => void
-  groundSelected?: () => void
 }
 
 type TilesCalibration = {
@@ -105,6 +105,8 @@ type TilesCalibration = {
   callbacks: CalibrationCallbacks
   offsets: TilesCalibrationOffsets
   terrain: boolean
+  initialGround: Cartesian3
+  initialGroundHeight?: number
   ground: Cartesian3
   groundHeight?: number
   picking?: 'pivot' | 'ground'
@@ -440,16 +442,12 @@ export function createMapController(
     if (match) void resolveRoadHighlights(...match)
     declutterPois()
   }
-  function objectPage(id: string, layerId: string, pageSize = 20) {
-    const entry = [...entries].find(([layer]) => layer.id === layerId)?.[1]
-    const index = entry?.objectIds?.indexOf(id) ?? -1
-    return index < 0 ? undefined : Math.floor(index / pageSize) + 1
-  }
   async function focusObject(layerId: string, object: ObjectRecord) {
     stopAutoFrame()
     const match = [...entries].find(([layer]) => layer.id === layerId)
-    if (!alive || !match?.[1].resource) { onNotice('所选图层尚未加载，暂时无法定位对象。'); return }
+    if (!alive || !match) { onNotice('所选图层尚未加载，暂时无法定位对象。'); return }
     const [layer, entry] = match
+    if (layer.type === '3dtiles' && !entry.resource) { onNotice('所选图层尚未加载，暂时无法定位对象。'); return }
     if (entry.resource instanceof Cesium3DTileset) { await locate(layer); return }
     if (layer.category === 'POI' && object.coordinates?.length) {
       showSelectedPoi(layerId, object)
@@ -463,13 +461,34 @@ export function createMapController(
       if (selectedRoad) await viewer.flyTo(selectedRoad, { duration: 0.8 })
       return
     }
-    const entities = entry.resource!.entities.values.filter(entity => entityObjectId(entry, entity) === object.object_id
-      || entry.sources?.get(entity.id.split('_')[0]!)?.includes(object.object_id))
-    if (!entities.length || !object.geometry) { onNotice('对象未提供可定位的几何。'); return }
+    const entities = entry.resource?.entities.values.filter(entity => entityObjectId(entry, entity) === object.object_id
+      || entry.sources?.get(entity.id.split('_')[0]!)?.includes(object.object_id)) ?? []
     try {
-      const located = await viewer.flyTo(entities, { duration: 0.8, offset: new HeadingPitchRange(0, CesiumMath.toRadians(-55), object.type === 'point' ? 400 : 0) })
-      if (!located && alive) onNotice('对象未提供可定位的几何。')
-      navigation(true)
+      const offset = new HeadingPitchRange(0, CesiumMath.toRadians(-55), object.type === 'point' ? 400 : 0)
+      if (entities.length) {
+        if (!await viewer.flyTo(entities, { duration: 0.8, offset }) && alive) onNotice('对象定位失败，请重试或定位所属图层。')
+        navigation(true)
+        return
+      }
+      const positions: Cartesian3[] = []
+      function addCoordinates(coordinates: unknown) {
+        if (!Array.isArray(coordinates)) return
+        const [longitude, latitude, height] = coordinates
+        if (typeof longitude === 'number' && typeof latitude === 'number') {
+          positions.push(Cartesian3.fromDegrees(longitude, latitude, typeof height === 'number' ? height : 0))
+        } else {
+          coordinates.forEach(addCoordinates)
+        }
+      }
+      function addGeometry(geometry: GeometryDocument) {
+        addCoordinates(geometry.coordinates)
+        geometry.geometries?.forEach(addGeometry)
+      }
+      if (object.geometry) addGeometry(object.geometry)
+      if (!positions.length) { onNotice('对象未提供可定位的几何。'); return }
+      const sphere = BoundingSphere.fromPoints(positions)
+      sphere.radius = Math.max(30, sphere.radius)
+      viewer.camera.flyToBoundingSphere(sphere, { duration: 0.8, offset, complete: () => navigation(true) })
     } catch { if (alive) onNotice('对象定位失败，请重试或定位所属图层。') }
   }
 
@@ -1001,11 +1020,12 @@ export function createMapController(
     viewer.scene.requestRender()
     return true
   }
-  const basemapReady = initializeBasemap(viewer, {
+  const basemapEnv = {
     VITE_BASEMAP_PROVIDER: import.meta.env?.VITE_BASEMAP_PROVIDER,
     VITE_TIANDITU_KEY: import.meta.env?.VITE_TIANDITU_KEY,
     VITE_CESIUM_ION_TOKEN: import.meta.env?.VITE_CESIUM_ION_TOKEN,
-  }, () => alive, onNotice).then((terrain) => {
+  }
+  const basemapReady = initializeBasemap(viewer, basemapEnv, () => alive, onNotice).then((terrain) => {
     worldTerrain = terrain
     applyTerrain()
   })
@@ -1067,7 +1087,13 @@ export function createMapController(
       viewer.scene.requestRender()
     }
     if (baked) {
-      placement.terrainHeight = terrainEnabled ? baked.height : 0
+      if (terrainEnabled) {
+        placement.sampling = true
+        await basemapReady
+        if (!current()) return
+        placement.sampling = false
+      }
+      placement.terrainHeight = terrainEnabled && worldTerrain ? baked.height : 0
       apply(placement.terrainHeight - baked.height)
       return
     }
@@ -1149,7 +1175,8 @@ export function createMapController(
         outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY },
     })
     tilesCalibration = { layer, tileset, baseline, position, marker, callbacks, coordinates: calibrationFrame(pivot),
-      offsets: { east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 }, terrain: terrainEnabled, ground, groundHeight }
+      offsets: { east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 }, terrain: terrainEnabled,
+      initialGround: ground, initialGroundHeight: groundHeight, ground, groundHeight }
     viewer.scene.requestRender()
     return true
   }
@@ -1169,11 +1196,25 @@ export function createMapController(
 
   function pickTilesCalibrationPivot(kind: 'pivot' | 'ground' = 'pivot') {
     const editing = tilesCalibration
-    if (!editing || (kind === 'pivot' && Object.values(editing.offsets).some(value => value !== 0))) return
+    if (!editing || (kind === 'pivot' && calibrationTransformChanged(editing))) return
     editing.picking = kind
     editing.marker.show = false
     editing.callbacks.notice(kind === 'pivot' ? '请点击当前模型表面选择旋转中心。' : '请点击当前模型应贴合地面的点。')
     viewer.scene.requestRender()
+  }
+
+  function calibrationTransformChanged(editing: TilesCalibration) {
+    return Matrix4.pack(editing.tileset.modelMatrix, []).some((value, index) =>
+      Math.abs(value - editing.baseline[index]!) > (index >= 12 && index < 15 ? 1e-5 : 1e-12))
+  }
+
+  function calibrationGroundChanged(editing: TilesCalibration) {
+    return Cartesian3.distance(editing.ground, editing.initialGround) > 1e-5
+  }
+
+  function hasTilesCalibrationChanges() {
+    const editing = tilesCalibration
+    return !!editing && !editing.picking && (calibrationTransformChanged(editing) || calibrationGroundChanged(editing))
   }
 
   function pickCalibrationPoint(editing: TilesCalibration, screen: Cartesian2) {
@@ -1197,9 +1238,9 @@ export function createMapController(
       const inverse = Matrix4.inverseTransformation(editing.tileset.modelMatrix, new Matrix4())
       const toBaseline = Matrix4.multiply(editing.baseline, inverse, new Matrix4())
       editing.ground = Matrix4.multiplyByPoint(toBaseline, point, new Cartesian3())
-      editing.groundHeight = entries.get(editing.layer)?.tilesPlacement?.terrainHeight
-        ?? Cartographic.fromCartesian(editing.ground).height - (editing.layer.tiles_height_offset_m ?? 0)
-      editing.callbacks.groundSelected?.()
+      editing.groundHeight = calibrationGroundChanged(editing)
+        ? Cartographic.fromCartesian(editing.ground).height - (editing.layer.tiles_height_offset_m ?? 0)
+        : editing.initialGroundHeight
     } else {
       editing.coordinates = calibrationFrame(point)
       editing.position.setValue(point)
@@ -1214,21 +1255,35 @@ export function createMapController(
     const editing = tilesCalibration
     if (!editing || editing.picking) return null
     const preview = Matrix4.clone(editing.tileset.modelMatrix)
+    const ground = editing.ground
     const inverse = Matrix4.inverseTransformation(editing.baseline, new Matrix4())
     const adjustment = Matrix4.multiply(preview, inverse, new Matrix4())
-    const point = Cartographic.fromCartesian(Matrix4.multiplyByPoint(adjustment, editing.ground, new Cartesian3()))
+    const point = Cartographic.fromCartesian(Matrix4.multiplyByPoint(adjustment, ground, new Cartesian3()))
     const longitude = CesiumMath.toDegrees(point.longitude)
     const latitude = CesiumMath.toDegrees(point.latitude)
     let height: number
+    let sourceHeight: number
     try {
       await basemapReady
-      height = await sampleTileTerrain(longitude, latitude)
+      if (worldTerrain || ionTerrainConfigured(basemapEnv)) {
+        const origin = Cartographic.fromCartesian(ground)
+        const destination = sampleTileTerrain(longitude, latitude)
+        const sameLocation = Math.abs(origin.longitude - point.longitude) < 1e-12
+          && Math.abs(origin.latitude - point.latitude) < 1e-12
+        const source = editing.groundHeight ?? (!editing.terrain ? 0 : sameLocation ? destination
+          : sampleTileTerrain(CesiumMath.toDegrees(origin.longitude), CesiumMath.toDegrees(origin.latitude)))
+        const samples = await Promise.all([destination, source])
+        height = samples[0]!
+        sourceHeight = samples[1]!
+      } else {
+        height = 0
+        sourceHeight = calibrationGroundChanged(editing) ? editing.groundHeight ?? 0 : 0
+      }
     } catch {
       throw new Error('地形采样失败，请重试。')
     }
-    if (tilesCalibration !== editing || editing.picking || !Matrix4.equals(editing.tileset.modelMatrix, preview)) return null
-    // Without a known contact point, use the model center to sample terrain and preserve the preview altitude.
-    const delta = height - (editing.groundHeight ?? (editing.terrain ? height : 0))
+    if (tilesCalibration !== editing || editing.picking || editing.ground !== ground || !Matrix4.equals(editing.tileset.modelMatrix, preview)) return null
+    const delta = height - sourceHeight
     if (delta) {
       const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(point)
       const translation = Matrix4.fromTranslation(Cartesian3.multiplyByScalar(up, delta, up))
@@ -2119,6 +2174,7 @@ export function createMapController(
     updateTilesCalibration,
     pickTilesCalibrationPivot,
     prepareTilesCalibration,
+    hasTilesCalibrationChanges,
     endTilesCalibration,
     setRoadMaxLevel(layer: MapLayer, level: number) {
       layer.road_max_level = Math.max(1, Math.min(4, Math.trunc(level)))
@@ -2139,7 +2195,6 @@ export function createMapController(
     remove,
     appearance,
     highlightObjects,
-    objectPage,
     focusObject,
     showSelectedPoi,
     showSimulation,

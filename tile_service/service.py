@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import shutil
@@ -32,6 +33,7 @@ from app.services.road_style import RANK, classification, road_groups, signature
 TOOL_VERSION = '2.79.0'
 RECIPE = 'geojson-v2'
 MAX_ZOOM = 16
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -419,8 +421,8 @@ class Worker:
             self.current = identity
             self.peak_bytes = 0
             directory = self.store.root / identity
-            directory.mkdir(exist_ok=True)
             try:
+                directory.mkdir(exist_ok=True)
                 self.run(job, directory)
             except Cancelled:
                 if not self.stop.is_set():
@@ -429,20 +431,25 @@ class Worker:
                 if self.store.get(identity)['status'] != 'cancelled':
                     self.store.update(identity, status='failed', stage='failed', error=str(error)[-12000:])
             finally:
-                self.terminate()
                 with self.lock:
-                    self.process = None
-                    state = self.store.get(identity)
-                    keep = state['status'] == 'succeeded' and not state['acknowledged']
-                    for path in directory.iterdir():
-                        if not (keep and path.name == 'artifact.zip'):
-                            if path.is_dir():
-                                shutil.rmtree(path)
-                            else:
-                                path.unlink(missing_ok=True)
-                    if not keep:
-                        directory.rmdir()
-                    self.current = None
+                    try:
+                        self.terminate()
+                        self.process = None
+                        state = self.store.get(identity)
+                        keep = state['status'] == 'succeeded' and not state['acknowledged']
+                        if keep:
+                            for path in directory.iterdir():
+                                if path.name != 'artifact.zip':
+                                    if path.is_dir():
+                                        shutil.rmtree(path)
+                                    else:
+                                        path.unlink(missing_ok=True)
+                        elif directory.is_dir():
+                            shutil.rmtree(directory)
+                    except OSError:
+                        logger.exception('Failed to clean up job %s', identity)
+                    finally:
+                        self.current = None
 
     def audit_archive(self, archive, directory, identity):
         """Decode the maximum zoom and compare display identities in bounded memory."""
@@ -639,9 +646,9 @@ def create_app(config=None, *, start_worker=True):
                 raise HTTPException(409, 'Source intake unavailable or already active')
             db.execute('UPDATE jobs SET source_ready=-1 WHERE id=?', (identity,))
         directory = store.root / identity
-        directory.mkdir(exist_ok=True)
         incoming = directory / 'incoming.tmp'
         try:
+            directory.mkdir(exist_ok=True)
             size = 0
             with incoming.open('wb') as output:
                 async for chunk in request.stream():
@@ -658,9 +665,16 @@ def create_app(config=None, *, start_worker=True):
                 incoming.replace(directory / 'source.geojson')
                 store.update(identity, source_ready=1, stage='queued')
             return public_job(find(identity))
-        except BaseException:
-            incoming.unlink(missing_ok=True)
-            store.update(identity, source_ready=0)
+        except BaseException as error:
+            try:
+                incoming.unlink(missing_ok=True)
+            except OSError:
+                logger.exception('Failed to clean up source intake for job %s', identity)
+            finally:
+                store.update(identity, source_ready=0)
+            if isinstance(error, OSError):
+                logger.exception('Failed to receive source for job %s', identity)
+                raise HTTPException(503, 'Source storage temporarily unavailable; retry later') from error
             raise
 
     @app.get('/internal/jobs/{identity}', dependencies=[Depends(authorized)])

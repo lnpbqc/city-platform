@@ -209,6 +209,7 @@ class BoundingSphere {
     this.center = center
     this.radius = radius
   }
+  static fromPoints(positions) { return new BoundingSphere(positions[0], 20) }
 }
 class HeadingPitchRange {
   constructor(heading, pitch, range) {
@@ -921,8 +922,7 @@ test('a tileset without a georeferenced root can supply a separate ground point'
   tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
   tileRequest.resolve(tile)
   await controller.load(layer)
-  let groundSelected = 0
-  controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {}, groundSelected: () => { groundSelected++ } })
+  controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {} })
   controller.updateTilesCalibration({ east: 10, north: 20, up: 6, yaw: 0, pitch: 0, roll: 0 })
   const previewGround = RootMatrix.multiplyByPoint(tile.modelMatrix, ground, new Vector())
   controller.pickTilesCalibrationPivot('ground')
@@ -930,11 +930,66 @@ test('a tileset without a georeferenced root can supply a separate ground point'
   viewer.scene.pick = () => ({ primitive: tile })
   viewer.scene.pickPosition = () => previewGround
   click({ position: { x: 10, y: 11 } })
-  assert.equal(groundSelected, 1)
   const saved = await controller.prepareTilesCalibration()
   assert.ok(saved.terrain_anchor.longitude > 113.375)
   const point = RootMatrix.multiplyByPoint(RootMatrix.fromArray(saved.matrix), ground, new Vector())
   assert.ok(Math.abs(Wgs84Cartographic.fromCartesian(point).height - 38) < 0.01)
+  controller.destroy()
+})
+
+for (const aligned of [false, true]) test(`calibration preserves relative height or honors the newly picked ground point (aligned=${aligned})`, async () => {
+  basemapTerrain = worldTerrain
+  wgs84TilesNormals = true
+  sampleTilesHeight = async point => point.longitude > 113.371 ? 500 : 30
+  const { controller, layer } = setup('3dtiles')
+  const tile = new Cesium3DTileset()
+  const center = Vector.fromDegrees(113.37, 23.04, 75)
+  const base = Vector.fromDegrees(113.37, 23.04, 30)
+  tile.root = { transform: aligned ? RootMatrix.fromTranslation(base) : RootMatrix.IDENTITY }
+  tile.boundingSphere.center = center
+  tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  await flush()
+  assert.equal(controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {} }), true)
+  const zero = { east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 }
+  controller.updateTilesCalibration({ ...zero, yaw: 360 })
+  assert.equal(controller.hasTilesCalibrationChanges(), false)
+  controller.updateTilesCalibration(zero)
+  if (aligned) {
+    controller.pickTilesCalibrationPivot('ground')
+    viewer.scene.pickPositionSupported = true
+    viewer.scene.pick = () => ({ primitive: tile })
+    viewer.scene.pickPosition = () => base
+    click({ position: { x: 10, y: 11 } })
+    assert.equal(controller.hasTilesCalibrationChanges(), false)
+    controller.pickTilesCalibrationPivot('ground')
+    viewer.scene.pickPosition = () => center
+    click({ position: { x: 10, y: 11 } })
+    assert.equal(controller.hasTilesCalibrationChanges(), true)
+  }
+  controller.updateTilesCalibration({ ...zero, east: 200, up: 6 })
+  const saved = await controller.prepareTilesCalibration()
+  assert.equal(saved.terrain_anchor.height, 500)
+  const point = RootMatrix.multiplyByPoint(RootMatrix.fromArray(saved.matrix), center, new Vector())
+  assert.ok(Math.abs(Wgs84Cartographic.fromCartesian(point).height - (aligned ? 506 : 551)) < 0.02)
+  controller.destroy()
+})
+
+test('flat deployment still saves yaw-only calibration with a zero terrain reference', async () => {
+  basemapTerrain = undefined
+  wgs84TilesNormals = true
+  const { controller, layer } = setup('3dtiles')
+  const tile = new Cesium3DTileset()
+  tile.root = { transform: RootMatrix.IDENTITY }
+  tile.boundingSphere.center = Vector.fromDegrees(113.37, 23.04, 75)
+  tile.modelMatrix = RootMatrix.clone(RootMatrix.IDENTITY)
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(controller.beginTilesCalibration(layer, { moved() {}, invalidated() {}, notice() {} }), true)
+  const preview = controller.updateTilesCalibration({ east: 0, north: 0, up: 0, yaw: 6, pitch: 0, roll: 0 })
+  assert.deepEqual((await controller.prepareTilesCalibration()).matrix, preview)
+  assert.equal((await controller.prepareTilesCalibration()).terrain_anchor.height, 0)
   controller.destroy()
 })
 
@@ -1984,7 +2039,6 @@ test('multipart features share backend ID, highlight all parts and restore curre
   click({ position: new Cartesian2(10, 10) })
   assert.equal(picks.at(-1).objectId, objectId)
   assert.equal(picks.at(-1).layerId, 'layer-one')
-  assert.equal(controller.objectPage(objectId, 'layer-one', 20), 1)
   assert.notEqual(parts[0].polygon.material, originalMaterials[0])
   assert.notEqual(parts[1].polygon.material, originalMaterials[1])
   layer.opacity = 0.4
@@ -1993,6 +2047,9 @@ test('multipart features share backend ID, highlight all parts and restore curre
   assert.equal(parts[0].polygon.material.color.alpha, 0.4 * 0.36)
   controller.highlightObjects(layer.id, [objectId], objectId)
   await controller.focusObject('layer-one', { object_id: objectId, type: 'area', geometry: { type: 'MultiPolygon', coordinates: [] } })
+  await controller.focusObject('layer-one', { object_id: 'offscreen', type: 'area',
+    geometry: { type: 'MultiPolygon', coordinates: [[[[108, 21], [108.01, 21], [108, 21.01], [108, 21]]]] } })
+  assert.equal(viewer.lastFlight.sphere.center.longitude, 108)
   assert.deepEqual(viewer.lastResourceFlight.resource, parts)
   controller.remove(layer)
   assert.equal(picks.at(-1), null)

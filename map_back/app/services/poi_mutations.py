@@ -2,22 +2,12 @@
 import json
 from tempfile import TemporaryFile
 from pathlib import Path
-from typing import Literal
-from pydantic import BaseModel, Field, ConfigDict
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from app.services.geojson_snapshot import ensure_snapshot, iter_members
 from app.models import Layer, Asset, SpatialObject
 from app.errors import ApiProblem
-
-
-class PoiChange(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    asset_id: str = Field(min_length=1, max_length=36)
-    version: str = Field(min_length=1, max_length=32)
-    operation: Literal['add', 'update', 'delete']
-    object_id: str | None = None
-    feature: dict | None = None
+from app.schemas.poi import PoiChange
 
 
 def rewrite(session: Session, layer_id: str, change: PoiChange, target: Path):
@@ -39,8 +29,11 @@ def rewrite(session: Session, layer_id: str, change: PoiChange, target: Path):
         original_geometry = item.geometry
     if change.operation != 'delete':
         feature = change.feature
-        if not feature or feature.get('type') != 'Feature' or (feature.get('geometry') or {}).get('type') != 'Point':
+        geometry = feature.get('geometry') if feature else None
+        if not feature or feature.get('type') != 'Feature' or not isinstance(geometry, dict) or geometry.get('type') != 'Point':
             raise HTTPException(422, 'POI 图层只接受 WGS84 Point 要素')
+        if feature.get('properties') is not None and not isinstance(feature['properties'], dict):
+            raise HTTPException(422, 'Feature properties 必须为对象或 null')
     geometry_changed = change.operation != 'update' or (
         (original_geometry or {}).get('coordinates') != change.feature['geometry'].get('coordinates'))
     if not ensure_snapshot(session, change.asset_id, change.version):

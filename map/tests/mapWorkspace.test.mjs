@@ -28,7 +28,7 @@ function setup(options = {}) {
     'selectionProgress'].map(key => [key, vue.ref(null)]))
   objects.activeLayerId.value = 'a'
   objects.areaIds.value = []
-  for (const key of ['refresh', 'setLayer', 'setPage', 'applyFilters', 'select', 'showPicked', 'clearArea', 'clearSelection']) objects[key] = () => {}
+  for (const key of ['refresh', 'setLayer', 'setPage', 'applyFilters', 'select', 'showPicked', 'clearArea', 'clearSelection', 'returnToResults']) objects[key] = () => {}
   objects.selectArea = value => queries.push({ layer: objects.activeLayerId.value, geometry: value })
   options.objectActions?.(objects)
   const controller = {
@@ -43,8 +43,11 @@ function setup(options = {}) {
     setRegionBoundary() {},
     setCamera(camera) { this.camera = camera; return true },
     flyToCamera(camera) { return options.fly ? options.fly(camera) : this.setCamera(camera) },
-    beginTilesCalibration(_layer, callbacks) { this.calibration = callbacks; return true },
+    beginTilesCalibration(_layer, callbacks) { this.calibration = callbacks; this.groundChanged = false; return true },
     updateTilesCalibration(offsets) { this.offsets = { ...offsets }; return this.picking ? null : Object.values(offsets) },
+    hasTilesCalibrationChanges() {
+      return this.groundChanged || Object.entries(this.offsets).some(([key, value]) => key === 'yaw' ? value % 360 !== 0 : value !== 0)
+    },
     async prepareTilesCalibration() { return { matrix: Object.values(this.offsets), terrain_anchor: { longitude: 113, latitude: 23, height: 40 } } },
     pickTilesCalibrationPivot() { this.picking = true; this.calibration.notice('选择表面') },
     endTilesCalibration() { this.calibration = null },
@@ -176,6 +179,10 @@ test('opening calibration, replacing only the pivot, and undoing offsets do not 
   await panel.publishCalibration('update')
   await panel.publishCalibration('copy', '原模型副本')
   assert.equal(publishes.length, 0)
+  panel.changeCalibration('yaw', 360)
+  await panel.publishCalibration('update')
+  assert.equal(publishes.length, 0)
+  panel.changeCalibration('yaw', 0)
 
   panel.pickCalibrationPivot()
   controller.picking = false
@@ -187,7 +194,7 @@ test('opening calibration, replacing only the pivot, and undoing offsets do not 
 
   panel.pickCalibrationPivot('ground')
   controller.picking = false
-  controller.calibration.groundSelected()
+  controller.groundChanged = true
   controller.calibration.notice('')
   await panel.publishCalibration('update')
   assert.equal(publishes.length, 1)

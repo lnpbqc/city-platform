@@ -8,17 +8,17 @@ from app.schemas.common import Page
 from app.routers.dependencies import QuerySessionDep as SessionDep
 from app.services import object_queries
 from app.schemas.objects import ObjectFilters
-from app.schemas.objects import ObjectSelectionInput
+from app.schemas.objects import ObjectListFilters, ObjectSelectionInput, ObjectSelectionPage
 
 router = APIRouter(prefix="/api/objects", tags=["objects"])
 
 
 @router.get("", response_model=Page[ObjectOutput])
-def list_objects(query: Annotated[ObjectFilters, Query()], session: SessionDep):
+def list_objects(query: Annotated[ObjectListFilters, Query()], session: SessionDep):
     return object_queries.list_objects(query, session)
 
 
-@router.post("/select", response_model=Page[ObjectOutput])
+@router.post("/select", response_model=ObjectSelectionPage)
 def select_polygon(body: ObjectSelectionInput, session: SessionDep):
     return object_queries.select_polygon(body, session)
 

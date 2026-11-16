@@ -5,7 +5,7 @@ from app.services.assets import lock_catalog
 from app.errors import ApiProblem
 from app.models import Asset, AssetVersion
 from app.models.render import RenderJob
-from app.services.rendering import RECIPE, RENDER_DIR, describe, enqueue
+from app.services.rendering import RECIPE, RENDER_DIR, describe, eligible, enqueue
 
 
 def require_snapshot(session: Session, asset_id: str, version: str):
@@ -52,6 +52,6 @@ def archive_file(session: Session, key: str):
         raise ApiProblem(404, 'RENDER_NOT_FOUND', '显示归档未就绪')
     asset = session.get(Asset, job.asset_id)
     target = RENDER_DIR / job.key / 'map.pmtiles'
-    if not asset or asset.status != 'active' or not target.is_file():
+    if not eligible(session, asset, job.version) or not target.is_file():
         raise ApiProblem(404, 'RENDER_NOT_FOUND', '显示归档不可用')
     return target, job.sha256

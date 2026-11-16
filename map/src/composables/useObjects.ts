@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { getObject, getMapObject, getObjects, selectObjects } from '../api/api.ts'
-import type { GeometryDocument, MapLayer, ObjectQuery, ObjectRecord } from '../layers/types'
+import type { GeometryDocument, MapLayer, ObjectQuery, ObjectRecord, ObjectSummary } from '../layers/types'
 import type { CampusKey } from '../map/campuses'
 import type { TemporalContext } from '../temporal/temporalTypes'
 
@@ -20,6 +20,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
   const detailError = ref('')
   const areaGeometry = shallowRef<GeometryDocument | null>(null)
   const areaIds = shallowRef<string[]>([])
+  const areaSummary = shallowRef<ObjectSummary | null>(null)
   const selectionProgress = shallowRef<{ loaded: number; total: number } | null>(null)
   let areaItems: ObjectRecord[] | null = null
   let alive = true
@@ -28,6 +29,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
   let listAbort: AbortController | undefined
   let detailAbort: AbortController | undefined
   let context = ''
+  let pendingPickedPage: string | undefined
   const failure = (cause: unknown) => cause instanceof Error ? cause.message : '对象请求失败'
   const activeLayer = () => getLayers().find(layer => layer.id === activeLayerId.value && layer.id !== 'basemap' && layer.attached)
   const contextFor = (layer?: MapLayer) => layer ? JSON.stringify([layer.id, layer.asset_id, layer.asset_version, layer.campus]) : ''
@@ -49,6 +51,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
   function resetArea() {
     areaGeometry.value = null
     areaIds.value = []
+    areaSummary.value = null
     areaItems = null
     selectionProgress.value = null
   }
@@ -70,7 +73,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
     page.value = Math.min(page.value, Math.max(1, Math.ceil(total.value / pageSize.value)))
     items.value = (areaItems ?? []).slice((page.value - 1) * pageSize.value, page.value * pageSize.value)
   }
-  async function refresh() {
+  async function refresh(focusId?: string) {
     if (!alive) return
     if (areaGeometry.value) return selectArea(areaGeometry.value)
     cancelList()
@@ -83,7 +86,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
     listAbort = new AbortController()
     loading.value = true
     try {
-      const result = await getObjects(queryFor(layer), listAbort.signal)
+      const result = await getObjects({ ...queryFor(layer), ...(focusId ? { focus_id: focusId } : {}) }, listAbort.signal)
       if (!alive || version !== listVersion) return
       items.value = result.items
       total.value = result.total
@@ -94,7 +97,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
       if (alive && version === listVersion) loading.value = false
     }
   }
-  function resetLayer(id: string, pageNumber = 1) {
+  function resetLayer(id: string) {
     cancelList()
     clearSelection()
     resetArea()
@@ -102,7 +105,8 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
     context = contextFor(activeLayer())
     type.value = ''
     q.value = ''
-    page.value = Math.max(1, Math.trunc(pageNumber) || 1)
+    page.value = 1
+    pendingPickedPage = undefined
     items.value = []
     total.value = 0
     error.value = ''
@@ -143,11 +147,19 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
       if (alive && version === detailVersion) detailLoading.value = false
     }
   }
-  async function showPicked(id: string, layerId: string, pageNumber: number) {
-    resetLayer(layerId, pageNumber)
+  async function showPicked(id: string, layerId: string) {
+    resetLayer(layerId)
     if (!activeLayer()) return
-    if (activeLayer()?.category === 'POI') await select(id)
-    else await Promise.all([refresh(), select(id)])
+    if (activeLayer()?.category === 'POI') {
+      pendingPickedPage = id
+      await select(id)
+    } else await Promise.all([refresh(id), select(id)])
+  }
+  async function returnToResults() {
+    clearSelection()
+    const focusId = pendingPickedPage
+    pendingPickedPage = undefined
+    if (focusId) await refresh(focusId)
   }
   async function selectArea(geometry: GeometryDocument) {
     if (!alive) return
@@ -171,10 +183,14 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
     try {
       const collected: ObjectRecord[] = []
       let expected = 0
+      let summary: ObjectSummary | null = null
       for (let currentPage = 1; currentPage === 1 || collected.length < expected; currentPage++) {
-        const result = await selectObjects({ ...query, page: currentPage }, mask, signal)
+        const result = await selectObjects({ ...query, page: currentPage, ...(currentPage === 1 ? { include_summary: true } : {}) }, mask, signal)
         if (!alive || version !== listVersion) return
-        if (currentPage === 1) expected = result.total
+        if (currentPage === 1) {
+          expected = result.total
+          summary = result.summary ?? null
+        }
         if (result.total !== expected || (result.items.length === 0 && collected.length < expected))
           throw new Error('区域选择结果已变化，请重新选择')
         collected.push(...result.items)
@@ -184,6 +200,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
         throw new Error('区域选择结果不完整，请重新选择')
       areaItems = collected
       areaIds.value = collected.map(item => item.object_id)
+      areaSummary.value = summary
       showAreaPage()
     } catch (cause) {
       if (alive && version === listVersion) {
@@ -225,7 +242,7 @@ export function useObjects(getLayers: () => MapLayer[], getTime: () => TemporalC
   })
   return {
     activeLayerId, items, total, page, pageSize, loading, error, type, q,
-    selectedId, selected, detailLoading, detailError, areaGeometry, areaIds, selectionProgress,
-    refresh, setLayer, setPage, applyFilters, select, showPicked, selectArea, clearArea, clearSelection,
+    selectedId, selected, detailLoading, detailError, areaGeometry, areaIds, areaSummary, selectionProgress,
+    refresh, setLayer, setPage, applyFilters, select, showPicked, selectArea, clearArea, clearSelection, returnToResults,
   }
 }

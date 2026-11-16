@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote
 from zipfile import ZipFile
@@ -119,6 +120,53 @@ def test_calibration_detects_conflicts_and_rejects_nonrigid_matrix(client):
     assert sorted(statuses) == [201, 409]
 
 
+def test_legacy_current_package_can_be_copied_and_updated(client, monkeypatch):
+    from app.models import Asset, AssetVersion, Layer
+    from app.services.assets import TILES_VERSIONS_DIR
+    from app.services import tiles_calibration
+
+    layer, original = prepare(client)
+    identity = layer["asset_id"]
+    number = "1.0.1"
+    storage = TILES_VERSIONS_DIR / identity / number
+    url = f"/api/assets/{identity}/versions/{number}/tiles/project/tileset.json"
+    shutil.copytree(FILES_DIR / identity, storage)
+    with SessionLocal() as session:
+        asset = session.get(Asset, identity)
+        base = session.get(AssetVersion, (identity, "1.0.0"))
+        session.add(AssetVersion(asset_id=identity, version=number, entry_url=url, tiles_calibrated=True,
+                                 byte_size=base.byte_size, file_count=base.file_count, sha256=base.sha256,
+                                 file_manifest=base.file_manifest, bounds=base.bounds))
+        session.flush()
+        asset.current_version, asset.entry_url = number, url
+        registered = session.get(Layer, layer["id"])
+        registered.asset_version, registered.url = number, url
+        session.commit()
+    endpoint = f"/api/assets/{identity}/versions/calibrate"
+    copied = client.post(endpoint, json=request_body("copy", base_version=number, name="旧校准包副本"))
+    assert copied.status_code == 201, copied.text
+    assert copied.json()["asset_id"] != identity
+    assert client.get(url).content == original
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tiles_calibration, "index_asset", lambda *_: None)
+        failed = client.post(endpoint, json=request_body(base_version=number))
+        assert failed.status_code == 409, failed.text
+    assert client.get(url).content == original
+    updated = client.post(endpoint, json=request_body(base_version=number))
+    assert updated.status_code == 201, updated.text
+    assert updated.json()["revision"] == 1 and updated.json()["entry_url"] == url
+    assert (FILES_DIR / identity / "project/tileset.json").read_bytes() == original
+    active_manifest = client.get(url)
+    assert active_manifest.headers["Cache-Control"] == "no-store"
+    assert active_manifest.json()["root"]["transform"][12:15] == [6378147, 20, 30]
+    response = client.get(f"/api/assets/{identity}/versions/{number}/download?revision=1")
+    assert response.status_code == 200, response.text
+    with ZipFile(io.BytesIO(response.content)) as package:
+        assert package.read("project/tileset.json") == active_manifest.content
+        assert package.read("project/nested/model.glb") == b"model"
+
+
 def test_saved_scene_reads_current_model_and_preserves_run_request(client):
     layer, _ = prepare(client)
     base = f"/api/assets/{layer['asset_id']}"
@@ -172,6 +220,19 @@ def test_download_snapshot_survives_later_update(client):
             assert package.read("project/tileset.json") == original
     finally:
         shutil.rmtree(snapshot)
+
+
+def test_damaged_payload_is_rejected_before_zip_response(client):
+    layer, _ = prepare(client)
+    identity = layer["asset_id"]
+    (FILES_DIR / identity / "project/nested/model.glb").write_bytes(b"other")
+    url = f"/api/assets/{identity}/versions/1.0.0/download?revision=0"
+    head = client.head(url)
+    assert head.status_code == 409
+    assert "project/nested/model.glb" in unquote(head.headers["X-Download-Error"])
+    response = client.get(url)
+    assert response.status_code == 409
+    assert response.json()["code"] == "ASSET_CONTENT_CHANGED"
 
 
 def test_updates_nested_region_manifest_at_original_location(client):

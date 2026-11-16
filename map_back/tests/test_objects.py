@@ -1,8 +1,10 @@
 import json
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
 from shapely.geometry import shape
+from sqlalchemy import insert
 
 from app.database import FILES_DIR, SessionLocal
 from app.main import app
@@ -62,6 +64,9 @@ def test_unbounded_list_paginates_in_database_without_materializing_selection(cl
     assert first['total'] == second['total'] == 4
     assert len(first['items']) == len(second['items']) == 2
     assert not {row['object_id'] for row in first['items']} & {row['object_id'] for row in second['items']}
+    picked = second['items'][-1]['object_id']
+    assert query(client, layer, page_size=2, focus_id=picked) == second
+    assert client.get('/api/objects', params={'asset_id': layer['asset_id'], 'focus_id': picked, 'q': 'unmatched'}).status_code == 404
     assert query(client, layer, page=9223372036854775808)['items'] == []
 
 
@@ -81,6 +86,11 @@ def test_bbox_really_clips_lines_and_polygons_and_summary_matches(client):
     assert groups["road"]["area_m2"] is None
     assert 12_000_000_000 < groups["building"]["area_m2"] < 13_000_000_000
     assert groups["building"]["min_height_m"] == groups["building"]["max_height_m"] == 12
+    selection = client.post("/api/objects/select", json={
+        "asset_id": layer["asset_id"], "page_size": 1, "include_summary": True,
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+    })
+    assert selection.json()["summary"] == summary
 
 
 def test_spatial_selection_excludes_bbox_false_positives_and_counts_exact_set(client):
@@ -107,6 +117,43 @@ def test_type_keyword_layer_and_version_filters_share_one_selection(client):
     assert client.get("/api/objects?asset_id=absent").status_code == 404
     assert client.get("/api/objects?layer_id=absent").status_code == 404
     assert client.get("/api/objects", params={"asset_id": layer["asset_id"], "version": "absent"}).status_code == 404
+
+
+def test_large_selection_batches_clipping_summary_and_temporal_geometry(client):
+    from app.models import TimeSeriesSnapshot
+    from app.schemas.objects import ObjectFilters
+    from app.schemas.timeseries import TimeSeriesQuery
+    from app.services.object_queries import summarize_objects
+    from app.services.timeseries import get_timeseries, utc_text
+
+    layer = uploaded(client)
+    asset, version, layer_id = layer['asset_id'], layer['asset_version'], layer['id']
+    total = 36_495
+    line = {'type': 'LineString', 'coordinates': [[-1, 0.25], [2, 0.25]]}
+    with SessionLocal() as session:
+        session.execute(insert(SpatialObject), [
+            {'id': f'bulk-{index:05d}', 'asset_id': asset, 'asset_version': version, 'feature_index': index + 4,
+             'type': 'bulk-road', 'semantic_source': 'dataset', 'geometry': line, 'properties': {},
+             'search_text': '', 'west': -1, 'south': 0.25, 'east': 2, 'north': 0.25}
+            for index in range(total)
+        ])
+        time = TimeSeriesQuery(layer_id=layer_id, time='2026-10-25T00:00:00Z').time
+        session.add(TimeSeriesSnapshot(asset_id=asset, asset_version=version, unit='m',
+                                      document={utc_text(time): {f'bulk-{index:05d}': index for index in range(total)}}))
+        session.commit()
+        connection = session.connection().connection.driver_connection
+        previous_limit = connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+        try:
+            summary = summarize_objects(ObjectFilters(layer_id=layer_id, type='bulk-road', bbox='0,0,1,1'), session)
+            assert summary['total'] == summary['types'][0]['count'] == total
+            series = get_timeseries(TimeSeriesQuery(layer_id=layer_id, time=time), session)
+            bulk = [item for item in series['items'] if item['object_id'].startswith('bulk-')]
+            assert len(bulk) == total
+            assert bulk[0]['geometry'] == line and bulk[0]['value'] == 0
+            assert bulk[-1]['object_id'] == 'bulk-36494'
+            assert bulk[-1]['geometry'] == line and bulk[-1]['value'] == total - 1
+        finally:
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit)
 
 
 @pytest.mark.parametrize("params", [{"bbox": "bad"}, {"bbox": "0,2,1,1"}, {"bbox": "nan,0,1,1"}, {"page": 0}, {"page_size": 101}, {"time": "2026-10-25T00:00:00"}])

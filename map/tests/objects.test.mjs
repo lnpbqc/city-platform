@@ -43,15 +43,18 @@ function setup(initial = [first, second], getTime = () => null) {
 const flush = async () => { await new Promise(setImmediate); await nextTick() }
 const polygon = { type: 'Polygon', coordinates: [[[112, 22], [114, 22], [114, 24], [112, 22]]] }
 
-test('POI picks read lightweight details without refreshing the full object list', async t => {
+test('POI picks read lightweight details and return to the authoritative page', async t => {
   const { app, objects } = setup([{ ...first, category: 'POI' }])
   t.after(() => app.unmount())
   await flush()
   const previous = listCalls.length
-  await objects.showPicked('one', 'first', 1)
+  await objects.showPicked('one', 'first')
   assert.equal(listCalls.length, previous)
   assert.equal(detailCalls.at(-1).lightweight, true)
   assert.equal(objects.selected.value.geometry.type, 'Point')
+  await objects.returnToResults()
+  assert.equal(listCalls.at(-1).focus_id, 'one')
+  assert.equal(objects.items.value[0].object_id, 'one')
 })
 
 test('dynamic object lists and selected details follow the clock while static queries remain unchanged', async t => {
@@ -141,12 +144,18 @@ test('asset version changes and selected-layer removal clear stale selection and
 
 test('area selection fetches the complete 205 ids, fixes asset context and pages cached clipped rows by 20', async () => {
   const selected = Array.from({ length: 205 }, (_, i) => object(`area-${String(i).padStart(3, '0')}`, { geometry: { type: 'Point', coordinates: [113.1, 23.1] } }))
-  areaRequest = async query => pageOf(selected.slice((query.page - 1) * 100, query.page * 100), query, selected.length)
+  const summary = { total: 205, types: [] }
+  areaRequest = async query => ({
+    ...pageOf(selected.slice((query.page - 1) * 100, query.page * 100), query, selected.length),
+    ...(query.include_summary ? { summary } : {}),
+  })
   const { app, objects } = setup()
   await flush()
   await objects.selectArea(polygon)
   assert.deepEqual(areaCalls.map(call => [call.page, call.page_size, call.asset_id, call.version, call.layer_id]), [[1, 100, 'asset-one', '1.0.0', 'first'], [2, 100, 'asset-one', '1.0.0', 'first'], [3, 100, 'asset-one', '1.0.0', 'first']])
   assert.equal(objects.total.value, 205)
+  assert.deepEqual(areaCalls.map(call => call.include_summary), [true, undefined, undefined])
+  assert.deepEqual(objects.areaSummary.value, summary)
   assert.equal(objects.areaIds.value.length, 205)
   assert.equal(objects.items.value.length, 20)
   assert.equal(objects.selectionProgress.value, null)
@@ -200,8 +209,10 @@ test('map picking clears filters and area, selects the requested page once and f
   objects.type.value = 'building'; objects.q.value = 'old'
   const before = listCalls.length
   detailRequest = async id => object(id, { asset: { asset_id: 'asset-two', version: '1.0.0' } })
-  await objects.showPicked('picked', 'second', 4)
+  listRequest = async query => ({ ...pageOf([object('picked')], query, 61), page: 4 })
+  await objects.showPicked('picked', 'second')
   assert.equal(listCalls.length, before + 1)
+  assert.equal(listCalls.at(-1).focus_id, 'picked')
   assert.deepEqual([objects.activeLayerId.value, objects.page.value, objects.type.value, objects.q.value], ['second', 4, '', ''])
   assert.deepEqual(objects.areaIds.value, [])
   assert.equal(objects.selected.value.object_id, 'picked')

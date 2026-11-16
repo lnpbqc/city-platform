@@ -98,7 +98,7 @@ def validate_geojson(path: Path, *, point_only: bool = False, cancel=None):
         invalid(str(error))
 
 
-def extract_tiles(archive: Path, destination: Path):
+def extract_tiles(archive: Path, destination: Path, *, cancel=None):
     try:
         with ZipFile(archive) as bundle:
             entries = bundle.infolist()
@@ -108,6 +108,8 @@ def extract_tiles(archive: Path, destination: Path):
                 raise HTTPException(413, f"ZIP 解压总量超过 {EXPANDED_LIMIT // 1024 // 1024} MiB")
             seen = set()
             for item in entries:
+                if cancel:
+                    cancel()
                 path = PurePosixPath(item.filename)
                 if item.flag_bits & 1:
                     invalid("ZIP 包含加密文件")
@@ -127,6 +129,8 @@ def extract_tiles(archive: Path, destination: Path):
                 seen.add(key)
             written = 0
             for item in entries:
+                if cancel:
+                    cancel()
                 target = destination.joinpath(*PurePosixPath(item.filename).parts)
                 if item.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -134,6 +138,8 @@ def extract_tiles(archive: Path, destination: Path):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with bundle.open(item) as source, target.open("wb") as output:
                     while chunk := source.read(1024 * 1024):
+                        if cancel:
+                            cancel()
                         written += len(chunk)
                         if written > EXPANDED_LIMIT:
                             raise HTTPException(413, f"ZIP 解压总量超过 {EXPANDED_LIMIT // 1024 // 1024} MiB")

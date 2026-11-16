@@ -113,9 +113,9 @@ const temporalContext = computed(() => time.value ? { time: time.value, resoluti
 const {
   activeLayerId, items: objectItems, total: objectTotal, page: objectPage, pageSize: objectPageSize,
   loading: objectsLoading, error: objectsError, type: objectType, q: objectQuery,
-  selectedId, selected: objectDetail, detailLoading, detailError, areaGeometry, areaIds, selectionProgress,
+  selectedId, selected: objectDetail, detailLoading, detailError, areaGeometry, areaIds, areaSummary, selectionProgress,
   refresh: refreshObjects, setLayer: setObjectLayer, setPage: setObjectPage, applyFilters,
-  select: selectObject, showPicked, selectArea, clearArea, clearSelection,
+  select: selectObject, showPicked, selectArea, clearArea, clearSelection, returnToResults,
 } = useObjects(() => viewLayers.value, () => temporalContext.value)
 const queryLayers = computed(() => viewLayers.value.filter(layer => layer.id !== 'basemap' && layer.attached))
 const drawingScope = computed(() => {
@@ -152,9 +152,8 @@ const blockedTilesAsset = computed(() => calibration.value?.id ?? refreshingCali
 const emptyOffsets = (): TilesCalibrationOffsets => ({ east: 0, north: 0, up: 0, yaw: 0, pitch: 0, roll: 0 })
 const calibrationOffsets = ref<Record<keyof TilesCalibrationOffsets, number | ''>>(emptyOffsets())
 const calibrationMatrix = shallowRef<number[] | null>(null)
-const calibrationGroundSelected = ref(false)
-const calibrationSaveReady = computed(() => !!calibrationMatrix.value &&
-  (calibrationGroundSelected.value || Object.values(calibrationOffsets.value).some(value => value !== 0)))
+const calibrationChanged = ref(false)
+const calibrationSaveReady = computed(() => !!calibrationMatrix.value && calibrationChanged.value)
 const canPickCalibrationPivot = computed(() => !!calibrationMatrix.value && Object.values(calibrationOffsets.value).every(value => value === 0))
 const allowCalibration = computed(() => poiAllowed.value && !calibration.value && !calibrationBusy.value && !refreshingCalibration.value)
 
@@ -163,6 +162,7 @@ function previewCalibration() {
   calibrationMatrix.value = Object.values(values).every(value => typeof value === 'number' && Number.isFinite(value))
     ? controller?.updateTilesCalibration(values as TilesCalibrationOffsets) ?? null
     : null
+  calibrationChanged.value = !!calibrationMatrix.value && !!controller?.hasTilesCalibrationChanges()
 }
 
 function cancelCalibration() {
@@ -178,7 +178,7 @@ function startCalibration(layer: MapLayer) {
   if (poiDraft.value) return
   closeObjects()
   calibrationOffsets.value = emptyOffsets()
-  calibrationGroundSelected.value = false
+  calibrationChanged.value = false
   calibrationNotice.value = ''
   calibrationError.value = ''
   const draft = { layer, id: layer.asset_id, version: layer.asset_version, revision: layer.tiles_revision ?? 0 }
@@ -199,9 +199,6 @@ function startCalibration(layer: MapLayer) {
       if (calibration.value !== draft) return
       calibrationNotice.value = message
       if (!message && !calibrationBusy.value) previewCalibration()
-    },
-    groundSelected() {
-      if (calibration.value === draft) calibrationGroundSelected.value = true
     },
   })) {
     calibration.value = null
@@ -302,7 +299,7 @@ async function queryNearby(point: MapPoint) {
 async function selectNearby(item: NearbyPoi) {
   const version = nearbyVersion
   selection.value = null
-  await showPicked(item.object_id, item.layer_id!, 1)
+  await showPicked(item.object_id, item.layer_id!)
   if (version === nearbyVersion && objectDetail.value?.object_id === item.object_id)
     await controller?.focusObject(item.layer_id!, objectDetail.value)
 }
@@ -364,17 +361,16 @@ const fatal = ref('')
 const is2D = ref(storedView?.camera.scene_mode === '2d')
 const navigation = ref<NavigationReading | null>(null)
 function cancelDraw() { controller?.cancelAreaSelection(); drawing.value = null }
-function clearObjectSelection() { selection.value = null; clearSelection() }
+function clearObjectSelection() { selection.value = null; void returnToResults() }
 function closeObjects() { cancelDraw(); closeNearby(); clearObjectSelection(); objectsOpen.value = false }
 function toggleObjects() { if (objectsOpen.value) closeObjects(); else objectsOpen.value = true }
 async function onMapSelection(value: Selection | null) {
   if (value) closeNearby()
   selection.value = value
-  if (!value) { clearSelection(); return }
+  if (!value) { void returnToResults(); return }
   objectsOpen.value = true
   if (value.objectId && value.layerId) {
-    const page = controller?.objectPage(value.objectId, value.layerId, objectPageSize.value) ?? 1
-    await showPicked(value.objectId, value.layerId, page)
+    await showPicked(value.objectId, value.layerId)
   } else {
     clearSelection()
     if (value.layerId) await setObjectLayer(value.layerId)
@@ -739,11 +735,11 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
     <NearbyPoiPanel v-if="objectsOpen && nearbyOpen && !inspectedSelection && !poiDraft"
       :items="nearbyItems" :layers="viewLayers" :loading="nearbyLoading" :error="nearbyError" :unavailable="nearbyUnavailable"
       @select="selectNearby" @close="closeObjects" @retry="nearbyPoint && queryNearby(nearbyPoint)" />
-    <ObjectPanel v-if="objectsOpen && !inspectedPoiLayer && !nearbyOpen"
+    <ObjectPanel v-if="objectsOpen" v-show="!inspectedPoiLayer && !nearbyOpen"
       :class="{ 'temporal-objects': dynamicLayers.length }"
       :layers="queryLayers" :layer-id="activeLayerId" :items="objectItems" :total="objectTotal" :page="objectPage" :page-size="objectPageSize"
       :loading="objectsLoading" :error="objectsError" v-model:q="objectQuery" v-model:type="objectType"
-      :selected-id="selectedId" :selection="inspectedSelection" :area="Boolean(areaGeometry)" :drawing="drawing" :progress="selectionProgress"
+      :selected-id="selectedId" :selection="inspectedPoiLayer ? null : inspectedSelection" :area="Boolean(areaGeometry)" :area-summary="areaSummary" :drawing="drawing" :progress="selectionProgress"
       :edit-poi="!!poiSelectionLayer && !poiDraft"
       @edit-poi="startPoi(true)"
       @close="closeObjects" @layer="changeObjectLayer" @page="setObjectPage" @select="onListSelection" @apply="applyObjectFilters"

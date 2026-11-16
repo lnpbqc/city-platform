@@ -7,7 +7,10 @@ if context.is_offline_mode():
     with context.begin_transaction():
         context.run_migrations()
 else:
-    with engine.connect() as connection:
+    with engine.begin() as connection:
+        if connection.dialect.name == "sqlite":
+            # Start a real transaction before SQLite executes the first DDL statement.
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
         context.configure(connection=connection, target_metadata=Base.metadata, render_as_batch=True)
         with context.begin_transaction():
             context.run_migrations()

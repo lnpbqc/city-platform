@@ -264,6 +264,10 @@ export interface ObjectQuery {
   page?: number
   page_size?: number
 }
+export interface ObjectSummary {
+  total: number
+  types: { type: string; count: number; area_m2: number | null; min_height_m: number | null; max_height_m: number | null }[]
+}
 const sampleTemplates: LayerRecord[] = [
   {
     id: 'campus-buildings',

@@ -86,9 +86,9 @@ function submitCopy() {
         <label v-if="copying" class="copy-name">
           新资产名称<input ref="copyInput" v-model="copyName" maxlength="120" required :disabled="busy" />
         </label>
-        <p v-if="error" class="calibration-error" role="alert">{{ error }}</p>
       </div>
       <footer>
+        <p v-if="error" class="calibration-error" role="alert">{{ error }}</p>
         <template v-if="copying">
           <button type="button" class="text-button" :disabled="busy" @click="copying = false">返回</button>
           <button type="submit" class="primary-button" :disabled="!canSave || !copyName.trim()">保存新资产</button>
@@ -126,7 +126,7 @@ legend { padding: 0; font-weight: 600; }
 .calibration-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 label { display: grid; min-width: 0; gap: 4px; }
 input { width: 100%; min-width: 0; min-height: 32px; padding: 4px 8px; border: 1px solid #d8e1ed; border-radius: 5px; color: inherit; }
-.calibration-error { margin-top: 10px; color: #a33d32; overflow-wrap: anywhere; }
+.calibration-error { flex: 0 0 100%; max-height: 3.6em; overflow: auto; line-height: 1.2; color: #a33d32; overflow-wrap: anywhere; }
 .reference-action { gap: 6px; min-height: 30px; margin-top: 4px; }
 .copy-name { margin-top: 10px; }
 footer { flex-wrap: wrap; justify-content: flex-end; border-top: 1px solid var(--line); }

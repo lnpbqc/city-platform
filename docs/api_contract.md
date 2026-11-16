@@ -107,6 +107,8 @@ GeoJSON 对象 ID 由资产 ID、版本和原始 Feature 序号生成 UUID5；�
 
 列表和统计支持 `asset_id/version/layer_id/type/q/bbox/time/resolution/campus`，列表另含分页。默认读取可用资产的当前版本；按图层读取其固定版本，绑定冲突返回 422。`q` 按字面搜索对象 ID、名称和属性，`type` 精确匹配。
 
+列表可传 `focus_id`，按当前筛选和每页条数返回该对象所在页。对象不在该结果集时返回 404 `OBJECT_NOT_FOUND`。范围选择传 `include_summary=true` 时，响应同时返回 `summary`，统计覆盖整个裁剪结果，字段与 `GET /api/objects/summary` 相同。
+
 `bbox=west,south,east,north` 真实相交并裁剪几何，west 大于 east 时覆盖日期变更线两侧。多边形选择示例中的资产 ID 需替换为实际值：
 
 ```json
@@ -251,6 +253,6 @@ POI 先按中文类别、有效名称和比例尺确定背景显示资格，再�
 
 显示描述包含 `key/status/stage/error/profile/recipe/manifest/url/byte_size/source_state/source_expires_at`。只有 `status=succeeded` 时提供归档 URL。显示配置固定为版本化 recipe，同一来源版本、profile 和 recipe 复用任务；用户选择的道路显示等级不改变产物键。
 
-适用的本地上传普通 GeoJSON 首次成功发布显示产物后，设置七天原文件保留期。重试不延长该版本期限。清理前须确认完整快照和显示产物可用；失败、排队或迁移未验证的数据保留原文件。默认资源、外部资源、建筑拉伸、时序和 3D Tiles 不参与自动清理。
+适用的本地上传普通 GeoJSON 首次成功发布显示产物后，设置七天原文件保留期。重试不延长该版本期限。清理前确认完整快照、显示产物和原文件指纹。失败、排队、迁移未验证或原文件指纹不符时保留原文件。默认资源、外部资源、建筑拉伸、时序和 3D Tiles 不参与自动清理。
 
-清理后 `source_state=expired`。`GET /api/assets/{asset_id}/download` 返回 410 `SOURCE_EXPIRED`，完整 GeoJSON 导出、对象查询及 POI 编辑继续使用完整快照。原文件到期不将资产标记为 missing。删除资产仍受图层、场景和历史运行引用保护；成功删除会取消显示任务并清理正式产物。
+清理后 `source_state=expired`。`GET /api/assets/{asset_id}/download` 返回 410 `SOURCE_EXPIRED`，完整 GeoJSON 导出、对象查询及 POI 编辑继续使用完整快照。原文件到期不将资产标记为 missing。使用规范化的 GeoJSON 版本入口作为图层 `url`，可以登记到该固定版本。删除资产仍受图层、场景和历史运行引用保护；成功删除会取消显示任务并清理正式产物。

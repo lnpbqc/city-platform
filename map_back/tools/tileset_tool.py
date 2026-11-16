@@ -39,12 +39,28 @@ def create_transform(lon, lat, height):
     
     # 列主序 (Column-major) 矩阵
     transform = [
-        east_x, north_x, up_x, 0.0,
-        east_y, north_y, up_y, 0.0,
-        east_z, north_z, up_z, 0.0,
+        east_x, east_y, east_z, 0.0,
+        north_x, north_y, north_z, 0.0,
+        up_x, up_y, up_z, 0.0,
         ecef_x, ecef_y, ecef_z, 1.0
     ]
     return [round(val, 10) for val in transform]
+
+def relocate_transform(transform, lon, lat, height):
+    """Move the origin while preserving orientation and scale relative to local ENU."""
+    old_lon, old_lat, _ = get_info_from_transform(transform)
+    target = create_transform(lon, lat, height)
+    result = list(transform)
+    if (lon, lat) != (old_lon, old_lat):
+        origin = create_transform(old_lon, old_lat, 0)
+        for offset in (0, 4, 8):
+            local = [sum(origin[axis * 4 + row] * transform[offset + row] for row in range(3))
+                     for axis in range(3)]
+            result[offset:offset + 3] = [
+                sum(target[axis * 4 + row] * local[axis] for axis in range(3)) for row in range(3)
+            ]
+    result[12:15] = target[12:15]
+    return result
 
 def main():
     parser = argparse.ArgumentParser(description="读取或修改 3D Tiles 的经纬度与椭球高")
@@ -88,7 +104,7 @@ def main():
         print(f"椭球高: {new_height:.3f} 米")
 
         # 生成新矩阵并覆盖
-        data['root']['transform'] = create_transform(new_lon, new_lat, new_height)
+        data['root']['transform'] = relocate_transform(current_transform, new_lon, new_lat, new_height)
         
         try:
             with open(args.file, 'w', encoding='utf-8') as f:

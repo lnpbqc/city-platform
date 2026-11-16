@@ -1,5 +1,5 @@
 """Track in-place revisions for local 3D Tiles assets."""
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 revision = "0021_tiles_working_asset"
@@ -25,13 +25,18 @@ def _triggers(working: bool):
 
 def _drop_triggers():
     for name in ("asset_version_immutable", "asset_fingerprint_immutable", "asset_calibration_immutable"):
-        op.execute(f"DROP TRIGGER {name}")
+        op.execute(f"DROP TRIGGER IF EXISTS {name}")
 
 
 def upgrade():
+    existing = set() if context.is_offline_mode() else {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns("asset_versions")
+    }
     _drop_triggers()
-    op.add_column("asset_versions", sa.Column("revision", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("asset_versions", sa.Column("tiles_terrain_anchor", sa.JSON(), nullable=True))
+    if "revision" not in existing:
+        op.add_column("asset_versions", sa.Column("revision", sa.Integer(), nullable=False, server_default="0"))
+    if "tiles_terrain_anchor" not in existing:
+        op.add_column("asset_versions", sa.Column("tiles_terrain_anchor", sa.JSON(), nullable=True))
     _triggers(True)
 
 

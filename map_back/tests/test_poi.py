@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from test_scenes import draft, layer_state
 
@@ -18,6 +19,20 @@ def test_poi_import_rejects_non_point_features(client):
     result = client.post("/api/layers/upload", data={"name": "POI", "category": "POI", "type": "geojson"},
                          files={"file": data_file(feature)})
     assert result.status_code == 422
+
+
+@pytest.mark.parametrize(('field', 'malformed'), [('geometry', [1]), ('properties', ['name'])])
+def test_poi_partial_update_rejects_invalid_members(client, field, malformed):
+    initial = point("有效点", [121.5, 25.0])
+    layer = client.post("/api/layers/upload", data={"name": "POI", "category": "POI", "type": "geojson"},
+                        files={"file": data_file(initial)}).json()
+    record = client.get("/api/objects", params={"layer_id": layer["id"]}).json()["items"][0]
+    response = client.post(f"/api/layers/{layer['id']}/poi-features", json={
+        "asset_id": layer["asset_id"], "version": layer["asset_version"], "operation": "update",
+        "object_id": record["object_id"], "feature": {**initial, field: malformed}})
+    assert response.status_code == 422, response.text
+    assert response.json()["trace_id"]
+    assert client.get(layer["url"]).json()["features"] == [initial]
 
 
 def test_poi_snapshot_rebinds_only_current_layer_and_rejects_stale_save(client):

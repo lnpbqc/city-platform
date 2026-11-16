@@ -12,12 +12,22 @@ from app.routers.source_files import SourceFiles
 from app.services.builtin_assets import SAMPLES_DIR
 from app.services.lifecycle import lifespan
 
-app = FastAPI(title="城市地图 · 图层服务", version="0.2.0", responses=ERROR_RESPONSES, lifespan=lifespan)
+class MapAPI(FastAPI):
+    def build_middleware_stack(self):
+        return CORSMiddleware(
+            super().build_middleware_stack(),
+            allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:4173", "http://localhost:4173"],
+            allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+            allow_headers=["Content-Type", "If-Match", "If-None-Match", "Range", "Idempotency-Key"],
+            expose_headers=["X-Trace-ID", "ETag", "Accept-Ranges", "Content-Range", "Content-Length", "X-Download-Error"],
+        )
+
+
+app = MapAPI(title="城市地图 · 图层服务", version="0.2.0", responses=ERROR_RESPONSES, lifespan=lifespan)
 app.add_exception_handler(StarletteHTTPException, http_error)
 app.add_exception_handler(RequestValidationError, validation_error)
 app.add_exception_handler(Exception, unexpected_error)
 app.add_middleware(TraceMiddleware)
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:4173", "http://localhost:4173"], allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type", "If-Match", "If-None-Match", "Range", "Idempotency-Key"], expose_headers=["X-Trace-ID", "ETag", "Accept-Ranges", "Content-Range", "Content-Length"])
 app.mount("/data-files", SourceFiles(directory=FILES_DIR), name="data-files")
 app.mount("/samples", StaticFiles(directory=SAMPLES_DIR), name="samples")
 app.include_router(asset_catalog.router)

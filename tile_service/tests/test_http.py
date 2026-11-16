@@ -13,6 +13,7 @@ import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from shapely.geometry import shape
@@ -23,6 +24,50 @@ from tile_service.tests.test_service import feature
 
 
 class HttpTests(unittest.TestCase):
+    def test_push_can_retry_after_source_directory_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = Settings(root, 'a' * 32, 'http://localhost:8000')
+            app = create_app(config, start_worker=False)
+            with TestClient(app, raise_server_exceptions=False) as client:
+                client.headers['Authorization'] = 'Bearer ' + config.token
+                job = client.post('/internal/jobs', json=dict(key='push-retry', source_mode='push', profile='generic',
+                    source_url='http://localhost:8000/internal/render-source/a/1.0.0', asset_id='a', version='1.0.0')).json()
+                url = f"/internal/jobs/{job['id']}"
+                headers = {'X-Snapshot-Sha256': 'e' * 64, 'X-Feature-Count': '0'}
+                with patch.object(Path, 'mkdir', side_effect=OSError('injected mkdir failure')):
+                    self.assertEqual(client.put(url + '/source', content=b'{}', headers=headers).status_code, 503)
+                self.assertTrue(client.get(url).json()['needs_source'])
+                self.assertEqual(client.put(url + '/source', content=b'{}', headers=headers).status_code, 200)
+
+    def test_worker_directory_failure_records_error_and_continues(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = Store(root)
+            payload = dict(source_url='http://localhost/internal/render-source/a/1.0.0',
+                           asset_id='a', version='1.0.0', profile='generic')
+            first = store.submit(dict(payload, key='mkdir-failure'))
+            second = store.submit(dict(payload, key='next'))
+            worker = Worker(Settings(root, 'a' * 32, 'http://localhost'), store)
+            original_mkdir = Path.mkdir
+
+            def mkdir(path, *args, **kwargs):
+                if path == root / first['id']:
+                    raise OSError('injected mkdir failure')
+                return original_mkdir(path, *args, **kwargs)
+
+            def run(job, directory):
+                self.assertEqual(job['id'], second['id'])
+                self.assertTrue(directory.is_dir())
+                store.update(job['id'], status='succeeded', stage='done')
+                worker.stop.set()
+
+            with patch.object(Path, 'mkdir', mkdir), patch.object(worker, 'run', run):
+                worker.loop()
+            self.assertEqual(store.get(first['id'])['status'], 'failed')
+            self.assertIn('injected mkdir failure', store.get(first['id'])['error'])
+            self.assertEqual(store.get(second['id'])['status'], 'succeeded')
+
     @unittest.skipUnless(shutil.which('tippecanoe'), 'requires fixed Felt tippecanoe')
     def test_oversized_road_tile_fails_instead_of_reducing_fidelity(self):
         with tempfile.TemporaryDirectory() as temp:
