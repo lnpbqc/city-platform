@@ -15,14 +15,14 @@ class WeatherReading(BaseModel):
 class AutomaticWeather(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: Literal["open-meteo"]
-    effect: Literal["none", "clear", "rain", "snow"]
+    effect: Literal["none", "clear", "cloudy", "overcast", "fog", "rain", "snow", "thunderstorm"]
     reading: WeatherReading
 
 
 class ManualWeather(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: Literal["manual"]
-    effect: Literal["clear", "rain", "snow"]
+    effect: Literal["clear", "cloudy", "overcast", "fog", "rain", "snow", "thunderstorm"]
 
 
 class NoWeather(BaseModel):

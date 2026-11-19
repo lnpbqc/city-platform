@@ -3,10 +3,12 @@
   color: #273447;
   background: #d4e0e4;
   font-synthesis: none;
-  font-size: 13px;
-  --blue: #276ae9;
-  --muted: #8a95a5;
-  --line: #ebeff4;
+  font-size: 14px;
+  --blue: #1d4ed8;
+  --muted: #475569;
+  --line: #dce4ee;
+  --text: #1e293b;
+  --surface: #fff;
 }
 * {
   box-sizing: border-box;
@@ -79,8 +81,8 @@ button:hover:not(:disabled) {
   color: var(--blue);
 }
 .panel {
-  background: #fffffffa;
-  border: 1px solid #ffffffa0;
+  background: var(--surface);
+  border: 1px solid #d5dfeb;
   border-radius: 9px;
   box-shadow:
     0 4px 24px #1c35551a,
@@ -96,11 +98,11 @@ button:hover:not(:disabled) {
   scrollbar-color: #a1adbd transparent;
 }
 .icon-button {
-  height: 30px;
-  width: 30px;
+  height: 36px;
+  width: 36px;
   padding: 0;
   border-radius: 5px;
-  color: #7e8b9c;
+  color: #475569;
 }
 .icon-button:hover:not(:disabled) {
   background: #edf3fc;
@@ -111,7 +113,7 @@ button:hover:not(:disabled) {
   color: white !important;
   padding: 10px 16px;
   border-radius: 5px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   box-shadow: 0 2px 4px #276ae919;
   white-space: nowrap;
@@ -120,12 +122,12 @@ button:hover:not(:disabled) {
   background: #1558d4;
 }
 .muted {
-  color: #99a4b3;
+  color: #475569;
 }
 .eyebrow {
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 1.4px;
-  color: #a0aabb;
+  color: #475569;
   font-weight: 500;
 }
 .spin {

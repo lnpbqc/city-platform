@@ -48,7 +48,7 @@ import { ApiError, getAssetVersion, getMapViewport, pickMapRoad, getRenderStatus
 import type { TileViewport } from './tileViewport'
 import type { RenderDescriptor } from '../layers/types'
 import { fetchMapGeoJSON, mapLoadError, planarGeoJSON } from './mapResource.ts'
-import { validCamera, scaleForDistance, type CameraState, type NavigationReading } from './mapNavigation.ts'
+import { validCamera, scaleForDistance, visibleMapCenter, type NavigationInsets, type CameraState, type NavigationReading } from './mapNavigation.ts'
 import { objectIdentity, identifyFeatures } from './objectIdentity.ts'
 import { simulationGeometry } from '../simulation/simulationGeometry.ts'
 import type { NetworkRecord, RunResult } from '../simulation/simulationTypes'
@@ -185,6 +185,7 @@ export function createMapController(
   if (labelContext) labelContext.font = '12px sans-serif'
   let pointer: NavigationReading['pointer'] = null
   let pointerPosition: Cartesian2 | undefined
+  let navigationInsets: NavigationInsets = {}
   let homeRegion: RegionTarget | undefined
   let homeResource: Resource | undefined
   let autoFrame = true
@@ -687,6 +688,10 @@ export function createMapController(
     const position = target ? Cartographic.fromCartesian(target) : undefined
     pointer = position ? { longitude: CesiumMath.toDegrees(position.longitude), latitude: CesiumMath.toDegrees(position.latitude), height: position.height } : null
     const canvas = viewer.scene.canvas
+    const visibleCenter = visibleMapCenter(canvas.clientWidth, canvas.clientHeight, navigationInsets)
+    const centerGround = visibleCenter ? groundAt(new Cartesian2(visibleCenter.x, visibleCenter.y)) : undefined
+    const centerPosition = centerGround ? Cartographic.fromCartesian(centerGround) : undefined
+    const center = centerPosition ? { longitude: CesiumMath.toDegrees(centerPosition.longitude), latitude: CesiumMath.toDegrees(centerPosition.latitude), height: centerPosition.height } : null
     const y = canvas.clientHeight - 40
     const first = groundAt(new Cartesian2(canvas.clientWidth / 2 - 50, y))
     const second = groundAt(new Cartesian2(canvas.clientWidth / 2 + 50, y))
@@ -695,7 +700,7 @@ export function createMapController(
       const start = Cartographic.fromCartesian(first), end = Cartographic.fromCartesian(second)
       scale = scaleForDistance(new EllipsoidGeodesic(start, end, viewer.scene.globe.ellipsoid).surfaceDistance)
     }
-    onNavigation({ camera: getCamera(), pointer, scale }, settled && !displayFlight)
+    onNavigation({ camera: getCamera(), pointer, center, scale }, settled && !displayFlight)
   }
   let displayFlight: symbol | undefined
   let zoomMotion: { position: Cartesian3; updated?: number; adjusting: boolean } | undefined
@@ -2215,6 +2220,7 @@ export function createMapController(
       } else if (homeRegion) goToRegion(homeRegion)
     },
     getCamera,
+    setNavigationInsets(insets: NavigationInsets) { navigationInsets = { ...insets }; navigation() },
     getDisplayRegionExtent,
     getWeatherPoint,
     setCamera,

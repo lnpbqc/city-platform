@@ -85,10 +85,11 @@ onBeforeUnmount(() => { alive = false })
 </template>
 
 <style scoped>
-.workspace-bookmarks-trigger { display: flex; align-items: center; gap: 6px; color: var(--blue); font-size: 11px; white-space: nowrap; }
+.workspace-bookmarks-trigger { display: flex; align-items: center; min-width: 44px; min-height: 44px; gap: 6px; color: var(--blue); font-size: 14px; white-space: nowrap; }
 .workspace-bookmarks-panel { position: absolute; top: 74px; right: 24px; width: 360px; max-width: calc(100vw - 32px); max-height: calc(100svh - 95px); overflow-y: auto; padding: 20px; font-size: 12px; }
 header, .actions, .list-heading, .record-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 h2 { font-size: 16px; margin: 0; } p { color: #718195; line-height: 1.7; } label { display: grid; gap: 7px; } input, textarea { width: 100%; border: 1px solid var(--line); padding: 9px; border-radius: 5px; background: white; color: #253c55; } textarea { margin-top: 8px; height: 70px; font-size: 10px; }
 .actions { margin-top: 10px; justify-content: flex-start; } .actions button { font-size: 11px; padding: 8px 12px; } .list-heading { margin-top: 24px; padding-bottom: 10px; border-bottom: 1px solid var(--line); } ul { padding: 0; list-style: none; } li { padding: 10px 0; border-bottom: 1px solid var(--line); } .open-bookmark { text-align: left; overflow-wrap: anywhere; } small { display: block; font-size: 10px; color: #8290a0; margin-top: 5px; } .record-actions { justify-content: flex-end; color: var(--blue); font-size: 10px; } .error { color: #b94e46; overflow-wrap: anywhere; }
-@media (max-width: 600px) { .workspace-bookmarks-trigger span { display: none; } .workspace-bookmarks-panel { top: 68px; right: 16px; } }
+@media (max-width: 767px) { .workspace-bookmarks-trigger span { display: none; } }
+@media (max-width: 600px) { .workspace-bookmarks-panel { top: 68px; right: 16px; } }
 </style>

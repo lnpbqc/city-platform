@@ -554,7 +554,7 @@ test('display-region flights use an eased arc and settle only at the exact saved
   assert.ok(events.slice(1).every(event => !event.settled))
   viewer.camera.setView(options)
   options.complete()
-  assert.deepEqual(events.at(-1), { value: { camera: far, pointer: null, scale: null }, settled: true })
+  assert.deepEqual(events.at(-1), { value: { camera: far, pointer: null, center: null, scale: null }, settled: true })
 
   const near = { ...far, longitude: 114.2001, scene_mode: '2d' }
   assert.equal(controller.flyToCamera(near), true)
@@ -1918,6 +1918,24 @@ test('camera restore preserves 2D mode and north reset preserves position and pi
   controller.destroy()
 })
 
+test('navigation falls back to the uncovered map center after the pointer leaves', () => {
+  const readings = []
+  const { controller } = setup('geojson', () => {}, value => readings.push(value))
+  viewer.scene.globe.pick = ({ center }) => ({ longitude: center.x / 100, latitude: center.y / 100, height: 0 })
+  controller.setNavigationInsets({ left: 200 })
+  assert.deepEqual(readings.at(-1).center, { longitude: 5, latitude: 3, height: 0 })
+  assert.equal(readings.at(-1).pointer, null)
+  move({ endPosition: new Cartesian2(100, 100) })
+  assert.deepEqual(readings.at(-1).pointer, { longitude: 1, latitude: 1, height: 0 })
+  viewer.canvasEvents.get('mouseleave')()
+  assert.equal(readings.at(-1).pointer, null)
+  assert.deepEqual(readings.at(-1).center, { longitude: 5, latitude: 3, height: 0 })
+  viewer.scene.globe.pick = () => undefined
+  controller.setNavigationInsets({})
+  assert.equal(readings.at(-1).center, null)
+  controller.destroy()
+})
+
 test('pointer readings prefer visible depth, use measured ground scale and clear over sky', () => {
   const readings = []
   const { controller } = setup('geojson', () => {}, value => readings.push(value))
@@ -1933,6 +1951,27 @@ test('pointer readings prefer visible depth, use measured ground scale and clear
   assert.equal(readings.at(-1).pointer, null)
   assert.equal(readings.at(-1).scale, null)
   controller.destroy()
+})
+
+test('a stationary pointer has no idle timeout and a sky pointer keeps the current ground center', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_790_000_000_000 })
+  const readings = []
+  const { controller } = setup('geojson', () => {}, value => readings.push(value))
+  let offset = 0
+  viewer.scene.globe.pick = ({ center }) => center.x < 50 ? undefined
+    : { longitude: offset + center.x / 100, latitude: center.y / 100, height: 0 }
+  controller.setNavigationInsets({ left: 200, bottom: 100 })
+  move({ endPosition: new Cartesian2(100, 100) })
+  t.mock.timers.tick(60_000)
+  assert.deepEqual(readings.at(-1).pointer, { longitude: 1, latitude: 1, height: 0 })
+  move({ endPosition: new Cartesian2(10, 10) })
+  assert.equal(readings.at(-1).pointer, null)
+  assert.deepEqual(readings.at(-1).center, { longitude: 5, latitude: 2.5, height: 0 })
+  offset = 10
+  viewer.camera.changed.fire()
+  assert.deepEqual(readings.at(-1).center, { longitude: 15, latitude: 2.5, height: 0 })
+  controller.destroy()
+  assert.equal(viewer.canvasEvents.has('mouseleave'), false)
 })
 
 test('restored camera is not overwritten by a late asset and flight completion publishes settled state', async () => {

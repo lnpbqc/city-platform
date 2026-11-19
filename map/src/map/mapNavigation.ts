@@ -13,7 +13,15 @@ export interface MapView { camera: CameraState; region: RegionTarget }
 export interface NavigationReading {
   camera: CameraState
   pointer: { longitude: number; latitude: number; height: number } | null
+  center?: { longitude: number; latitude: number; height: number } | null
   scale: { label: string; pixels: number } | null
+}
+export type NavigationInsets = Partial<{ left: number; right: number; top: number; bottom: number }>
+
+export function visibleMapCenter(width: number, height: number, insets: NavigationInsets = {}) {
+  const left = Math.max(0, insets.left ?? 0), right = width - Math.max(0, insets.right ?? 0)
+  const top = Math.max(0, insets.top ?? 0), bottom = height - Math.max(0, insets.bottom ?? 0)
+  return right > left && bottom > top ? { x: (left + right) / 2, y: (top + bottom) / 2 } : null
 }
 const storageKey = 'city.map.view.v1'
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)

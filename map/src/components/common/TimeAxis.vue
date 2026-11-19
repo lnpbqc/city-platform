@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiTooltip from './UiTooltip.vue'
 import { computed, ref, useId } from 'vue'
 import { Play, Pause, SkipBack, SkipForward, RotateCcw, RefreshCw, ChevronDown, ChevronUp } from '@lucide/vue'
 import type { TimeResolution } from '../../temporal/temporalTypes'
@@ -33,9 +34,9 @@ function select(event: Event) { const value = localTime((event.target as HTMLInp
     <div class="time-bar">
       <div class="time-current"><span>{{ label ?? '专题时间' }}</span><output aria-label="当前专题时间">{{ time ? timeLabel(time, resolution).slice(0, resolution === 'day' ? 10 : 16) : '暂无时次' }}</output><small>北京时间 · {{ resolution === 'day' ? '日均' : '小时' }}</small></div>
       <div class="time-transport">
-        <button aria-label="上一个专题时次" :disabled="!times.length || position <= 0" @click="emit('step', -1)"><SkipBack :size="15" /></button>
+        <UiTooltip :text="!times.length ? '暂无可用时次' : position <= 0 ? '已是第一个时次' : '上一个专题时次'"><button aria-label="上一个专题时次" :disabled="!times.length || position <= 0" @click="emit('step', -1)"><SkipBack :size="15" /></button></UiTooltip>
         <button :disabled="!maximum" :aria-label="playing ? '暂停时间轴' : '播放时间轴'" @click="playing ? emit('pause') : emit('play')"><Pause v-if="playing" :size="16" /><Play v-else :size="16" /></button>
-        <button aria-label="下一个专题时次" :disabled="!times.length || position >= maximum" @click="emit('step', 1)"><SkipForward :size="15" /></button>
+        <UiTooltip :text="!times.length ? '暂无可用时次' : position >= maximum ? '已是最后一个时次' : '下一个专题时次'"><button aria-label="下一个专题时次" :disabled="!times.length || position >= maximum" @click="emit('step', 1)"><SkipForward :size="15" /></button></UiTooltip>
       </div>
       <input class="time-progress" type="range" min="0" :max="maximum || 1" step="1" :value="position" :disabled="!times.length" aria-label="专题时间进度" @input="emit('seek', Number(($event.target as HTMLInputElement).value))">
       <button class="time-expand" :aria-expanded="expanded" :aria-controls="detailsId" :aria-label="expanded ? '收起时间设置' : '展开时间设置'" @click="expanded = !expanded"><ChevronUp v-if="expanded" :size="15" /><ChevronDown v-else :size="15" /><span>{{ expanded ? '收起' : '展开' }}</span></button>
@@ -48,8 +49,8 @@ function select(event: Event) { const value = localTime((event.target as HTMLInp
         <label>时间<input :value="inputTime" type="datetime-local" step="3600" aria-label="选择专题北京时间" :disabled="!times.length" @change="select"></label>
         <label>时次<select :value="resolution" aria-label="专题时次分辨率" @change="emit('update:resolution', ($event.target as HTMLSelectElement).value as TimeResolution)"><option value="hour">逐小时</option><option value="day">逐日</option></select></label>
         <label>速率<select :value="rate" aria-label="时间轴速率" @change="emit('update:rate', Number(($event.target as HTMLSelectElement).value))"><option v-for="speed in [1, 2, 5]" :key="speed" :value="speed">{{ speed }}×</option></select></label>
-        <button aria-label="复位时间轴" :disabled="!times.length" @click="emit('seek', 0)"><RotateCcw :size="14" /></button>
-        <button :disabled="metadataLoading || loading" aria-label="刷新时序数据" @click="emit('refresh')"><RefreshCw :size="14" /></button>
+        <UiTooltip :text="!times.length ? '暂无可用时次，无法复位' : '复位时间轴'"><button aria-label="复位时间轴" :disabled="!times.length" @click="emit('seek', 0)"><RotateCcw :size="14" /></button></UiTooltip>
+        <UiTooltip :text="metadataLoading || loading ? '正在读取时序数据，请稍候' : '刷新时序数据'"><button :disabled="metadataLoading || loading" aria-label="刷新时序数据" @click="emit('refresh')"><RefreshCw :size="14" /></button></UiTooltip>
       </div>
       <p class="time-message">范围：{{ times[0] ? timeLabel(times[0], resolution) : '暂无时次' }} — {{ times.at(-1) ? timeLabel(times.at(-1)!, resolution) : '暂无时次' }}</p>
       <p v-if="!counts.length" class="time-message">加入时序专题后显示可用时间范围。</p>

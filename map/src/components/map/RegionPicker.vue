@@ -31,6 +31,7 @@ const emit = defineEmits<{
   select: [region: RegionTarget]
   retryBoundary: []
   open: []
+  'update:open': [value: boolean]
 }>()
 const open = ref(false)
 const activeTab = ref<'display' | 'administrative'>('display')
@@ -107,6 +108,7 @@ function navigateTabs(event: KeyboardEvent) {
 function toggle() {
   if (open.value) { close(); return }
   open.value = true
+  emit('update:open', true)
   query.value = ''
   synchronize()
   activateTab('display')
@@ -119,6 +121,7 @@ function choose(target: RegionTarget) {
 function close() {
   if (!open.value) return
   open.value = false
+  emit('update:open', false)
   void nextTick(() => trigger.value?.focus())
 }
 function locate(id: string) {

@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   Database,
   FolderOpen,
-  Plus,
+  Upload,
+  Pencil,
+  Trash2,
   RefreshCw,
   Search,
   FileJson,
@@ -146,10 +148,17 @@ const statusText: Record<AssetRecord['status'], string> = {
 }
 function bytes(value: number | null) {
   if (value === null) return '未知'
-  if (value < 1024) return `${value} B`
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / 1024 ** 2).toFixed(1)} MB`
+  const unit = value > 0 ? Math.min(4, Math.floor(Math.log(value) / Math.log(1024))) : 0
+  return `${unit === 0 ? value : (value / 1024 ** unit).toFixed(1)} ${['B', 'KB', 'MB', 'GB', 'TB'][unit]}`
 }
+const count = (value: number) => value.toLocaleString('zh-CN')
+const assetTypeNames: Record<string, string> = { geojson: 'GeoJSON', '3dtiles': '3D Tiles', network: '路网', unknown: '未知类型' }
+const overviewMetrics = computed(() => [
+  { label: '资产数量', value: stats.value ? count(stats.value.asset_count) : '—', unit: '份' },
+  { label: '对象数量', value: stats.value ? count(stats.value.object_count) : '—', unit: '个' },
+  { label: '运行次数', value: stats.value ? count(stats.value.run_count) : '—', unit: '次' },
+  { label: '源资产容量', value: stats.value ? bytes(stats.value.total_byte_size).split(' ')[0] : '—', unit: stats.value ? bytes(stats.value.total_byte_size).split(' ')[1] : '' },
+])
 function date(value?: string | null) {
   if (!value) return '未知'
   const parsed = new Date(value)
@@ -219,40 +228,35 @@ watch(
           <p>管理图层登记与本机保存的完整数据集，按需加入地图。</p>
         </div>
         <button class="primary-button" @click="emit('add')">
-          <Plus :size="16" />上传 / 登记数据
+          <Upload :size="16" aria-hidden="true" />上传 / 登记数据
         </button>
       </header>
-      <div v-if="statsLoading" class="asset-stats" role="status">正在读取综合统计…</div>
-      <div v-else-if="statsError" class="asset-stats" role="alert">
+      <section class="asset-stats stats-overview" aria-label="资产统计" :aria-busy="statsLoading">
+        <div class="stats-metrics">
+          <div v-for="(metric, index) in overviewMetrics" :key="metric.label" class="stat-card">
+            <h2>{{ metric.label }}</h2>
+            <p class="stat-value"><strong>{{ metric.value }}</strong><span>{{ metric.unit }}</span></p>
+            <p v-if="index === 0" class="stat-caption">{{ stats ? `近 7 天新增 ${count(stats.assets_added_last_7_days)} 份` : '近 7 天新增 — 份' }}</p>
+          </div>
+        </div>
+        <p v-if="statsLoading" class="stats-message" role="status">正在读取综合统计…</p>
+        <div v-else-if="statsError" class="stats-message stats-error" role="alert">
         <strong>{{ statsError.startsWith('无权限：') ? '无权限查看综合统计' : '综合统计加载失败' }}</strong>
         <span>{{ statsError }}</span><button class="text-button" @click="refreshStats">重试统计</button>
-      </div>
-      <div v-else-if="stats" class="asset-stats" aria-label="资产统计">
-        <span
-          >资产 <strong>{{ stats.asset_count }}</strong> 份</span
-        >
-        <span>对象 <strong>{{ stats.object_count }}</strong> 个</span>
-        <span>运行 <strong>{{ stats.run_count }}</strong> 次</span>
-        <span
-          >源资产容量 <strong>{{ bytes(stats.total_byte_size) }}</strong></span
-        >
-        <template v-if="stats.storage">
-          <span>显示产物 <strong>{{ bytes(stats.storage.render_bytes) }}</strong></span>
-          <span>数据库（含索引）<strong>{{ bytes(stats.storage.database_bytes) }}</strong></span>
-          <span>临时空间 <strong>{{ bytes(stats.storage.temporary_bytes) }}</strong></span>
-        </template>
-        <span
-          >最近 7 天新增
-          <strong>{{ stats.assets_added_last_7_days }}</strong> 份</span
-        >
-        <span
-          >类型：{{
-            Object.entries(stats.assets_by_type)
-              .map(([type, count]) => `${type} ${count}`)
-              .join(' · ') || '无'
-          }}</span
-        >
-      </div>
+        </div>
+        <details v-else-if="stats" class="stats-details">
+          <summary>查看明细</summary>
+          <div class="stats-breakdowns">
+            <section><h3>资产类型</h3><dl class="type-breakdown"><div v-for="(amount, type) in stats.assets_by_type" :key="type"><dt>{{ assetTypeNames[type] ?? type }}</dt><dd>{{ count(amount) }} 份</dd></div></dl><p v-if="!Object.keys(stats.assets_by_type).length" class="stat-caption">暂无资产</p></section>
+            <section class="storage-card"><h3>空间明细</h3><dl>
+              <div><dt>源资产容量</dt><dd>{{ bytes(stats.total_byte_size) }}</dd></div>
+              <div><dt>显示产物</dt><dd>{{ stats.storage ? bytes(stats.storage.render_bytes) : '暂不可用' }}</dd></div>
+              <div><dt>数据库（含索引）</dt><dd>{{ stats.storage ? bytes(stats.storage.database_bytes) : '暂不可用' }}</dd></div>
+              <div><dt>临时空间</dt><dd>{{ stats.storage ? bytes(stats.storage.temporary_bytes) : '暂不可用' }}</dd></div>
+            </dl></section>
+          </div>
+        </details>
+      </section>
 
       <section class="manager-surface">
         <div
@@ -292,22 +296,22 @@ watch(
         </div>
         <div v-if="tab !== 'scenes'" class="table-tools">
           <label class="search-field"
-            ><Search :size="15" /><input
+            ><span>搜索</span><Search :size="15" /><input
               v-model="query"
               aria-label="搜索数据"
               :placeholder="
                 tab === 'records' ? '搜索名称或分类' : '搜索文件名称或资产 ID'
               "
           /></label>
-          <select v-model="kind" aria-label="筛选数据类型">
+          <label class="filter-field">类型<select v-model="kind" aria-label="筛选数据类型">
             <option value="all">全部类型</option>
             <option value="geojson">GeoJSON</option>
             <option value="3dtiles">3D Tiles</option>
             <option v-if="tab === 'assets'" value="network">路网</option>
             <option v-if="tab === 'assets'" value="unknown">未知类型</option>
-          </select>
+          </select></label>
           <template v-if="tab === 'assets'">
-            <select v-model="status" aria-label="筛选资产状态">
+            <label class="filter-field">状态<select v-model="status" aria-label="筛选资产状态">
               <option value="">全部状态</option>
               <option
                 v-for="(label, value) in statusText"
@@ -316,12 +320,12 @@ watch(
               >
                 {{ label }}
               </option>
-            </select>
-            <select v-model="sort" aria-label="资产排序">
+            </select></label>
+            <label class="filter-field">排序<select v-model="sort" aria-label="资产排序">
               <option value="">时间从新到旧</option>
               <option value="-byte_size">体积从大到小</option>
               <option value="byte_size">体积从小到大</option>
-            </select>
+            </select></label>
             <label class="date-filter"
               >起始时间<input
                 v-model="from"
@@ -335,15 +339,14 @@ watch(
                 aria-label="资产结束时间"
             /></label>
           </template>
-          <select
-            v-if="tab === 'records'"
+          <label v-if="tab === 'records'" class="filter-field">来源<select
             v-model="source"
             aria-label="筛选数据来源"
           >
             <option value="all">全部来源</option>
             <option value="local">本地文件</option>
             <option value="external">外部地址</option>
-          </select>
+          </select></label>
           <button
             v-if="tab === 'assets'"
             class="secondary-button scan-button"
@@ -356,12 +359,12 @@ watch(
             />{{ scanning ? '正在扫描' : '扫描已有文件' }}
           </button>
           <button
-            class="icon-button refresh-button"
+            class="secondary-button refresh-button"
             aria-label="刷新数据列表"
             :disabled="loading || scanning"
             @click="refreshAll"
           >
-            <RefreshCw :size="16" :class="{ spin: loading }" />
+            <RefreshCw :size="16" :class="{ spin: loading }" aria-hidden="true" />刷新
           </button>
         </div>
         <div
@@ -419,7 +422,7 @@ watch(
               添加第一条登记
             </button>
           </div>
-          <div v-else class="table-scroll">
+          <div v-else class="table-scroll" tabindex="0" aria-label="图层登记表格，可横向滚动">
             <table class="record-table">
               <thead>
                 <tr>
@@ -485,13 +488,13 @@ watch(
                             : '加入地图'
                         }}<ArrowUpRight :size="13" /></button
                       ><button class="text-button" @click="emit('edit', layer)">
-                        编辑</button
+                        <Pencil :size="14" aria-hidden="true" />编辑</button
                       ><button
                         class="text-button danger-text"
                         :disabled="!!deleting"
                         @click="emit('deleteRecord', layer)"
                       >
-                        {{ deleting === layer.id ? '正在删除' : '删除登记' }}
+                        <Trash2 :size="14" aria-hidden="true" />{{ deleting === layer.id ? '正在删除' : '删除登记' }}
                       </button>
                     </div>
                   </td>
@@ -536,7 +539,7 @@ watch(
               }}
             </p>
           </div>
-          <div v-else class="table-scroll">
+          <div v-else class="table-scroll" tabindex="0" aria-label="资产目录表格，可横向滚动">
             <table class="asset-table">
               <thead>
                 <tr>
@@ -630,7 +633,7 @@ watch(
                         "
                         @click="askDelete(asset)"
                       >
-                        {{
+                        <Trash2 :size="14" aria-hidden="true" />{{
                           asset.status === 'delete_error' ||
                           asset.status === 'deleting'
                             ? '重试删除'
@@ -735,19 +738,21 @@ watch(
   gap: 22px;
   flex-wrap: wrap;
   margin: 0 0 18px;
-  font-size: 12px;
-  color: #65788e;
+  font-size: 14px;
+  color: #475569;
 }
 .asset-stats strong {
-  color: #334961;
+  color: #1e293b;
   font-weight: 550;
 }
 .date-filter {
   display: flex;
   gap: 6px;
   align-items: center;
-  font-size: 11px;
-  color: #65778f;
+  font-size: 12px;
+  color: #475569;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .date-filter input {
   border: 1px solid #dfe6ee;
@@ -758,13 +763,14 @@ watch(
 }
 .pagination, :deep(.scene-manager .pagination) {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   align-items: center;
   justify-content: flex-end;
   padding: 18px 24px;
   border-top: 1px solid var(--line);
-  font-size: 12px;
-  color: #65788e;
+  font-size: 14px;
+  color: #475569;
 }
 .pagination button, :deep(.scene-manager .pagination button) {
   color: var(--blue);
@@ -772,7 +778,10 @@ watch(
 .data-manager {
   position: absolute;
   inset: 64px 0 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: #1e293b;
+  font-size: 14px;
   background: #f5f7fa;
 }
 .manager-content {
@@ -794,8 +803,8 @@ h1 {
   margin-top: 7px;
 }
 .manager-header p {
-  color: #8492a4;
-  font-size: 12px;
+  color: #475569;
+  font-size: 14px;
   line-height: 1.8;
   margin-top: 10px;
 }
@@ -808,15 +817,16 @@ h1 {
 }
 .manager-tabs {
   display: flex;
-  gap: 28px;
+  gap: 24px;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--line);
   padding: 0 24px;
 }
 .manager-tabs > button {
   height: 59px;
   gap: 8px;
-  font-size: 13px;
-  color: #7d8ca0;
+  font-size: 14px;
+  color: #475569;
   position: relative;
 }
 .manager-tabs > button.active {
@@ -834,8 +844,8 @@ h1 {
   background: #f0f3f8;
   border-radius: 4px;
   padding: 2px 6px;
-  font-size: 10px;
-  color: #8b9aaf;
+  font-size: 12px;
+  color: #475569;
 }
 .table-tools, :deep(.scene-manager .table-tools) {
   padding: 22px 24px 15px;
@@ -851,9 +861,11 @@ h1 {
   border: 1px solid #dfe6ee;
   border-radius: 5px;
   padding: 0 11px;
-  width: 280px;
-  height: 36px;
-  color: #91a0b4;
+  width: 320px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  color: #475569;
 }
 .search-field:focus-within, :deep(.scene-manager .search-field:focus-within) {
   border-color: var(--blue);
@@ -863,30 +875,30 @@ h1 {
   outline: 0;
   min-width: 0;
   flex: 1;
-  font-size: 12px;
+  font-size: 14px;
   background: transparent;
-  color: #41556d;
+  color: #1e293b;
 }
 .search-field input::placeholder, :deep(.scene-manager .search-field input::placeholder) {
-  color: #9da9b8;
+  color: #475569;
 }
 .table-tools select {
   border: 1px solid #dfe6ee;
   background: white;
   border-radius: 5px;
-  height: 36px;
+  min-height: 40px;
   padding: 0 28px 0 10px;
-  color: #65778f;
-  font-size: 12px;
+  color: #475569;
+  font-size: 14px;
 }
 .secondary-button, :deep(.scene-manager .secondary-button) {
   gap: 7px;
-  font-size: 12px;
+  font-size: 14px;
   border: 1px solid #dce4ee;
   border-radius: 5px;
   padding: 9px 12px;
   background: white;
-  color: #5e7291;
+  color: #475569;
   white-space: nowrap;
 }
 .scan-button {
@@ -902,7 +914,7 @@ h1 {
   margin: 0 24px 14px;
   border-radius: 5px;
   padding: 10px 13px;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.8;
 }
 .notice.error {
@@ -923,28 +935,29 @@ h1 {
   justify-content: space-between;
   align-items: baseline;
   padding: 0 24px 17px;
-  font-size: 11px;
-  color: #8b9aad;
+  font-size: 12px;
+  color: #475569;
 }
 .table-description > span, :deep(.scene-manager .table-description > span) {
-  color: #65788e;
+  color: #475569;
 }
 .table-description > p, :deep(.scene-manager .table-description > p) {
   text-align: right;
   line-height: 1.7;
 }
 .table-scroll {
+  max-width: 100%;
   overflow-x: auto;
 }
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 14px;
 }
 th {
   background: #f8fafd;
-  font-size: 11px;
-  color: #8695a8;
+  font-size: 14px;
+  color: #475569;
   font-weight: 500;
   text-align: left;
   padding: 13px 18px;
@@ -956,7 +969,7 @@ td {
   padding: 20px 18px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
-  color: #5f7289;
+  color: #475569;
 }
 th:first-child,
 td:first-child {
@@ -974,15 +987,15 @@ tbody tr:hover {
 }
 td strong {
   display: block;
-  color: #334961;
-  font-size: 13px;
+  color: #1e293b;
+  font-size: 14px;
   font-weight: 500;
   overflow-wrap: anywhere;
 }
 td small {
   display: block;
-  color: #94a1b3;
-  font-size: 10px;
+  color: #475569;
+  font-size: 12px;
   margin-top: 6px;
   line-height: 1.6;
 }
@@ -1007,34 +1020,34 @@ td small {
   max-width: 300px;
 }
 .source-badge {
-  color: #7a8fa9;
-  font-size: 10px;
+  color: #475569;
+  font-size: 12px;
   background: #f0f4f8;
   padding: 2px 5px;
   border-radius: 3px;
 }
 .data-url {
-  font-size: 10px;
+  font-size: 12px;
   display: block;
   margin-top: 7px;
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #8e9daf;
+  color: #475569;
 }
 .date-cell {
   min-width: 140px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.7;
-  color: #8796a9;
+  color: #475569;
 }
 .nowrap {
   white-space: nowrap;
 }
 .status {
-  font-size: 11px;
-  color: #98a3b1;
+  font-size: 12px;
+  color: #475569;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1048,13 +1061,13 @@ td small {
   background: #a8b3c1;
 }
 .status.ready {
-  color: #5b9a85;
+  color: #187351;
 }
 .status.ready i {
   background: #69a68f;
 }
 .status.failed {
-  color: #c26c60;
+  color: #b42318;
 }
 .status.failed i {
   background: #cd7b6c;
@@ -1062,7 +1075,7 @@ td small {
 .row-error {
   max-width: 150px;
   overflow-wrap: anywhere;
-  color: #bd756c;
+  color: #b42318;
 }
 .row-actions {
   display: flex;
@@ -1072,14 +1085,14 @@ td small {
   min-width: 173px;
 }
 .text-button {
-  font-size: 11px;
-  color: #4d7fc6;
+  font-size: 12px;
+  color: #1d4ed8;
   padding: 4px 0;
   gap: 3px;
   white-space: nowrap;
 }
 .danger-text {
-  color: #bd756c;
+  color: #b42318;
 }
 .danger-text:hover:not(:disabled) {
   color: #b63e36;
@@ -1091,17 +1104,17 @@ td small {
   min-width: 220px;
 }
 .asset-name strong {
-  font-size: 12px;
+  font-size: 14px;
   max-width: 270px;
 }
 .normal-weight {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 400;
 }
 .reference-button {
   display: block;
-  font-size: 11px;
-  color: #4d7fc6;
+  font-size: 12px;
+  color: #1d4ed8;
   padding: 0;
   margin-bottom: 7px;
   white-space: nowrap;
@@ -1114,16 +1127,16 @@ td small {
   justify-content: center;
   flex-direction: column;
   gap: 15px;
-  color: #9aabc1;
+  color: #475569;
 }
 .empty-state strong, :deep(.scene-manager .empty-state strong) {
-  color: #627790;
+  color: #475569;
   font-size: 14px;
   font-weight: 500;
 }
 .empty-state p, :deep(.scene-manager .empty-state p) {
-  font-size: 12px;
-  color: #9aa7b7;
+  font-size: 14px;
+  color: #475569;
   line-height: 1.8;
   text-align: center;
 }
@@ -1131,8 +1144,8 @@ td small {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10px;
-  color: #95a2b3;
+  font-size: 12px;
+  color: #475569;
   margin-top: 18px;
   line-height: 1.8;
 }
@@ -1144,18 +1157,18 @@ td small {
   text-align: right;
 }
 .delete-name {
-  color: #334961;
+  color: #1e293b;
   font-weight: 550;
   margin-bottom: 10px;
 }
 .irreversible {
   margin-top: 10px;
   color: #b45e54;
-  font-size: 12px;
+  font-size: 14px;
 }
 .conflict-records {
   margin-top: 8px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .conflict-records ul {
   padding-left: 18px;
@@ -1198,7 +1211,7 @@ td small {
   }
   .manager-tabs {
     padding: 0 16px;
-    gap: 25px;
+    gap: 12px;
   }
   .table-tools, :deep(.scene-manager .table-tools) {
     padding: 16px;
@@ -1234,5 +1247,61 @@ td small {
     text-align: left;
     width: 100%;
   }
+}
+
+.stats-overview {
+  display: block;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.stats-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stat-card {
+  min-width: 0;
+  padding: 20px 24px;
+  overflow-wrap: anywhere;
+}
+.stat-card + .stat-card { border-left: 1px solid var(--line); }
+.stat-card h2 { margin: 0; font-size: 14px; color: #475569; font-weight: 500; }
+.stat-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 8px 0 0; }
+.stat-value strong { font-size: 28px; font-weight: 600; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.stat-value > span { font-size: 12px; color: #475569; }
+.stat-caption { min-height: 20px; margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: #475569; }
+.stats-details, .stats-message { border-top: 1px solid var(--line); padding: 12px 24px; }
+.stats-details > summary { width: fit-content; cursor: pointer; font-size: 14px; color: var(--blue); line-height: 24px; }
+.stats-details > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.stats-breakdowns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding-top: 16px; }
+.stats-breakdowns h3 { margin: 0; font-size: 14px; }
+.stats-breakdowns dl { display: grid; gap: 12px; margin: 12px 0 0; }
+.stats-breakdowns dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.stats-breakdowns dt { color: #475569; font-size: 12px; }
+.stats-breakdowns dd { margin: 0; color: #1e293b; font-size: 14px; font-variant-numeric: tabular-nums; }
+.stats-message { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; min-height: 49px; }
+.stats-error { color: #b42318; }
+.filter-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #475569; min-width: 0; }
+.date-filter input { min-width: 0; max-width: 100%; font-size: 14px; }
+.table-tools { align-items: flex-end; }
+.search-field { align-self: flex-end; }
+.search-field > span { font-size: 12px; color: #475569; }
+.table-tools > button { min-height: 40px; }
+.text-button { min-height: 36px; font-size: 14px; }
+.table-tools input, .table-tools select { color: #1e293b; }
+.manager-content, .manager-surface { min-width: 0; }
+button, tbody tr { transition: background-color 150ms ease, color 150ms ease; }
+@media (max-width: 1023px) {
+  .stats-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-card:nth-child(3) { border-left: 0; }
+  .stat-card:nth-child(n+3) { border-top: 1px solid var(--line); }
+}
+@media (max-width: 600px) {
+  .stat-card { padding: 16px; }
+  .stat-value strong { font-size: 24px; }
+  .stats-details, .stats-message { padding: 12px 16px; }
+  .stats-breakdowns { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .filter-field { flex: 1 1 120px; }
+  .date-filter { flex: 1 1 220px; }
+  .date-filter input { width: 100%; }
+  .manager-tabs > button { font-size: 14px; }
 }
 </style>

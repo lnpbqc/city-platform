@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiTooltip from '../common/UiTooltip.vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import { X, Scan, Pentagon, Search, ArrowLeft } from '@lucide/vue'
 import FeatureInspector from './FeatureInspector.vue'
@@ -51,7 +52,7 @@ watch(() => props.selection ? `${props.selection.layerId}:${props.selection.obje
 
 <template>
   <section class="objects panel" aria-label="对象查询面板">
-    <header><h2>{{ selection ? '对象详情' : '对象查询' }}</h2><button class="icon-button" aria-label="关闭对象查询" @click="emit('close')"><X :size="17" /></button></header>
+    <header><h2>{{ selection ? '对象详情' : '对象查询' }}</h2><UiTooltip text="关闭对象查询"><button class="icon-button" aria-label="关闭对象查询" @click="emit('close')"><X :size="17" /></button></UiTooltip></header>
     <div v-show="!selection" ref="results" class="object-results" tabindex="-1">
       <p class="object-hint">点击列表或地图对象查看详情。</p>
       <label class="object-layer">查询图层<select :value="layerId" aria-label="对象查询图层" @change="emit('layer', ($event.target as HTMLSelectElement).value)">
@@ -59,8 +60,8 @@ watch(() => props.selection ? `${props.selection.layerId}:${props.selection.obje
         <option v-for="layer in layers" :key="layer.id" :value="layer.id">{{ layer.name }}</option>
       </select></label>
       <form class="object-filters" @submit.prevent="emit('apply')">
-        <input :value="q" aria-label="对象关键词" placeholder="名称、ID或属性" @input="emit('update:q', ($event.target as HTMLInputElement).value)" />
-        <input :value="type" aria-label="对象类型筛选" placeholder="类型，例如 building" @input="emit('update:type', ($event.target as HTMLInputElement).value)" />
+        <label class="query-field">关键词<input :value="q" aria-label="对象关键词" placeholder="名称、ID或属性" @input="emit('update:q', ($event.target as HTMLInputElement).value)" /></label>
+        <label class="query-field">类型<input :value="type" aria-label="对象类型筛选" placeholder="例如 building" @input="emit('update:type', ($event.target as HTMLInputElement).value)" /></label>
         <button type="submit" :disabled="!layerId || loading"><Search :size="13" />查询</button>
       </form>
       <div class="selection-tools">

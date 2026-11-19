@@ -45,6 +45,20 @@ function setup(t, options = {}) {
   return { app, root, values, listeners, calls, annotationCalls, trigger, card, checkbox }
 }
 
+test('collapsed basemap keeps the selected thumbnail in front and the other card stacked behind', async t => {
+  const ctx = setup(t)
+  assert.notEqual(ctx.card('imagery').parent.props.hidden, true)
+  assert.match(ctx.card('imagery').parent.props.class, /selected/)
+  assert.match(ctx.card('vector').parent.props.class, /behind/)
+  ctx.trigger().props.onClick()
+  await nextTick()
+  assert.equal(ctx.trigger().props['aria-expanded'], true)
+  await ctx.card('vector').props.onClick()
+  await nextTick()
+  assert.match(ctx.card('vector').parent.props.class, /selected/)
+  assert.match(ctx.card('imagery').parent.props.class, /behind/)
+})
+
 test('cards expand by hover or click, select by button activation, close by Escape or outside press', async t => {
   const ctx = setup(t)
   const container = ctx.root.children[0]

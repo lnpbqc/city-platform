@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Layers, LoaderCircle, RefreshCw, Search } from '@lucide/vue'
+import { Layers, LoaderCircle, RefreshCw, Search, Trash2 } from '@lucide/vue'
 import { deleteScene, getScenes } from '../../api/api'
 import type { SceneRecord } from '../../simulation/simulationTypes'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
@@ -80,7 +80,7 @@ onBeforeUnmount(() => { alive = false; request?.abort() })
 <template>
   <section id="scene-panel" class="scene-manager" role="tabpanel" aria-labelledby="scene-tab">
     <form class="table-tools" @submit.prevent="search">
-      <label class="search-field"><Search :size="15" /><input v-model="input" aria-label="搜索场景" placeholder="名称或完整场景 ID" maxlength="120"></label>
+      <label class="search-field"><span>搜索</span><Search :size="15" /><input v-model="input" aria-label="搜索场景" placeholder="名称或完整场景 ID" maxlength="120"></label>
       <button class="secondary-button" type="submit">搜索</button>
       <button class="secondary-button refresh-button" type="button" @click="load"><RefreshCw :size="14" />刷新场景</button>
     </form>
@@ -92,7 +92,7 @@ onBeforeUnmount(() => { alive = false; request?.abort() })
       <li v-for="scene in scenes" :key="scene.id">
         <div class="scene-summary">
           <div><h3>{{ scene.name }}</h3><p>{{ scene.id }} · v{{ scene.version }}</p><p>更新于 {{ dateFormat.format(new Date(scene.updated_at)) }} · 北京时间</p></div>
-          <div class="scene-actions"><button class="text-button" @click="emit('open', scene)">打开场景</button><button class="text-button" @click="ask(scene)">删除</button></div>
+          <div class="scene-actions"><button class="text-button" @click="emit('open', scene)">打开场景</button><button class="text-button danger-text" @click="ask(scene)"><Trash2 :size="14" aria-hidden="true" />删除</button></div>
         </div>
         <details><summary>资产版本（{{ assetVersions(scene).length }}）</summary><ul><li v-for="asset in assetVersions(scene)" :key="asset">{{ asset }}</li></ul></details>
       </li>
@@ -110,13 +110,17 @@ onBeforeUnmount(() => { alive = false; request?.abort() })
 </template>
 
 <style scoped>
-.scene-manager { color: #435870; }
+.scene-manager { color: #475569; }
 .scene-summary, .scene-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .scene-summary { justify-content: space-between; }
 .scenes { list-style: none; margin: 0; padding: 0 24px; }
 .scenes > li { border-bottom: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; }
-h3 { margin: 0; font-size: 14px; }
+h3 { margin: 0; font-size: 16px; color: #1e293b; }
 p, details, nav { font-size: 12px; }
 .scene-summary p { margin: 4px 0; }
 summary { cursor: pointer; color: var(--blue); }
+.scene-actions .text-button { font-size: 14px; min-height: 36px; color: #1d4ed8; gap: 6px; }
+.scene-actions .danger-text { color: #b42318; }
+.scene-manager { min-width: 0; }
+.search-field > span { font-size: 12px; }
 </style>

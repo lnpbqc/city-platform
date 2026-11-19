@@ -33,17 +33,17 @@ const emit = defineEmits<{ scene: [id: string] }>()
 }
 button { justify-self: start; }
 strong {
-  font-size: 13px;
-  color: #29405a;
+  font-size: 14px;
+  color: #1e293b;
 }
 span {
   font-size: 12px;
-  color: #65788e;
+  color: #475569;
 }
 p {
   margin: 3px 0 0;
   font-size: 12px;
   line-height: 1.6;
-  color: #65788e;
+  color: #475569;
 }
 </style>

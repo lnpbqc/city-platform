@@ -74,11 +74,13 @@ def test_persisted_input_idempotency_and_canonical_hash(queued_client):
 
 
 @pytest.mark.parametrize("weather", [
-    {"source": "manual", "effect": "rain"},
+    *[{"source": "manual", "effect": effect} for effect in
+      ("clear", "cloudy", "overcast", "fog", "rain", "snow", "thunderstorm")],
     {"source": "none", "effect": "none"},
-    {"source": "open-meteo", "effect": "snow", "reading": {
-        "latitude": 23.03, "longitude": 113.36, "code": 71, "is_day": True, "valid_at": "2026-01-01T00:00:00Z",
-    }},
+    *[{"source": "open-meteo", "effect": effect, "reading": {
+        "latitude": 23.03, "longitude": 113.36, "code": code, "is_day": True, "valid_at": "2026-01-01T00:00:00Z",
+    }} for code, effect in ((0, "clear"), (2, "cloudy"), (3, "overcast"), (45, "fog"),
+                           (61, "rain"), (71, "snow"), (95, "thunderstorm"), (3, "none"))],
 ])
 def test_run_weather_is_fixed_for_retry_and_rerun(queued_client, weather):
     client = queued_client
@@ -100,14 +102,15 @@ def test_run_weather_is_fixed_for_retry_and_rerun(queued_client, weather):
 def test_weather_does_not_change_the_worker_result(client):
     body = setup_run(client)
     results = []
-    for mode in ({}, {"weather": {"source": "manual", "effect": "snow"}}):
+    for mode in ({}, *[{"weather": {"source": "manual", "effect": effect}} for effect in
+                      ("clear", "cloudy", "overcast", "fog", "rain", "snow", "thunderstorm")]):
         response = client.post("/api/runs", json={**body, **mode})
         assert response.status_code == 201
         identity = response.json()["run_id"]
         assert wait_terminal(client, identity)["status"] == "succeeded"
         result = client.get(f"/api/runs/{identity}/result").json()
         results.append({key: result[key] for key in ("baseline", "blocked", "metrics")})
-    assert results[0] == results[1]
+    assert all(result == results[0] for result in results[1:])
 
 
 @pytest.mark.parametrize("change,code", [({"blocked_edges": ["T-B"]}, "INVALID_EDGE"),

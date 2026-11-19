@@ -3,10 +3,41 @@ import { test } from 'node:test'
 import { effectScope, nextTick, ref } from 'vue'
 import { useWeatherView } from '../src/composables/useWeatherView.ts'
 import { matchDisplayRegion } from '../src/map/displayRegions.ts'
+import { automaticWeather, manualWeatherLabels, weatherLabel } from '../src/map/weather.ts'
 
 const west = { id: 'west', name: '西区', latitude: 23.04, longitude: 113.36, radius_m: 2200 }
 const east = { id: 'east', name: '东区', latitude: 23.06, longitude: 113.38, radius_m: 2200 }
 const regions = () => [west, east]
+
+test('automatic weather preserves detailed labels and maps seven categories without losing night or unknown states', () => {
+  const cases = [[0, 'clear'], [1, 'clear'], [2, 'cloudy'], [3, 'overcast'], [45, 'fog'], [48, 'fog'],
+    [51, 'rain'], [65, 'rain'], [67, 'rain'], [71, 'snow'], [86, 'snow'], [95, 'thunderstorm'], [99, 'thunderstorm']]
+  for (const [code, effect] of cases) {
+    const reading = { ...west, code, is_day: true, valid_at: '2026-11-19T07:00:00Z' }
+    assert.deepEqual(automaticWeather(reading), { source: 'open-meteo', effect, reading })
+  }
+  assert.equal(weatherLabel(65), '大雨')
+  assert.equal(weatherLabel(86), '强阵雪')
+  assert.equal(weatherLabel(99), '雷雨伴冰雹')
+  assert.equal(automaticWeather({ code: 0, is_day: false }).effect, 'none')
+  assert.equal(automaticWeather({ code: 4, is_day: true }).effect, 'none')
+  assert.equal(weatherLabel(4), '未知天气')
+})
+
+test('all seven manual weather categories follow between views without querying the weather service', t => {
+  const request = t.mock.method(globalThis, 'fetch', () => { throw new Error('manual weather must not query') })
+  const scope = effectScope()
+  const weather = scope.run(() => useWeatherView(() => null, () => true, regions))
+  t.after(() => { weather.mode.value = 'auto'; scope.stop() })
+  assert.deepEqual(Object.keys(manualWeatherLabels), ['clear', 'cloudy', 'overcast', 'fog', 'rain', 'snow', 'thunderstorm'])
+  const other = scope.run(() => useWeatherView(() => null, () => true, regions))
+  for (const effect of Object.keys(manualWeatherLabels)) {
+    weather.mode.value = effect
+    assert.deepEqual(weather.display.value, { source: 'manual', effect })
+    assert.deepEqual(other.display.value, weather.display.value)
+  }
+  assert.equal(request.mock.callCount(), 0)
+})
 
 test('display regions match by ground distance, with nearest winning in overlaps', () => {
   assert.equal(matchDisplayRegion({ latitude: 23.045, longitude: 113.365 }, regions()), west)

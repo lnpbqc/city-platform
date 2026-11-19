@@ -14,7 +14,8 @@ const javascript = ts.transpileModule(descriptor.scriptSetup.content.replaceAll(
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
   return { onMapSelection, inspectedSelection, onMapReady, clearObjectSelection, beginDraw, drawing, objectsOpen, toggleObjects, onNavigation, toggleMode, cameraMoving, shownWeather, restoreWorkspace, captureWorkspace, clearScene, changeLayer, setOpacity, viewLayers, timeAxis, timeAxisHeight, queryNearby, selectNearby, nearbyOpen, nearbyItems, nearbyLoading, nearbyUnavailable, nearbyError, captureDisplayView, openDisplayRegion, home,
-    startCalibration, changeCalibration, pickCalibrationPivot, publishCalibration, cancelCalibration, blockedTilesAsset, calibrationError, calibrationMatrix }
+    startCalibration, changeCalibration, pickCalibrationPivot, publishCalibration, cancelCalibration, blockedTilesAsset, calibrationError, calibrationMatrix,
+    viewportWidth, sidebar, sidebarVisible, rightPaneVisible, openLayers, closeObjects, regionOpen, workspace }
 `)
 const geometry = { type: 'Polygon', coordinates: [[[113, 23], [114, 23], [114, 24], [113, 23]]] }
 function setup(options = {}) {
@@ -39,6 +40,7 @@ function setup(options = {}) {
     beginAreaSelection(mode, callback, cancelled) { this.callback = callback; this.cancelled = cancelled },
     getCamera() { return this.camera ?? { longitude: 113, latitude: 23, height: 800, heading: 0, pitch: -1, roll: 0, scene_mode: '3d' } },
     getWeatherPoint() { return options.weatherPoint?.() ?? null },
+    setNavigationInsets(value) { this.navigationInsets = value },
     getDisplayRegionExtent() { return options.extent?.() ?? null },
     setRegionBoundary() {},
     setCamera(camera) { this.camera = camera; return true },
@@ -58,6 +60,7 @@ function setup(options = {}) {
   const panel = scope.run(() => create(name => {
     if (name === '../api/api') return { calibrateTiles: options.calibrateTiles, getNearbyPois: options.nearby ?? (async () => ({ items: [], unavailable_layers: [] })) }
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: hook => hooks.push(hook) }
+    if (name === '@lucide/vue') return {}
     if (name === '../composables/useObjects') return { useObjects: () => objects }
     if (name === '../composables/useWeatherView') return { useWeatherView }
     if (name === '../composables/useDisplayRegions') return { useDisplayRegions: () => ({ regions: vue.ref(options.displayRegions ?? []) }) }
@@ -77,6 +80,45 @@ function setup(options = {}) {
   panel.onMapReady(controller)
   return { panel, props, objects, controller, queries, events, cleanup() { hooks.forEach(hook => hook()); scope.stop() } }
 }
+
+test('narrow screens temporarily hide layers for details, restore the preference and allow switching panels', async t => {
+  const { panel, cleanup } = setup()
+  t.after(cleanup)
+  panel.viewportWidth.value = 1024
+  panel.toggleObjects()
+  await vue.nextTick()
+  assert.equal(panel.sidebar.value, true)
+  assert.equal(panel.sidebarVisible.value, false)
+  assert.equal(panel.rightPaneVisible.value, true)
+  panel.openLayers(true)
+  assert.equal(panel.sidebarVisible.value, true)
+  assert.equal(panel.rightPaneVisible.value, false)
+  panel.toggleObjects()
+  assert.equal(panel.rightPaneVisible.value, true)
+  panel.closeObjects()
+  assert.equal(panel.sidebarVisible.value, true)
+  panel.viewportWidth.value = 1440
+  panel.toggleObjects()
+  assert.equal(panel.sidebarVisible.value, true)
+  assert.equal(panel.rightPaneVisible.value, true)
+})
+
+test('phone region selection temporarily hides panels without losing the layer preference', t => {
+  const { panel, cleanup } = setup()
+  t.after(cleanup)
+  panel.viewportWidth.value = 390
+  panel.regionOpen.value = true
+  assert.equal(panel.sidebarVisible.value, false)
+  assert.equal(panel.sidebar.value, true)
+  panel.toggleObjects()
+  assert.equal(panel.rightPaneVisible.value, false)
+  panel.regionOpen.value = false
+  panel.closeObjects()
+  assert.equal(panel.sidebarVisible.value, true)
+  panel.viewportWidth.value = 1440
+  panel.regionOpen.value = true
+  assert.equal(panel.sidebarVisible.value, true)
+})
 
 test('calibration previews six offsets, preserves failed drafts and blocks old ZIPs through reload', async t => {
   const publishes = []
@@ -199,6 +241,71 @@ test('opening calibration, replacing only the pivot, and undoing offsets do not 
   controller.calibration.notice('')
   await panel.publishCalibration('update')
   assert.equal(publishes.length, 1)
+})
+
+test('navigation insets follow measured desktop panels, mobile drawers and hidden layouts', async t => {
+  const observers = []
+  const previous = globalThis.ResizeObserver
+  globalThis.ResizeObserver = class {
+    constructor(callback) { this.callback = callback; this.elements = []; observers.push(this) }
+    observe(element) { this.elements.push(element) }
+    disconnect() { this.disconnected = true }
+  }
+  t.after(() => { globalThis.ResizeObserver = previous })
+  const ctx = setup()
+  t.after(ctx.cleanup)
+  const bounds = { left: 50, top: 100, right: 1490, bottom: 1000, width: 1440, height: 900 }
+  const element = (name, box) => vue.markRaw({
+    classList: { contains: value => value === name },
+    getBoundingClientRect: () => box,
+  })
+  const canvas = element('canvas', bounds)
+  const leftBox = { left: 66, top: 184, right: 386, bottom: 800, width: 320, height: 616 }
+  const rightBox = { left: 1058, top: 240, right: 1418, bottom: 800, width: 360, height: 560 }
+  const axisBox = { left: 66, top: 820, right: 1474, bottom: 940, width: 1408, height: 120 }
+  const left = element('layer-panel', leftBox), right = element('objects', rightBox), axis = element('time-axis', axisBox)
+  const controls = element('map-bottom-controls', { width: 200, height: 80 })
+  let panels = [left, right, axis]
+  const listeners = new Map()
+  ctx.panel.objectsOpen.value = true
+  ctx.panel.workspace.value = vue.markRaw({
+    querySelector: () => canvas,
+    querySelectorAll: selector => selector === '.map-floating-layout > *' ? [...panels, controls] : panels,
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: name => listeners.delete(name),
+  })
+  await vue.nextTick()
+  assert.deepEqual(ctx.controller.navigationInsets, { left: 336, right: 432, bottom: 180 })
+  assert.deepEqual(observers.at(-1).elements, [canvas, left, right, axis, controls])
+  axisBox.top = 760
+  observers.at(-1).callback([])
+  assert.equal(ctx.controller.navigationInsets.bottom, 240, 'wrapping changes the measured timeline edge')
+  rightBox.height = 0
+  observers.at(-1).callback([])
+  assert.equal(ctx.controller.navigationInsets.right, 0, 'CSS-hidden panels reserve no map space')
+  ctx.panel.openLayers(false)
+  await vue.nextTick()
+  assert.equal(ctx.controller.navigationInsets.left, 0)
+  ctx.panel.closeObjects()
+  ctx.panel.openLayers(true)
+  ctx.panel.viewportWidth.value = 600
+  Object.assign(bounds, { right: 650, width: 600 })
+  Object.assign(leftBox, { top: 500, right: 634, width: 568 })
+  Object.assign(axisBox, { top: 820, right: 634, width: 568 })
+  panels = [left, axis]
+  await vue.nextTick()
+  assert.deepEqual(ctx.controller.navigationInsets, { left: 0, right: 0, bottom: 500 })
+  leftBox.top = 494
+  listeners.get('transitionend')()
+  assert.equal(ctx.controller.navigationInsets.bottom, 506, 'the final drawer position is measured after its transition')
+  ctx.panel.regionOpen.value = true
+  await vue.nextTick()
+  assert.deepEqual(ctx.controller.navigationInsets, { left: 0, right: 0, bottom: 180 }, 'opening the narrow region menu releases the hidden drawer')
+  const observer = observers.at(-1)
+  ctx.props.active = false
+  await vue.nextTick()
+  assert.equal(observer.disconnected, true)
+  assert.equal(listeners.size, 0)
 })
 
 test('time axis height follows wrapping and releases its observer when hidden or unmounted', async t => {

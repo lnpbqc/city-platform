@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { X, Info } from '@lucide/vue'
+import UiTooltip from '../common/UiTooltip.vue'
 import type { Selection } from '../../layers/types'
 import { timeLabel } from '../../temporal/temporal'
 import { poiAddress, poiCategory, propertyText, roadLevel } from '../../map/poi'
@@ -30,26 +31,20 @@ function valueText(value: unknown) {
 </script>
 
 <template>
-  <aside v-if="selection" class="inspector panel" :class="{ embedded }" aria-label="对象详情">
+  <aside v-if="selection" class="inspector" :class="{ embedded, panel: !embedded }" aria-label="对象详情">
     <header v-if="!embedded">
-      <span class="eyebrow">FEATURE INSPECTOR</span
-      ><button
+      <span class="eyebrow">对象详情</span>
+      <UiTooltip text="关闭属性面板"><button
         class="icon-button"
         aria-label="关闭属性面板"
         @click="emit('close')"
       >
         <X :size="17" />
-      </button>
+      </button></UiTooltip>
     </header>
     <span v-if="!embedded" class="inspector-type">对象属性</span>
     <h2>{{ isModel ? modelTitle : isPoi || isRoad ? object?.name || propertyText(properties, 'name', '名称', '名稱', 'name:zh') || selection.title : object?.name ?? selection.title }}</h2>
     <template v-if="isModel">
-      <dl v-if="modelFields.length" aria-label="模型属性">
-        <div v-for="[key, value] in modelFields" :key="key">
-          <dt>{{ key }}</dt><dd>{{ valueText(value) }}</dd>
-        </div>
-      </dl>
-      <p v-if="!Object.keys(modelProperties).length" class="no-properties">该瓦片未携带语义属性，来源：几何模型</p>
       <dl class="object-fields">
         <template v-if="object">
           <div><dt>类型</dt><dd>{{ object.type }}</dd></div>
@@ -95,24 +90,32 @@ function valueText(value: unknown) {
     <p v-if="!isModel && object?.type === 'model' && !Object.keys(properties).length" class="no-properties">该瓦片未携带语义属性，来源：几何模型</p>
     <p v-else-if="!isModel && !Object.keys(properties).length && !selection.detailLoading" class="no-properties">该对象未提供语义属性。</p>
     <p v-if="!selection.objectId && !selection.detailLoading" class="no-properties">该资源尚无本地对象索引，以下为原始可读属性。</p>
-    <dl v-if="!isModel && Object.keys(properties).length">
-      <div v-for="(value, key) in properties" :key="key">
-        <dt>{{ key }}</dt>
-        <dd>{{ valueText(value) }}</dd>
-      </div>
-    </dl>
+    <details v-if="isModel ? modelFields.length : Object.keys(properties).length" class="raw-properties">
+      <summary>原始属性</summary>
+      <dl :aria-label="isModel ? '模型属性' : '原始属性'">
+        <div v-for="[key, value] in isModel ? modelFields : Object.entries(properties)" :key="key">
+          <dt>{{ key }}</dt><dd>{{ valueText(value) }}</dd>
+        </div>
+      </dl>
+    </details>
+    <p v-if="isModel && !Object.keys(modelProperties).length" class="no-properties">该瓦片未携带语义属性，来源：几何模型</p>
     <footer><Info :size="13" />属性来自图层原始数据</footer>
   </aside>
 </template>
 
 <style scoped>
-.inspector.embedded { position: static; width: auto; padding: 0; box-shadow: none; background: transparent; animation: none; }
+.inspector.embedded { position: static; width: auto; max-height: none; overflow: visible; padding: 0; border: 0; box-shadow: none; background: transparent; animation: none; }
 .inspector.embedded dl { max-height: none; overflow: visible; }
-.detail-error { color: #a55145; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.detail-error { color: #a55145; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
 .temporal-value { display: grid; gap: 8px; padding: 12px; margin-top: 14px; background: #f2f7ff; border-radius: 5px; }
-.temporal-value span { font-size: 9px; color: #73859a; }
-.temporal-value strong { color: var(--blue); font-size: 13px; font-weight: 550; }
+.temporal-value span { font-size: 12px; color: #475569; }
+.temporal-value strong { color: #1d4ed8; font-size: 13px; font-weight: 550; }
 .inspector {
+  color: #1e293b;
+  font-size: 14px;
+  max-height: calc(100svh - 160px);
+  overflow-y: auto;
+  scrollbar-width: thin;
   position: absolute;
   top: 134px;
   right: 78px;
@@ -128,26 +131,28 @@ function valueText(value: unknown) {
   margin: -5px -5px 14px 0;
 }
 .inspector-type {
-  font-size: 10px;
-  color: var(--blue);
+  font-size: 12px;
+  color: #1d4ed8;
   display: block;
   margin-bottom: 7px;
 }
+.raw-properties { margin-top: 16px; }
+.raw-properties summary { cursor: pointer; color: #1d4ed8; padding: 8px 0; font-size: 14px; }
+.raw-properties summary:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 3px; }
 .inspector h2 {
+  overflow-wrap: anywhere;
   font-size: 18px;
   font-weight: 550;
   line-height: 1.6;
 }
 .inspector-source {
-  font-size: 10px;
-  color: #94a0b0;
+  font-size: 12px;
+  color: #475569;
   margin-top: 5px;
 }
 .inspector dl {
   margin: 20px 0 15px;
-  max-height: calc(100svh - 410px);
-  overflow: auto;
-  scrollbar-width: thin;
+
 }
 .inspector dl > div {
   display: flex;
@@ -156,10 +161,10 @@ function valueText(value: unknown) {
   gap: 15px;
   padding: 11px 0;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  font-size: 14px;
 }
 .inspector dt {
-  color: #8e9aac;
+  color: #475569;
   flex-shrink: 0;
   max-width: 45%;
   overflow-wrap: anywhere;
@@ -167,6 +172,7 @@ function valueText(value: unknown) {
 .inspector dd {
   margin: 0;
   text-align: right;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
   min-width: 0;
   line-height: 1.5;
@@ -175,14 +181,14 @@ function valueText(value: unknown) {
   display: flex;
   gap: 6px;
   align-items: center;
-  color: #a5aebb;
-  font-size: 9px;
+  color: #475569;
+  font-size: 12px;
   margin-top: 20px;
 }
 .no-properties {
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.8;
-  color: #8e9aac;
+  color: #475569;
   margin-top: 20px;
 }
 @media (max-width: 900px) {
@@ -201,13 +207,15 @@ function valueText(value: unknown) {
     width: auto;
     z-index: 5;
   }
-  .inspector dl {
-    max-height: 180px;
-  }
+  .inspector:not(.embedded) { max-height: calc(100svh - 180px); }
   .inspector header {
     margin-bottom: 4px;
   }
-  .inspector h2 {
+  .raw-properties { margin-top: 16px; }
+.raw-properties summary { cursor: pointer; color: #1d4ed8; padding: 8px 0; font-size: 14px; }
+.raw-properties summary:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 3px; }
+.inspector h2 {
+  overflow-wrap: anywhere;
     font-size: 16px;
   }
 }

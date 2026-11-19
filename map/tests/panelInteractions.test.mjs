@@ -20,6 +20,7 @@ function component(name) {
     if (path === '../../map/poi') return poi
     if (path === '../../map/weather') return weather
     if (path === '../../map/regions') return regions
+    if (path.endsWith('UiTooltip.vue')) return { inheritAttrs: false, setup: (_props, { slots }) => () => slots.default?.() }
     if (path === './FeatureInspector.vue') return component('FeatureInspector')
     if (path === '@lucide/vue') return new Proxy({}, { get: () => () => null })
     throw new Error(path)
@@ -34,11 +35,17 @@ const cls = value => n => String(n.props.class).split(' ').includes(value)
 const tick = async () => { await vue.nextTick(); await vue.nextTick() }
 function mount(name, initial, handlers = {}) {
   let focused
+  const documentListeners = new Map()
+  const ownerDocument = {
+    addEventListener: (name, callback) => documentListeners.set(name, callback),
+    removeEventListener: name => documentListeners.delete(name),
+  }
   const node = tag => ({
-    tag, props: {}, children: [], style: {}, dataset: {}, scrollTop: 0, listeners: {},
+    tag, props: {}, children: [], style: {}, dataset: {}, scrollTop: 0, listeners: {}, ownerDocument,
     get isConnected() { return Boolean(this.parent) },
     get options() { return this.children.filter(child => child.tag === 'option') },
     focus() { focused = this },
+    contains(other) { return walk(vue.toRaw(this)).includes(vue.toRaw(other)) },
     addEventListener(event, handler) { this.listeners[event] = handler },
     getRootNode() { return { activeElement: focused } },
     querySelectorAll() { return walk(this).filter(n => n.props['data-object-id']) },
@@ -54,7 +61,8 @@ function mount(name, initial, handlers = {}) {
   const props = vue.reactive(initial), root = node('root'), events = []
   const app = renderer.createApp({ render: () => vue.h(components[name], { ...props, ...Object.fromEntries(Object.entries(handlers).map(([key, fn]) => [key, (...args) => { events.push([key, ...args]); fn(...args) }])) }) })
   app.mount(root)
-  return { props, root, events, focused: () => vue.toRaw(focused), find: fn => walk(root).find(fn), close: () => app.unmount() }
+  return { props, root, events, documentListeners, node, pointerDown: target => documentListeners.get('pointerdown')?.({ target }),
+    focused: () => vue.toRaw(focused), find: fn => walk(root).find(fn), close: () => app.unmount() }
 }
 
 test('region picker defaults to display regions and separates administrative location with keyboard navigation', async t => {
@@ -107,6 +115,16 @@ test('region picker defaults to display regions and separates administrative loc
   assert.equal(ctx.focused(), trigger)
   trigger.props.onClick(); await tick()
   assert.equal(ctx.find(n => n.props.role === 'tab' && text(n) === '展示区域').props['aria-selected'], true)
+})
+
+test('region picker reports both opening and closing so narrow panels can restore', async t => {
+  const ctx = mount('RegionPicker', { selected: regions.demoRegion, sidebar: false, boundaryState: { status: 'idle' }, boundaryEnabled: false }, { 'onUpdate:open'() {} })
+  t.after(ctx.close)
+  ctx.find(label('选择中国城市和地区')).props.onClick()
+  await tick()
+  ctx.find(label('关闭地区选择')).props.onClick()
+  await tick()
+  assert.deepEqual(ctx.events, [['onUpdate:open', true], ['onUpdate:open', false]])
 })
 
 test('display regions open and manage independently, with one disclosure and Escape focus return', async t => {
@@ -207,7 +225,7 @@ test('weather selector can override automatic weather and history shows the save
   assert.equal(button.props['aria-expanded'], true)
   assert.match(text(ctx.root), /黄埔校区 · 小雨.*08:15.*Open-Meteo/)
   const select = ctx.find(label('天气模式'))
-  assert.deepEqual(select.children.filter(node => node.tag === 'option').map(node => node.props.value), ['auto', 'clear', 'rain', 'snow'])
+  assert.deepEqual(select.children.filter(node => node.tag === 'option').map(node => node.props.value), ['auto', 'clear', 'cloudy', 'overcast', 'fog', 'rain', 'snow', 'thunderstorm'])
   select.props.onChange({ target: { value: 'snow' } })
   await tick()
   assert.equal(ctx.props.mode, 'snow')
@@ -217,15 +235,65 @@ test('weather selector can override automatic weather and history shows the save
   assert.match(text(ctx.root), /运行天气 · 小雨/)
 })
 
-test('weather status distinguishes an uncovered view, throttling and an earlier reading', async t => {
-  const ctx = mount('WeatherControl', { mode: 'auto', status: 'outside', weather: weather.noWeather })
+test('compact weather shows overcast accurately and dismisses settings without stealing outside focus', async t => {
+  const ctx = mount('WeatherControl', { compact: true, mode: 'auto', status: 'ready', region: '一个完整的很长的展示区域名称', weather: {
+    source: 'open-meteo', effect: 'none', reading: { code: 3, is_day: true, valid_at: '2026-11-19T07:00:00Z' },
+  } })
+  t.after(() => { ctx.close(); assert.equal(ctx.documentListeners.size, 0) })
+  const button = ctx.find(label('天气设置'))
+  const content = ctx.find(label('天气设置内容'))
+  assert.match(text(button), /一个完整的很长的展示区域名称.*阴.*自动/)
+  assert.equal(content.style.display, 'none')
+  button.props.onClick(); await tick()
+  assert.notEqual(content.style.display, 'none')
+  assert.match(text(content), /一个完整的很长的展示区域名称.*阴.*15:00.*Open-Meteo/)
+  ctx.pointerDown(ctx.find(label('天气模式'))); await tick()
+  assert.equal(button.props['aria-expanded'], true)
+  const outside = ctx.node('button')
+  outside.focus()
+  ctx.pointerDown(outside); await tick()
+  assert.equal(button.props['aria-expanded'], false)
+  assert.equal(ctx.focused(), outside)
+  button.props.onClick(); await tick()
+  button.props.onClick(); await tick()
+  assert.equal(button.props['aria-expanded'], false)
+  assert.equal(ctx.documentListeners.size, 0)
+  button.props.onClick(); await tick()
+  ctx.find(label('关闭天气设置')).props.onClick(); await tick()
+  assert.equal(ctx.focused(), button)
+  button.props.onClick(); await tick()
+  ctx.find(label('地图天气')).props.onKeydown({ key: 'Escape', stopPropagation() {}, preventDefault() {} })
+  await tick()
+  assert.equal(button.props['aria-expanded'], false)
+  assert.equal(ctx.focused(), button)
+})
+
+test('manual and saved weather summaries use their snapshot instead of the current automatic mode', async t => {
+  const ctx = mount('WeatherControl', { compact: true, mode: 'auto', fixed: true, status: 'ready', weather: { source: 'manual', effect: 'thunderstorm' } })
   t.after(ctx.close)
-  assert.match(text(ctx.root), /未进入展示区域/)
+  assert.match(text(ctx.find(label('天气设置'))), /运行天气.*雷雨.*手动/)
+  assert.equal(ctx.find(label('天气模式')), undefined)
+})
+
+test('weather status distinguishes an uncovered view, throttling and an earlier reading', async t => {
+  const ctx = mount('WeatherControl', { compact: true, mode: 'auto', status: 'outside', weather: weather.noWeather })
+  t.after(ctx.close)
+  const button = ctx.find(label('天气设置'))
+  assert.match(text(button), /未进入展示区域/)
+  ctx.props.status = 'loading'
+  await tick()
+  assert.match(text(button), /正在查询天气/)
   ctx.props.status = 'limited'
   ctx.props.region = '香港维港'
   ctx.props.reference = { code: 61, valid_at: '2026-01-01T00:15:00Z' }
   await tick()
+  assert.match(text(button), /天气服务限流/)
+  button.props.onClick(); await tick()
   assert.match(text(ctx.root), /香港维港 · 天气服务限流.*上次更新.*小雨.*08:15/)
+  ctx.props.status = 'unavailable'
+  await tick()
+  assert.match(text(button), /天气暂不可用/)
+  assert.match(text(ctx.find(label('天气设置内容'))), /上次更新.*小雨/)
 })
 
 test('results enter loading details; return preserves filters, range, page, scroll and keyboard focus', async t => {
@@ -262,18 +330,21 @@ test('map-picked raw models show details and resource invalidation returns to re
   assert.notEqual(ctx.find(cls('object-results')).style.display, 'none')
 })
 
-test('3D model details put picked properties before asset metadata, even after loading', async t => {
+test('3D model details show basic fields before collapsed picked properties, even after loading', async t => {
   const raw = { title: '三维对象', layerName: '校园模型', resourceType: '3dtiles', objectId: 'asset-object',
     properties: { 名称: '教学楼 A', 用途: '教学', 层数: 4 }, detailLoading: true }
   const ctx = mount('ObjectPanel', { layers: [], items: [], total: 0, page: 1, pageSize: 20, layerId: '', q: '', type: '', selectedId: '', selection: raw, loading: false, error: '', area: false, drawing: null, progress: null })
   t.after(ctx.close)
   const detail = () => text(ctx.find(cls('object-details')))
-  assert.match(detail(), /教学楼 A.*用途教学.*层数4.*校园模型/)
+  assert.match(detail(), /教学楼 A.*校园模型.*原始属性.*用途教学.*层数4/)
   ctx.props.selection = { ...raw, detailLoading: false, object: { name: '整个校园', object_id: 'asset-object',
     type: 'model', height_m: 18, semantic_source: 'geometry_model', coordinates: [113, 23],
     asset: { asset_id: 'campus', version: '1' }, properties: { 名称: '整个校园', 备注: '资产属性' } } }
   await tick()
-  assert.match(detail(), /教学楼 A.*用途教学.*层数4.*类型model.*高度18 m.*所属图层校园模型.*来源几何模型.*等级.*置信度.*WGS84坐标.*资产版本campus@1.*原始几何.*object_idasset-object/)
+  assert.match(detail(), /教学楼 A.*类型model.*高度18 m.*所属图层校园模型.*来源几何模型.*等级.*置信度.*WGS84坐标.*资产版本campus@1.*原始几何.*object_idasset-object.*原始属性.*用途教学.*层数4/)
+  const disclosure = ctx.find(n => n.tag === 'details' && text(n).includes('原始属性'))
+  assert.ok(disclosure)
+  assert.equal(disclosure.props.open, undefined)
   assert.equal(detail().match(/教学楼 A/g)?.length, 1)
   assert.doesNotMatch(detail(), /整个校园|资产属性/)
 })

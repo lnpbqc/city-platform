@@ -9,11 +9,12 @@ function stop() { if (frame) cancelAnimationFrame(frame); frame = 0 }
 
 watch([canvas, () => props.effect], ([element, effect]) => {
   stop()
-  if (!element || (effect !== 'rain' && effect !== 'snow')) return
+  if (!element || (effect !== 'rain' && effect !== 'snow' && effect !== 'thunderstorm')) return
   const context = element.getContext('2d')
   if (!context) return
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
   const snow = effect === 'snow'
+  const storm = effect === 'thunderstorm'
   let previous = -Infinity
   function draw(time: number) {
     frame = requestAnimationFrame(draw)
@@ -27,7 +28,7 @@ watch([canvas, () => props.effect], ([element, effect]) => {
     context.fillStyle = 'rgba(255, 255, 255, .74)'
     context.strokeStyle = 'rgba(213, 231, 246, .49)'
     context.beginPath()
-    const count = Math.min(140, Math.ceil(width * height / 7500))
+    const count = Math.min(storm ? 200 : 140, Math.ceil(width * height / (storm ? 4500 : 7500)))
     for (let index = 0; index < count; index++) {
       const speed = snow ? 22 + index % 19 : 520 + (index % 7) * 48
       const seconds = time / 1000
@@ -53,15 +54,21 @@ onBeforeUnmount(stop)
 
 <template>
   <div v-if="effect !== 'none'" class="weather-effect" :class="effect" aria-hidden="true">
-    <canvas v-if="effect === 'rain' || effect === 'snow'" ref="canvas" />
+    <canvas v-if="effect === 'rain' || effect === 'snow' || effect === 'thunderstorm'" ref="canvas" />
   </div>
 </template>
 
 <style scoped>
 .weather-effect { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 .weather-effect.clear { background: linear-gradient(145deg, #fff0c416, transparent 58%); }
+.weather-effect.cloudy { overflow: hidden; }
+.weather-effect.cloudy::before { content: ''; position: absolute; inset: -20%; background: radial-gradient(ellipse at 20% 30%, #52698520, transparent 45%), radial-gradient(ellipse at 75% 60%, #52698518, transparent 40%); animation: cloud-drift 45s ease-in-out infinite alternate; }
+.weather-effect.overcast { background: #53657925; }
+.weather-effect.fog { background: linear-gradient(180deg, #e5edf54d, #edf2f51a 60%, #e5edf533); }
 .weather-effect.rain { background: #253c591b; }
 .weather-effect.snow { background: #e6f4ff14; }
+.weather-effect.thunderstorm { background: #1c2c4340; }
 canvas { display: block; width: 100%; height: 100%; }
-@media (prefers-reduced-motion: reduce) { canvas { visibility: hidden; } }
+@keyframes cloud-drift { from { transform: translateX(-4%); } to { transform: translateX(4%); } }
+@media (prefers-reduced-motion: reduce) { canvas { visibility: hidden; } .weather-effect.cloudy::before { animation: none; } }
 </style>

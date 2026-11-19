@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiTooltip from '../common/UiTooltip.vue'
 import { computed, ref } from 'vue'
 import {
   Layers,
@@ -52,7 +53,7 @@ const visibleLayers = computed(() =>
         .includes(search.value.toLowerCase()),
   ),
 )
-const groups = computed(() => layerGroups(visibleLayers.value).filter(group => group.category !== '底图' || group.layers.length))
+const groups = computed(() => layerGroups(visibleLayers.value).filter(group => group.layers.length))
 function toggleGroup(category: string) {
   if (folded.value.has(category)) folded.value.delete(category)
   else folded.value.add(category)
@@ -60,38 +61,38 @@ function toggleGroup(category: string) {
 </script>
 
 <template>
-  <aside v-if="open" class="layer-panel panel">
+  <Transition name="floating-panel"><aside v-if="open" class="layer-panel panel">
     <header class="panel-heading">
       <div>
         <Layers :size="18" />
         <h1>地图图层</h1>
         <span class="count">{{ visibleLayers.length }}</span>
       </div>
-      <button
+      <div class="panel-heading-actions">
+      <button class="primary-button add-data" aria-label="添加图层" @click="emit('add')"><Plus :size="16" aria-hidden="true" />添加</button>
+      <UiTooltip text="收起图层面板"><button
         class="icon-button"
         aria-label="收起图层面板"
         @click="emit('update:open', false)"
       >
         <PanelLeftClose :size="18" />
-      </button>
+      </button></UiTooltip>
+      </div>
     </header>
     <div class="panel-body-top">
-      <button class="primary-button add-data" @click="emit('add')">
-        <Plus :size="17" />添加图层
-      </button>
       <div class="search-field">
         <Search :size="15" /><input
           v-model="search"
           aria-label="搜索图层"
           placeholder="搜索图层名称或分类"
-        /><button
+        /><UiTooltip text="清空搜索"><button
           v-if="search"
           class="icon-button"
           aria-label="清空搜索"
           @click="search = ''"
         >
           <X :size="14" />
-        </button>
+        </button></UiTooltip>
       </div>
     </div>
     <div class="layer-tabs">
@@ -133,7 +134,6 @@ function toggleGroup(category: string) {
           ><span>{{ group.layers.length }}</span>
         </button>
         <div v-if="!folded.has(group.category)">
-          <p v-if="!group.layers.length" class="group-empty">{{ search ? '没有匹配图层' : '暂无已加入图层' }}</p>
           <LayerItem
             v-for="layer in group.layers"
             :key="layer.id"
@@ -167,31 +167,29 @@ function toggleGroup(category: string) {
               : '图层服务未连接'
         }}</span>
       </div>
-      <button
+      <UiTooltip class="footer-refresh" text="刷新后端图层"><button
         class="icon-button"
         aria-label="刷新后端图层"
         :disabled="backend === 'loading'"
         @click="emit('refresh')"
       >
         <RefreshCw :size="14" :class="{ spin: backend === 'loading' }" />
-      </button>
+      </button></UiTooltip>
       <p v-if="backend === 'offline'">
         {{ catalogError }}。可继续浏览内置小样。
       </p>
     </footer>
-  </aside>
-  <button
-    v-else
+  </aside></Transition>
+  <UiTooltip v-if="!open" class="layer-reopen-slot" text="展开图层面板"><button
     class="panel-reopen panel icon-button"
     aria-label="展开图层面板"
     @click="emit('update:open', true)"
   >
     <PanelLeftOpen :size="20" />
-  </button>
+  </button></UiTooltip>
 </template>
 
 <style scoped>
-.group-empty { margin: 8px 16px 12px; font-size: 10px; color: #8795a7; }
 .order-error { color: #a55145; }
 .layer-panel {
   position: absolute;
@@ -206,12 +204,12 @@ function toggleGroup(category: string) {
   animation: panel-in 0.25s ease-out;
 }
 .panel-heading {
-  height: 59px;
+  height: 56px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--line);
 }
 .panel-heading > div {
@@ -236,11 +234,15 @@ function toggleGroup(category: string) {
   border-radius: 4px;
 }
 .panel-body-top {
-  padding: 16px 16px 0;
+  padding: 10px 12px 0;
 }
+.panel-heading .panel-heading-actions { gap: 4px; }
 .add-data {
-  width: 100%;
+  width: auto;
   height: 36px;
+  padding-inline: 10px;
+  gap: 4px;
+  font-size: 12px;
 }
 .search-field {
   display: flex;
@@ -251,8 +253,7 @@ function toggleGroup(category: string) {
   border-radius: 5px;
   gap: 7px;
   padding: 0 10px;
-  height: 34px;
-  margin-top: 12px;
+  height: 36px;
 }
 .search-field input {
   background: transparent;
@@ -347,7 +348,8 @@ function toggleGroup(category: string) {
 .panel-footer > div > i.offline {
   background: #d79a5b;
 }
-.panel-footer > .icon-button {
+.panel-footer > .footer-refresh { margin-left: auto; }
+.panel-footer .icon-button {
   margin-left: auto;
   width: 25px;
   height: 25px;
@@ -404,10 +406,13 @@ function toggleGroup(category: string) {
     max-height: calc(100svh - 155px);
   }
 }
+@media (max-width: 767px) {
+  .panel-heading :is(.add-data, .icon-button), .panel-footer .icon-button { min-width: 44px; min-height: 44px; }
+}
 @media (max-height: 560px) {
   .panel-heading { height: 43px; padding-inline: 12px; }
   .panel-body-top { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0; }
-  .add-data { flex: none; width: auto; height: 32px; padding-inline: 8px; }
+  .add-data { height: 32px; padding-inline: 8px; }
   .search-field { flex: 1; min-width: 0; height: 32px; margin-top: 0; padding-inline: 7px; }
   .layer-tabs { margin-top: 4px; }
   .layer-tabs button { height: 30px; }

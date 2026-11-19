@@ -39,9 +39,32 @@ export function createBasemapSwitcher(
   const token = tianditu ? undefined : env.VITE_CESIUM_ION_TOKEN
   const level = Number(env.VITE_TIANDITU_MAX_LEVEL)
   const maximumLevel = Number.isInteger(level) && level >= 1 && level <= 18 ? level : 18
+  type TilePromise = NonNullable<ReturnType<ImageryProvider['requestImage']>>
+  const tiles = new Map<string, TilePromise>()
+  const pending = new Map<string, TilePromise>()
+  let moving = false, settleAt = 0, batchAt = 0, batchCount = 0
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined
+  let wakeAt = Infinity
+  function wake(delay: number) {
+    if (!alive() || disposed) return
+    const target = Date.now() + delay
+    if (wakeTimer !== undefined && wakeAt <= target) return
+    clearTimeout(wakeTimer)
+    wakeAt = target
+    wakeTimer = setTimeout(() => {
+      wakeTimer = undefined
+      wakeAt = Infinity
+      if (alive() && !disposed) viewer.scene.requestRender()
+    }, delay)
+  }
+  const movementCleanup: (() => void)[] = []
 
   function wmts(layer: string) {
-    return new WebMapTileServiceImageryProvider({
+    if (!movementCleanup.length) movementCleanup.push(
+      viewer.camera.moveStart.addEventListener(() => { moving = true }),
+      viewer.camera.moveEnd.addEventListener(() => { moving = false; settleAt = Date.now() + 180; wake(180) }),
+    )
+    const provider = new WebMapTileServiceImageryProvider({
       url: `https://t{s}.tianditu.gov.cn/${layer}_w/wmts?tk=${encodeURIComponent(key!)}`,
       layer,
       style: 'default',
@@ -54,6 +77,38 @@ export function createBasemapSwitcher(
       subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'],
       credit: new Credit('<a href="https://www.tianditu.gov.cn/" target="_blank" rel="noopener">天地图</a>', true),
     })
+    const requestImage = provider.requestImage.bind(provider)
+    provider.requestImage = (x, y, level, request) => {
+      if (!alive() || disposed) return undefined
+      const id = `${layer}/${level}/${x}/${y}`
+      const cachedTile = tiles.get(id)
+      if (cachedTile) {
+        tiles.delete(id)
+        tiles.set(id, cachedTile)
+        return cachedTile
+      }
+      if (pending.has(id)) return pending.get(id)
+      // Return undefined so Cesium retries only tiles that are still needed.
+      if (moving || !viewer.canvas.clientWidth || !viewer.canvas.clientHeight) return undefined
+      const now = Date.now()
+      if (now < settleAt) { wake(settleAt - now); return undefined }
+      if (now - batchAt >= 200) { batchAt = now; batchCount = 0 }
+      if (batchCount >= 4) { wake(batchAt + 200 - now); return undefined }
+      if (pending.size >= 4) return undefined
+      const result = requestImage(x, y, level, request)
+      if (!result) return undefined
+      batchCount++
+      const tile = result.then(image => {
+        if (image && alive() && !disposed) {
+          tiles.set(id, tile)
+          if (tiles.size > 128) tiles.delete(tiles.keys().next().value!)
+        }
+        return image
+      }).finally(() => { pending.delete(id); wake(0) })
+      pending.set(id, tile)
+      return tile
+    }
+    return provider
   }
 
   async function setBasemap(kind: BasemapKind, options?: { annotations?: boolean }): Promise<boolean> {
@@ -115,6 +170,10 @@ export function createBasemapSwitcher(
   return { setBasemap, destroy() {
     disposed = true
     revision++
+    clearTimeout(wakeTimer)
+    movementCleanup.forEach(cleanup => cleanup())
+    tiles.clear()
+    pending.clear()
     for (const entry of cached.values()) {
       entry.unsubscribe?.()
       viewer.imageryLayers.remove(entry.layer, true)

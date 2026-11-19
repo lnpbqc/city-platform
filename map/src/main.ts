@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import './style.css'
+import './workspace.css'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import App from './App.vue'
 

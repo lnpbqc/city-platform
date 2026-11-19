@@ -24,7 +24,7 @@ beforeEach(() => {
   runWeather = undefined
   catalogHandler = async query => ({ ...query, total: 0, items: [] })
   assetHandler = async (id, version) => ({ asset_id: id, version, source_kind: 'upload', type: 'geojson', name: 'area', entry_url: '/pinned.geojson', source: '', status: 'ready' })
-  globalThis.window = { localStorage: { getItem: () => null, setItem() {}, removeItem() {} } }
+  globalThis.window = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, localStorage: { getItem: () => null, setItem() {}, removeItem() {} } }
   globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} }
 })
 mock.module('../src/api/api.ts', { exports: {
@@ -88,6 +88,157 @@ test('simulation exposes the ready controller to its basemap cards', async t => 
   assert.equal(typeof state.basemapController?.getCamera, 'function')
   assert.match(source, /<BasemapSwitcher[^>]*:controller="basemapController"/)
 })
+test('simulation sidebar tabs switch without clearing the draft or result at every width', async t => {
+  const { state } = await setup(t)
+  state.viewportWidth = 1024
+  state.draft.name = '保留我的配置'
+  assert.equal(state.configVisible, true)
+  await succeeded(state)
+  assert.equal(state.resultVisible, true)
+  assert.equal(state.configVisible, false)
+  state.openConfig()
+  assert.equal(state.configVisible, true)
+  assert.equal(state.resultVisible, false)
+  assert.equal(state.draft.name, '保留我的配置')
+  assert.ok(state.result)
+  state.viewportWidth = 1440
+  assert.equal(state.resultVisible, false)
+  state.selectPane('history')
+  assert.equal(state.historyVisited, true)
+  assert.equal(state.configVisible, false)
+  state.selectPane('result')
+  assert.equal(state.resultVisible, true)
+  state.viewportWidth = 1024
+  state.activePane = 'result'
+  state.editConfiguration()
+  assert.equal(state.configVisible, true)
+})
+
+test('mobile sidebar closes on Escape and restores focus without losing the selected pane', async t => {
+  window.innerWidth = 390
+  const { state } = await setup(t)
+  assert.equal(state.sidebarOpen, false)
+  let restored = 0, prevented = 0
+  state.panelTrigger = { focus() { restored++ } }
+  state.openSidebar()
+  state.selectPane('history')
+  state.sidebarKeydown({ key: 'Escape', defaultPrevented: false, preventDefault() { prevented++ } })
+  await flush()
+  assert.equal(state.sidebarOpen, false)
+  assert.equal(state.activePane, 'history')
+  assert.equal(restored, 1)
+  assert.equal(prevented, 1)
+})
+
+test('sidebar tab keys wrap and move focus while preserving the draft', async t => {
+  const { state } = await setup(t)
+  state.draft.name = '保留草稿'
+  let focused = -1, prevented = 0
+  const tabs = [0, 1, 2].map(index => ({ focus() { focused = index } }))
+  const press = key => state.navigatePanes({ key, preventDefault() { prevented++ }, currentTarget: { querySelectorAll: () => tabs } })
+  press('ArrowLeft')
+  assert.equal(state.activePane, 'history')
+  assert.equal(state.historyVisited, true)
+  assert.equal(focused, 2)
+  press('ArrowRight')
+  assert.equal(state.activePane, 'config')
+  assert.equal(focused, 0)
+  press('End')
+  assert.equal(focused, 2)
+  press('Home')
+  assert.equal(focused, 0)
+  assert.equal(prevented, 4)
+  assert.equal(state.draft.name, '保留草稿')
+})
+
+test('mobile focus stays within visible enabled drawer controls', async t => {
+  window.innerWidth = 390
+  const { state } = await setup(t)
+  state.openSidebar()
+  await flush()
+  let focused = '', prevented = 0
+  const control = (name, visible = true, disabled = false) => ({
+    getClientRects: () => visible ? [{}] : [], matches: () => disabled,
+    focus() { focused = name },
+  })
+  const first = control('first'), last = control('last')
+  state.sidebar = { querySelectorAll: () => [control('hidden', false), first, last, control('disabled', true, true)] }
+  document.activeElement = last
+  state.sidebarKeydown({ key: 'Tab', defaultPrevented: false, shiftKey: false, preventDefault() { prevented++ } })
+  assert.equal(focused, 'first')
+  document.activeElement = first
+  state.sidebarKeydown({ key: 'Tab', defaultPrevented: false, shiftKey: true, preventDefault() { prevented++ } })
+  assert.equal(focused, 'last')
+  assert.equal(prevented, 2)
+})
+
+test('shrinking to mobile restores focus when the desktop sidebar is hidden', async t => {
+  const { state } = await setup(t)
+  let focused = 0
+  const input = {}
+  document.activeElement = input
+  state.sidebar = { contains: element => element === input, querySelector: () => null }
+  state.panelTrigger = { focus() { focused++ } }
+  state.selectPane('history')
+  window.innerWidth = 390
+  state.resizeLayout()
+  await flush()
+  assert.equal(state.sidebarOpen, false)
+  assert.equal(state.activePane, 'history')
+  assert.equal(focused, 1)
+  window.innerWidth = 1440
+  state.resizeLayout()
+  document.activeElement = {}
+  window.innerWidth = 390
+  state.resizeLayout()
+  await flush()
+  assert.equal(focused, 1, 'resizing does not move focus away from controls outside the sidebar')
+})
+
+test('opening a historical run selects the result tab and keeps history mounted for returning', async t => {
+  const { state } = await setup(t)
+  state.selectPane('history')
+  await state.selectHistory('run-one'); await flush()
+  assert.equal(state.activePane, 'result')
+  assert.equal(state.historical, true)
+  assert.equal(state.historyVisited, true)
+  assert.ok(state.result)
+  state.selectPane('config')
+  assert.equal(state.resultVisible, false)
+  state.selectPane('result')
+  assert.ok(state.result)
+})
+
+test('automatic result selection moves focus out of hidden content without taking focus from the map', async t => {
+  const { state } = await setup(t)
+  const input = {}, mapControl = {}
+  let focused = 0
+  const resultTab = { focus() { focused++; document.activeElement = resultTab } }
+  state.selectPane('history')
+  state.sidebar = { querySelector: selector => {
+    if (selector === '#simulation-pane-history') return { contains: element => element === input }
+    if (selector === '[role="tab"][aria-selected="true"]') return resultTab
+    return null
+  } }
+  document.activeElement = input
+  await succeeded(state)
+  assert.equal(state.activePane, 'result')
+  assert.equal(focused, 1)
+  assert.equal(document.activeElement, resultTab)
+
+  state.selectPane('history')
+  document.activeElement = mapControl
+  await state.selectHistory('run-one'); await flush()
+  assert.equal(state.activePane, 'result')
+  assert.equal(focused, 1, 'opening a result does not take focus from map controls')
+  assert.equal(document.activeElement, mapControl)
+
+  state.selectPane('history')
+  document.activeElement = input
+  await state.selectHistory('run-one'); await flush()
+  assert.equal(focused, 2, 'opening history moves focus out of the hidden history pane')
+  assert.equal(document.activeElement, resultTab)
+})
 test('a historical result arriving before map readiness restores replay positions when ready', async t => {
   const { state, calls, ready } = await setup(t, { ready: false })
   await state.openRun('run-one')
@@ -109,7 +260,7 @@ test('opening and leaving a run switches between its saved weather and the sessi
   state.weatherMode = 'rain'
   t.after(() => { state.weatherMode = 'auto' })
   assert.deepEqual(state.shownWeather, { source: 'manual', effect: 'rain' })
-  runWeather = { source: 'manual', effect: 'snow' }
+  runWeather = { source: 'manual', effect: 'fog' }
   await state.openRun('run-one')
   await flush()
   assert.equal(state.fixedWeather, true)
@@ -122,6 +273,10 @@ test('opening and leaving a run switches between its saved weather and the sessi
   await state.openRun('run-one')
   await flush()
   assert.deepEqual(state.shownWeather, { source: 'none', effect: 'none' })
+  runWeather = { source: 'open-meteo', effect: 'none', reading: { latitude: 23, longitude: 113, code: 3, is_day: true, valid_at: '2026-01-01T00:15:00Z' } }
+  await state.openRun('run-one')
+  await flush()
+  assert.deepEqual(state.shownWeather, runWeather, 'legacy snapshots keep their saved effect instead of remapping it')
 })
 async function succeeded(state) { await state.submit(); await state.refreshRun(); await flush(); assert.equal(state.preview, false); assert.ok(state.result) }
 

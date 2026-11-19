@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { Search } from '@lucide/vue'
 import MapCanvas from '../components/map/MapCanvas.vue'
 import LayerPanel from '../components/layers/LayerPanel.vue'
 import RegionPicker from '../components/map/RegionPicker.vue'
@@ -67,6 +68,15 @@ const emit = defineEmits<{
   poiSaved: [record: LayerRecord, reveal: boolean]
 }>()
 const sidebar = ref(true)
+const workspace = ref<HTMLElement | null>(null)
+const regionOpen = ref(false)
+const viewportWidth = ref(1440)
+const focusedPane = ref<'left' | 'right'>('right')
+const rightPaneOpen = computed(() => objectsOpen.value || !!poiDraft.value || !!calibration.value)
+const sidebarVisible = computed(() => !(viewportWidth.value < 768 && regionOpen.value) && sidebar.value && (viewportWidth.value >= 1200 || !rightPaneOpen.value || focusedPane.value === 'left'))
+const rightPaneVisible = computed(() => !(viewportWidth.value < 768 && regionOpen.value) && rightPaneOpen.value && (viewportWidth.value >= 1200 || !sidebar.value || focusedPane.value === 'right'))
+function openLayers(open: boolean) { sidebar.value = open; focusedPane.value = open ? 'left' : 'right' }
+function resizeLayout() { viewportWidth.value = window.innerWidth }
 const timeAxis = ref<InstanceType<typeof TimeAxis> | null>(null)
 const timeAxisHeight = ref(0)
 watch(timeAxis, (axis, _previous, onCleanup) => {
@@ -367,7 +377,11 @@ const navigation = ref<NavigationReading | null>(null)
 function cancelDraw() { controller?.cancelAreaSelection(); drawing.value = null }
 function clearObjectSelection() { selection.value = null; void returnToResults() }
 function closeObjects() { cancelDraw(); closeNearby(); clearObjectSelection(); objectsOpen.value = false }
-function toggleObjects() { if (objectsOpen.value) closeObjects(); else objectsOpen.value = true }
+function toggleObjects() {
+  if (objectsOpen.value && !rightPaneVisible.value) focusedPane.value = 'right'
+  else if (objectsOpen.value) closeObjects()
+  else { focusedPane.value = 'right'; objectsOpen.value = true }
+}
 async function onMapSelection(value: Selection | null) {
   if (value) closeNearby()
   selection.value = value
@@ -415,8 +429,35 @@ function onEscape(event: KeyboardEvent) {
   else if (drawing.value) cancelDraw()
 }
 function onVisibility() { if (document.hidden) temporal.pause() }
-onMounted(() => { window.addEventListener('keydown', onEscape); document.addEventListener('visibilitychange', onVisibility) })
-onBeforeUnmount(() => { cancelCalibration(); closeNearby(); ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
+watch([workspace, basemapController, sidebarVisible, rightPaneVisible, objectsOpen, poiDraft, poiPicking, inspectedPoiLayer, nearbyOpen, calibration, timeAxis, viewportWidth, () => props.active], (_values, _previous, onCleanup) => {
+  const root = workspace.value, mapController = basemapController.value
+  if (!root || !mapController || !props.active) return
+  const canvas = root.querySelector<HTMLCanvasElement>('.primary-map canvas')
+  if (!canvas) return
+  const panels = [...root.querySelectorAll<HTMLElement>('.layer-panel, .objects, .poi-details, .nearby, .poi-editor, .model-calibration, .time-axis')]
+  const update = () => {
+    const bounds = canvas.getBoundingClientRect()
+    const insets = { left: 0, right: 0, bottom: 0 }
+    for (const panel of panels) {
+      const left = panel.classList.contains('layer-panel'), timeline = panel.classList.contains('time-axis')
+      if (left && !sidebarVisible.value || !left && !timeline && !rightPaneVisible.value) continue
+      const rect = panel.getBoundingClientRect()
+      if (!rect.width || !rect.height || rect.right <= bounds.left || rect.left >= bounds.right || rect.bottom <= bounds.top || rect.top >= bounds.bottom) continue
+      if (timeline || viewportWidth.value < 768) insets.bottom = Math.max(insets.bottom, bounds.bottom - Math.max(bounds.top, rect.top))
+      else if (left) insets.left = Math.max(insets.left, Math.min(bounds.right, rect.right) - bounds.left)
+      else insets.right = Math.max(insets.right, bounds.right - Math.max(bounds.left, rect.left))
+    }
+    mapController.setNavigationInsets(insets)
+  }
+  const observer = new ResizeObserver(update)
+  for (const element of [canvas, ...root.querySelectorAll<HTMLElement>('.map-floating-layout > *')]) observer.observe(element)
+  root.addEventListener('transitionend', update)
+  update()
+  onCleanup(() => { observer.disconnect(); root.removeEventListener('transitionend', update) })
+}, { flush: 'post' })
+watch([objectsOpen, poiDraft, calibration, selection], () => { if (rightPaneOpen.value) focusedPane.value = 'right' })
+onMounted(() => { resizeLayout(); window.addEventListener('resize', resizeLayout); window.addEventListener('keydown', onEscape); document.addEventListener('visibilitychange', onVisibility) })
+onBeforeUnmount(() => { cancelCalibration(); closeNearby(); ++restoreVersion; restoreAbort?.abort(); window.removeEventListener('resize', resizeLayout); window.removeEventListener('keydown', onEscape); document.removeEventListener('visibilitychange', onVisibility) })
 watch([objectsOpen, activeLayerId, selectedId, areaIds, () => selection.value?.resourceType === '3dtiles', () => props.active], () => {
   // The indexed ID identifies the whole asset; the controller owns the actual map pick.
   if (selection.value?.resourceType === '3dtiles' && objectsOpen.value) return
@@ -660,7 +701,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 </script>
 
 <template>
-  <div class="map-workspace" :class="{ 'has-time-axis': timeAxisHeight > 0 }" :style="{ '--time-axis-height': `${timeAxisHeight}px` }" aria-label="地图工作台视图">
+  <div ref="workspace" class="map-workspace" :class="{ 'has-time-axis': timeAxisHeight > 0, 'has-layer-panel': sidebarVisible, 'hide-right-pane': !rightPaneVisible, 'editing-poi': !!poiDraft, 'has-active-pane': sidebarVisible || rightPaneVisible }" :style="{ '--time-axis-height': `${timeAxisHeight}px` }" aria-label="地图工作台视图">
     <div class="primary-map"><MapCanvas
       :weather-effect="shownWeather.effect" track-weather
       @camera-move="cameraMoving" @weather-resize="weather.resized"
@@ -672,10 +713,10 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @navigation="onNavigation"
       @ground="queryNearby"
     /></div>
-    <WeatherControl class="map-weather" compact v-model:mode="weatherMode"
-      :weather="shownWeather" :status="weatherStatus" :region="weatherRegion?.name" :reference="weatherReference" />
+    <div class="map-floating-layout">
     <LayerPanel
-      v-model:open="sidebar"
+      :open="sidebarVisible"
+      @update:open="openLayers"
       v-model:filter="filter"
       :layers="viewLayers"
       :backend="backend"
@@ -695,12 +736,13 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @calibrate="startCalibration"
       @move="move"
     />
-    <RegionPicker
+    <div class="map-region-slot"><RegionPicker
       v-model:boundary-enabled="boundaryEnabled"
       :boundary-state="boundaryState"
       :selected="selectedRegion"
       :display-label="selectedDisplay?.name"
-      :sidebar="sidebar"
+      :sidebar="false"
+      @update:open="regionOpen = $event"
       @select="selectRegion"
       @open="displayRegions.refresh"
       @retry-boundary="updateBoundary()"
@@ -720,7 +762,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
           @notice="notice = $event"
         />
       </template>
-    </RegionPicker>
+    </RegionPicker></div>
     <MapToolbar
       class="browse-tools"
       :is2-d="is2D"
@@ -733,14 +775,18 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @tilt="tiltMap"
       @north="northMap"
     />
-    <button class="object-trigger panel" :aria-expanded="objectsOpen" aria-label="打开对象查询" @click="toggleObjects">对象查询</button>
-    <PoiDetails v-if="objectsOpen && inspectedPoiLayer && !poiDraft"
+    <div class="map-top-actions">
+      <WeatherControl class="map-weather" compact v-model:mode="weatherMode"
+        :weather="shownWeather" :status="weatherStatus" :region="weatherRegion?.name" :reference="weatherReference" />
+      <button class="object-trigger panel" :aria-expanded="rightPaneVisible && objectsOpen" aria-label="打开对象查询" @click="toggleObjects"><Search :size="17" aria-hidden="true" />对象查询</button>
+    </div>
+    <Transition name="floating-panel"><PoiDetails v-if="objectsOpen && inspectedPoiLayer && !poiDraft"
       :selection="inspectedSelection" :layer="inspectedPoiLayer" :distance="inspectedPoiDistance"
-      :edit-poi="!!poiSelectionLayer" @close="closeObjects" @back="clearObjectSelection" @edit-poi="startPoi(true)" />
-    <NearbyPoiPanel v-if="objectsOpen && nearbyOpen && !inspectedSelection && !poiDraft"
+      :edit-poi="!!poiSelectionLayer" @close="closeObjects" @back="clearObjectSelection" @edit-poi="startPoi(true)" /></Transition>
+    <Transition name="floating-panel"><NearbyPoiPanel v-if="objectsOpen && nearbyOpen && !inspectedSelection && !poiDraft"
       :items="nearbyItems" :layers="viewLayers" :loading="nearbyLoading" :error="nearbyError" :unavailable="nearbyUnavailable"
-      @select="selectNearby" @close="closeObjects" @retry="nearbyPoint && queryNearby(nearbyPoint)" />
-    <ObjectPanel v-if="objectsOpen" v-show="!inspectedPoiLayer && !nearbyOpen"
+      @select="selectNearby" @close="closeObjects" @retry="nearbyPoint && queryNearby(nearbyPoint)" /></Transition>
+    <Transition name="floating-panel"><ObjectPanel v-if="objectsOpen" v-show="!inspectedPoiLayer && !nearbyOpen"
       :class="{ 'temporal-objects': dynamicLayers.length }"
       :layers="queryLayers" :layer-id="activeLayerId" :items="objectItems" :total="objectTotal" :page="objectPage" :page-size="objectPageSize"
       :loading="objectsLoading" :error="objectsError" v-model:q="objectQuery" v-model:type="objectType"
@@ -750,27 +796,28 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       @close="closeObjects" @layer="changeObjectLayer" @page="setObjectPage" @select="onListSelection" @apply="applyObjectFilters"
       @draw="beginDraw" @finish="controller?.finishAreaSelection()" @cancel="cancelDraw" @clear-area="clearObjectArea"
       @clear-selection="clearObjectSelection" @retry="refreshObjects"
-    />
+    /></Transition>
     <div v-if="poiPicking" class="poi-prompt panel" role="status">
       点击地面选择 POI 位置
       <button @click="cancelPoi()">取消</button>
     </div>
-    <PoiEditor v-if="poiDraft" v-show="!poiPicking" ref="poiEditor"
+    <Transition name="floating-panel"><PoiEditor v-if="poiDraft" v-show="!poiPicking" ref="poiEditor"
       :layers="poiLayers" :layer="poiDraft.layer" :object="poiDraft.object" :coordinates="poiDraft.coordinates"
-      @pick="pickPoiPosition" @cancel="cancelPoi()" @saved="savePoi" @refresh="cancelPoi(); emit('refresh')" />
-    <TilesCalibrationPanel v-if="calibration" class="model-calibration" :name="calibration.layer.name" :offsets="calibrationOffsets"
+      @pick="pickPoiPosition" @cancel="cancelPoi()" @saved="savePoi" @refresh="cancelPoi(); emit('refresh')" /></Transition>
+    <Transition name="floating-panel"><TilesCalibrationPanel v-if="calibration" class="model-calibration" :name="calibration.layer.name" :offsets="calibrationOffsets"
       :busy="calibrationBusy" :ready="!!calibrationMatrix" :save-ready="calibrationSaveReady" :can-pick="canPickCalibrationPivot"
       :message="calibrationNotice" :error="calibrationError"
-      @change="changeCalibration" @pick="pickCalibrationPivot" @cancel="cancelCalibration" @save="publishCalibration" />
-    <MapLegend v-if="!objectsOpen && !calibration" :layers="viewLayers" class="basemap-legend" />
-    <BasemapSwitcher :controller="basemapController" :vector-available="vectorAvailable" />
+      @change="changeCalibration" @pick="pickCalibrationPivot" @cancel="cancelCalibration" @save="publishCalibration" /></Transition>
+    <div class="map-bottom-controls">
+      <MapLegend :layers="viewLayers" class="basemap-legend" />
+      <BasemapSwitcher :controller="basemapController" :vector-available="vectorAvailable" />
+    </div>
     <TimeAxis v-if="dynamicLayers.length || metadataLoading" :time="time" v-model:resolution="resolution" v-model:rate="rate"
       ref="timeAxis"
       :playing="playing" :maximum="maximum" :position="position" :times="times" :loading="timeLoading" :metadata-loading="metadataLoading"
       :counts="timeCounts" :errors="timeErrors" :all-missing="allMissing"
       @select="temporal.setTime" @seek="temporal.seek" @step="temporal.step" @play="temporal.play" @pause="temporal.pause"
       @refresh="temporal.refreshAvailability(); temporal.refresh()" />
-    <MapStatus :layers="viewLayers" :navigation="navigation" />
     <div v-if="sceneRecord" class="scene-banner panel"><span>{{ sceneRecord.name }} · v{{ sceneRecord.version }} · 快照草稿</span><button @click="emit('exitScene')">返回普通地图</button></div>
     <WorkspaceFeedback
       :notice="notice"
@@ -784,6 +831,8 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
         <button @click="retryState(id)">重试保存</button>
       </div>
     </div>
+    </div>
+    <MapStatus :layers="viewLayers" :navigation="navigation" />
   </div>
 </template>
 

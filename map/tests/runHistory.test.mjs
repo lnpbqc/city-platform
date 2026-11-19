@@ -85,6 +85,23 @@ test('an open history panel reconnects at the existing filter and page', async t
   assert.deepEqual(calls.at(-1).query, { scene_id: 'scene-filter', status: 'failed', from: '', to: '', page: 3, page_size: 20 })
 })
 
+test('hidden history keeps its filters and page and refreshes only when shown again', async t => {
+  const app = renderer.createApp(historyPanel, { scenes: [], locked: false, selected: '', revision: '', active: true, embedded: true })
+  app.mount({}); t.after(() => app.unmount()); await new Promise(setImmediate)
+  const state = app._instance.setupState, props = app._instance.props
+  state.status = 'failed'; state.apply(); await new Promise(setImmediate)
+  await state.setPage(3)
+  props.active = false; await new Promise(setImmediate)
+  const before = calls.length
+  props.revision = 'new-run:succeeded'; await new Promise(setImmediate)
+  assert.equal(calls.length, before)
+  props.active = true; await new Promise(setImmediate)
+  assert.equal(state.page, 3)
+  assert.equal(state.status, 'failed')
+  assert.equal(calls.at(-1).query.page, 3)
+  assert.equal(calls.at(-1).query.status, 'failed')
+})
+
 test('deleting the final row refreshes totals and returns to the preceding page', async t => {
   const { history } = setup(t)
   await history.setPage(3)

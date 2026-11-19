@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { LoaderCircle, Save, Play, Square, Plus, RefreshCw, Crosshair, History } from '@lucide/vue'
+import { LoaderCircle, Save, Play, Square, Plus, RefreshCw, Crosshair, History, Settings2, X, ChartNoAxesCombined } from '@lucide/vue'
+import UiTooltip from '../components/common/UiTooltip.vue'
 import MapCanvas from '../components/map/MapCanvas.vue'
 import BasemapSwitcher from '../components/map/BasemapSwitcher.vue'
 import { vectorBasemapConfigured } from '../map/basemapSetting'
@@ -48,11 +49,65 @@ const { scenes, networks, draft, sceneId, sceneVersion, network, run, result, sn
   busy, submissionPending, editingLocked, historical, resultNetwork, previewDraft, cancelling, recoveryError, initialize, chooseScene, chooseNetwork, save, submit: submitRun, cancel, refreshRun, toggleEdge, newScene, openRun, rerun } = simulation
 const configurationLocked = computed(() => props.backend === 'loading' || loading.value || editingLocked.value)
 const historyLocked = computed(() => loading.value || saving.value || submitting.value || busy.value || submissionPending.value)
-const historyOpen = ref(false)
+const viewportWidth = ref(window.innerWidth)
+const mobile = computed(() => viewportWidth.value < 768)
+const sidebarOpen = ref(!mobile.value)
+const sidebar = ref<HTMLElement | null>(null)
+const panelTrigger = ref<HTMLButtonElement | null>(null)
+const paneNames = { config: '配置', result: '结果', history: '历史' }
+const activePane = ref<keyof typeof paneNames>('config')
+const historyVisited = ref(false)
+const configVisible = computed(() => sidebarOpen.value && activePane.value === 'config')
+const resultVisible = computed(() => sidebarOpen.value && activePane.value === 'result')
+function selectPane(value: keyof typeof paneNames) {
+  const moveFocus = value !== activePane.value && sidebar.value?.querySelector<HTMLElement>(`#simulation-pane-${activePane.value}`)?.contains(document.activeElement)
+  activePane.value = value
+  if (value === 'history') historyVisited.value = true
+  if (moveFocus) void nextTick(() => {
+    if (sidebarOpen.value) sidebar.value?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus()
+  })
+}
+function openConfig() { selectPane('config'); sidebarOpen.value = true }
+function openSidebar() {
+  sidebarOpen.value = true
+  void nextTick(() => sidebar.value?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus())
+}
+function closeSidebar() { sidebarOpen.value = false; void nextTick(() => panelTrigger.value?.focus()) }
+function resizeLayout() {
+  const wasMobile = mobile.value
+  viewportWidth.value = window.innerWidth
+  if (wasMobile !== mobile.value) {
+    if (mobile.value && sidebar.value?.contains(document.activeElement)) closeSidebar()
+    else sidebarOpen.value = !mobile.value
+  }
+}
+function navigatePanes(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const panes = Object.keys(paneNames) as (keyof typeof paneNames)[]
+  const index = panes.indexOf(activePane.value)
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? panes.length - 1
+    : (index + (event.key === 'ArrowRight' ? 1 : -1) + panes.length) % panes.length
+  selectPane(panes[next]!)
+  const buttons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]')
+  buttons[next]?.focus()
+}
+function sidebarKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || !sidebarOpen.value) return
+  if (event.key === 'Escape') { event.preventDefault(); closeSidebar(); return }
+  if (event.key !== 'Tab' || !mobile.value) return
+  const buttons = [...(sidebar.value?.querySelectorAll<HTMLElement>('button, input, select, summary, [tabindex="0"]') ?? [])]
+    .filter(element => element.getClientRects().length && !element.matches(':disabled, [tabindex="-1"]'))
+  const first = buttons[0], last = buttons.at(-1)
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
+watch(result, value => { if (value) selectPane('result') })
+onMounted(() => { resizeLayout(); window.addEventListener('resize', resizeLayout) })
+onBeforeUnmount(() => window.removeEventListener('resize', resizeLayout))
 const historyRevision = computed(() => `${run.value?.run_id ?? ''}:${run.value?.status ?? ''}`)
 const mapError = ref('')
 const notice = ref('')
-const runStatus = ref<HTMLElement | null>(null)
 const preview = ref(true)
 const fixedWeather = computed(() => historical.value || !preview.value)
 const useLiveWeather = () => props.active && !fixedWeather.value
@@ -108,9 +163,6 @@ watch([loading, saving, submitting, cancelling, submissionPending], () => { void
 watch(historyRevision, () => emit('runChanged'))
 watch(result, value => { preview.value = !value })
 watch([preview, result], () => { if (preview.value || !result.value) showReplay({ baseline: null, blocked: null }) })
-watch(() => run.value?.run_id, async id => {
-  if (id) { await nextTick(); runStatus.value?.scrollIntoView({ block: 'nearest' }) }
-})
 
 function paint() {
   try { controller?.showSimulation(graph.value ?? null, blocked.value, displayResult.value, id => {
@@ -255,18 +307,18 @@ function frameNetwork() {
     west = Math.min(west, node.coordinates[0]!); east = Math.max(east, node.coordinates[0]!)
     south = Math.min(south, node.coordinates[1]!); north = Math.max(north, node.coordinates[1]!)
   }
-  controller?.setCamera({ ...initialCamera, longitude: (west + east) / 2 - (east - west) * 0.35,
+  controller?.setCamera({ ...initialCamera, longitude: (west + east) / 2,
     latitude: (south + north) / 2, height: Math.max(900, (east - west) * 111320 * 2.4, (north - south) * 111320 * 2.4) })
 }
-function editConfiguration() { previewDraft(); preview.value = true }
+function editConfiguration() { previewDraft(); preview.value = true; openConfig() }
 async function selectHistory(identity: string) {
   await openRun(identity)
-  if (run.value?.run_id === identity) historyOpen.value = false
+  if (run.value?.run_id === identity) selectPane('result')
 }
 async function rerunHistory(identity: string) {
   const previous = run.value?.run_id
   await rerun(identity)
-  if (submissionPending.value || run.value?.run_id !== previous) historyOpen.value = false
+  if (submissionPending.value || run.value?.run_id !== previous) selectPane('result')
 }
 function deletedHistory(identity: string) {
   simulation.runDeleted(identity)
@@ -278,129 +330,214 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
 </script>
 
 <template>
-  <section class="simulation-workspace" aria-label="仿真推演工作区">
-    <BasemapSwitcher class="simulation-basemap" :controller="basemapController" :vector-available="vectorAvailable" />
-    <MapCanvas :weather-effect="active ? shownWeather.effect : 'none'" track-weather
-      @camera-move="weather.moving" @weather-resize="weather.resized" @ready="ready" @navigation="onNavigation" @notice="notice = $event" @fatal="mapError = $event" />
-    <aside class="simulation-config panel" aria-label="仿真配置">
-      <header><div><span class="eyebrow">SIMULATION</span><h1>仿真推演</h1></div><button class="icon-button" aria-label="新建场景" :disabled="configurationLocked" @click="newScene(); preview = true"><Plus :size="18" /></button></header>
-      <p class="synthetic">{{ network?.synthetic ? '合成演示 · 校区附近路网' : '版本化路网' }}</p>
-      <WeatherControl class="simulation-weather" v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus"
-        :region="weatherRegion?.name" :reference="weatherReference" :fixed="fixedWeather" />
-      <p v-if="loading || backend === 'loading'"><LoaderCircle :size="14" class="spin" />正在读取场景与路网…</p>
-      <fieldset :disabled="configurationLocked">
+  <section class="simulation-workspace" :class="{ 'sidebar-open': sidebarOpen }" aria-label="仿真推演工作区">
+    <div v-if="mobile && sidebarOpen" class="simulation-scrim" @click="closeSidebar" />
+    <aside v-show="sidebarOpen" id="simulation-sidebar" ref="sidebar" class="simulation-sidebar panel"
+      :role="mobile ? 'dialog' : undefined" :aria-modal="mobile || undefined" aria-label="仿真面板" @keydown="sidebarKeydown">
+      <header class="sidebar-heading"><h1>仿真推演</h1><div class="sidebar-actions">
+        <UiTooltip :text="configurationLocked ? '请完成当前操作后新建场景' : '新建场景'"><button class="icon-button" aria-label="新建场景" :disabled="configurationLocked" @click="newScene(); preview = true; selectPane('config')"><Plus :size="18" /></button></UiTooltip>
+        <button class="icon-button" aria-label="收起仿真面板" @click="closeSidebar"><X :size="18" /></button>
+      </div></header>
+      <div class="simulation-tabs" role="tablist" aria-label="仿真面板内容" @keydown="navigatePanes">
+        <button v-for="(label, pane) in paneNames" :id="`simulation-tab-${pane}`" :key="pane" role="tab"
+          :aria-selected="activePane === pane" :aria-controls="`simulation-pane-${pane}`" :tabindex="activePane === pane ? 0 : -1" @click="selectPane(pane)">
+          <Settings2 v-if="pane === 'config'" :size="16" /><ChartNoAxesCombined v-else-if="pane === 'result'" :size="16" /><History v-else :size="16" />{{ label }}
+        </button>
+      </div>
+      <div class="simulation-pane-body">
+        <section v-show="configVisible" id="simulation-pane-config" class="simulation-config" role="tabpanel" aria-labelledby="simulation-tab-config" tabindex="0">
+          <p class="synthetic">{{ network?.synthetic ? '合成演示 · 校区附近路网' : '版本化路网' }}</p>
+          <p v-if="loading || backend === 'loading'" role="status"><LoaderCircle :size="14" class="spin" />正在读取场景与路网…</p>
+          <fieldset :disabled="configurationLocked">
+              <section class="config-group"><h2>场景</h2>
         <label>已保存场景<select aria-label="选择场景" :value="sceneId" @change="selectScene"><option value="">新建场景</option><option v-for="scene in scenes" :key="scene.id" :value="scene.id">{{ scene.name }} · v{{ scene.version }}</option></select></label>
         <label>场景名称<input v-model="draft.name" maxlength="120" aria-label="场景名称"></label>
+        </section><section class="config-group"><h2>路网与起终点</h2>
         <label>路网版本<select aria-label="路网版本" :value="networkKey" @change="selectNetwork"><option value="">选择路网</option><option v-for="item in networks" :key="`${item.asset_id}@${item.version}`" :value="JSON.stringify([item.asset_id, item.version])">{{ item.name }} · {{ item.version }}</option></select></label>
         <div class="field-pair"><label>起点<select v-model="draft.origin" aria-label="起点" @change="preview = true"><option v-for="node in network?.nodes ?? []" :key="node.id" :value="node.id">{{ node.id }}</option></select></label><label>终点<select v-model="draft.destination" aria-label="终点" @change="preview = true"><option v-for="node in network?.nodes ?? []" :key="node.id" :value="node.id">{{ node.id }}</option></select></label></div>
         <div class="field-pair"><label>模式<input value="小汽车" readonly aria-label="运行模式"></label><label>随机种子<input v-model.number="draft.seed" type="number" step="1" aria-label="随机种子"></label></div>
-        <div class="section-heading"><h2>阻断边</h2><span>{{ draft.blocked_edges.length }} / {{ network?.edges.length ?? 0 }}</span></div>
+        </section><section class="config-group"><div class="section-heading"><h2>阻断边</h2><span>{{ draft.blocked_edges.length }} / {{ network?.edges.length ?? 0 }}</span></div>
         <p class="hint">点击地图道路或勾选列表，使用相同的边ID。</p>
         <ul class="edge-list"><li v-for="edge in network?.edges ?? []" :key="edge.id"><label><input type="checkbox" :checked="draft.blocked_edges.includes(edge.id)" :aria-label="`阻断 ${edge.id}`" @change="editEdge(edge.id)"><span>{{ edge.id }}</span><small>{{ number(edge.length_m) }} m</small></label></li></ul>
-        <details class="scene-layers"><summary>固定图层与状态 · {{ draft.layers.length }}</summary><div v-for="layer in draft.layers" :key="layer.layer_id" class="scene-layer"><label><input v-model="layer.map_attached" type="checkbox" :aria-label="`加入场景 ${layerName(layer.layer_id)}`">{{ layerName(layer.layer_id) }}<small>{{ layer.asset?.version ?? '底图' }}</small></label><div v-if="layer.map_attached" class="scene-layer-controls"><label><input v-model="layer.map_visible" type="checkbox" :aria-label="`显示场景 ${layerName(layer.layer_id)}`">显示</label><input v-model.number="layer.map_opacity" type="range" min="0" max="1" step="0.05" :aria-label="`场景透明度 ${layerName(layer.layer_id)}`"><span>{{ Math.round(layer.map_opacity * 100) }}%</span><label v-if="layer.category === '道路' || layer.category === '线状网络'">道路显示到<select :value="layer.road_max_level ?? 2" :aria-label="`场景道路显示到 ${layerName(layer.layer_id)}`" @change="layer.road_max_level = Number(($event.target as HTMLSelectElement).value)"><option v-for="level in 4" :key="level" :value="level">第 {{ level }} 级</option></select></label></div></div></details>
-      </fieldset>
-      <div class="save-actions"><button class="secondary-button" :disabled="configurationLocked" @click="save()"><Save :size="14" />{{ saving ? '保存中…' : sceneId ? '保存场景' : '创建场景' }}</button><button v-if="sceneId" class="text-button" :disabled="configurationLocked" @click="save(true)">另存为</button><span v-if="sceneId">v{{ sceneVersion }}</span></div>
-      <p v-if="historical" class="hint">历史快照 · 场景 v{{ run?.scene_version }}。从历史编辑会创建新场景草稿。</p>
-      <button v-if="historical && !submissionPending && run" class="secondary-button run-button" :disabled="historyLocked" @click="editConfiguration">从历史编辑</button>
-      <button class="primary-button run-button" :disabled="backend === 'loading' || submitting || busy || saving || loading || !network" @click="historical && !submissionPending && run ? rerunHistory(run.run_id) : submit()"><LoaderCircle v-if="submitting || busy" :size="16" class="spin" /><Play v-else :size="16" />{{ submitting ? '正在提交…' : busy ? '正在运行' : submissionPending ? '重试同一次提交' : historical ? '从历史重跑' : '提交运行' }}</button>
-      <p v-if="submissionPending" class="hint">上次提交结果未知，重试将复用同一幂等键。配置已锁定。</p>
-      <p v-if="error" class="error" role="alert">{{ error }}<button v-if="!submissionPending && sceneId && error.includes('SCENE_VERSION_CONFLICT')" class="text-button" @click="chooseScene(sceneId)">读取最新场景</button><button v-else-if="!submissionPending" class="text-button" @click="run ? refreshRun() : initialize()"><RefreshCw :size="13" />刷新</button></p>
-      <p v-if="recoveryError" class="error" role="alert">只读恢复失败：{{ recoveryError }}</p>
-      <section v-if="run" ref="runStatus" class="run-status" aria-label="当前运行">
-        <div class="section-heading"><h2>{{ statusLabel }}</h2><button v-if="busy" class="text-button" :disabled="cancelling" @click="cancel()"><Square :size="12" />{{ cancelling ? '取消中…' : '取消运行' }}</button></div>
-        <p class="identity">run_id：{{ run.run_id }}</p><p>场景版本 {{ run.scene_version }} · {{ run.model_version }}</p>
-        <p class="identity">输入SHA-256：{{ run.inputs_sha256 }}</p><p class="identity">trace_id：{{ run.trace_id }}</p>
-        <p v-if="run.error" class="error">{{ run.error.code }} · {{ run.error.message }} · trace_id：{{ run.error.trace_id }}</p>
-      </section>
+        </section><section class="config-group"><h2>固定图层</h2><details class="scene-layers"><summary>固定图层与状态 · {{ draft.layers.length }}</summary><div v-for="layer in draft.layers" :key="layer.layer_id" class="scene-layer"><label><input v-model="layer.map_attached" type="checkbox" :aria-label="`加入场景 ${layerName(layer.layer_id)}`">{{ layerName(layer.layer_id) }}<small>{{ layer.asset?.version ?? '底图' }}</small></label><div v-if="layer.map_attached" class="scene-layer-controls"><label><input v-model="layer.map_visible" type="checkbox" :aria-label="`显示场景 ${layerName(layer.layer_id)}`">显示</label><input v-model.number="layer.map_opacity" type="range" min="0" max="1" step="0.05" :aria-label="`场景透明度 ${layerName(layer.layer_id)}`"><span>{{ Math.round(layer.map_opacity * 100) }}%</span><label v-if="layer.category === '道路' || layer.category === '线状网络'">道路显示到<select :value="layer.road_max_level ?? 2" :aria-label="`场景道路显示到 ${layerName(layer.layer_id)}`" @change="layer.road_max_level = Number(($event.target as HTMLSelectElement).value)"><option v-for="level in 4" :key="level" :value="level">第 {{ level }} 级</option></select></label></div></div></details>
+      </section></fieldset>
+          <p v-if="historical" class="hint">历史快照 · 场景 v{{ run?.scene_version }}。从历史编辑会创建新场景草稿。</p>
+        </section>
+        <section v-show="resultVisible" id="simulation-pane-result" class="simulation-result" role="tabpanel" aria-labelledby="simulation-tab-result" tabindex="0">
+          <p v-if="!run" class="empty-result">配置场景并提交运行后，在此查看结果与路径回放。</p>
+          <section v-if="run" class="run-summary" aria-label="当前运行">
+            <div class="section-heading"><h2>{{ statusLabel }}</h2><span>场景 v{{ run.scene_version }}</span></div>
+            <p v-if="busy" class="hint">运行完成后自动显示路径对比。</p>
+            <p v-if="run.error" class="error" role="alert">{{ run.error.code }} · {{ run.error.message }}</p>
+            <details class="run-identifiers"><summary>运行详情</summary><p>run_id：{{ run.run_id }}</p><p>{{ run.model_version }} · {{ run.data_version }}</p><p>输入 SHA-256：{{ run.inputs_sha256 }}</p><p>trace_id：{{ run.trace_id }}</p></details>
+          </section>
+          <template v-if="result"><header><h2>路径对比</h2><span>{{ snapshot?.request.network.asset_id }}@{{ snapshot?.request.network.version }} · {{ snapshot?.request.origin }} → {{ snapshot?.request.destination }}</span><strong>{{ result.blocked.reachable ? result.metrics.rerouted ? '已绕行' : result.blocked.path.length === 1 ? '起终点相同' : '路径保持' : '阻断后不可达' }}</strong><RunExports :key="result.run_id" :identity="result.run_id" /></header>
+      <div class="result-columns"><div class="blue"><h3>基准</h3><strong>{{ number(result.baseline.length_m) }} <small>m</small></strong><span>{{ number(result.baseline.duration_s) }} 秒</span><p>{{ result.baseline.reachable ? result.baseline.path.join(' → ') : '不可达' }}</p></div><div class="orange"><h3>阻断后</h3><strong>{{ number(result.blocked.length_m) }} <small>m</small></strong><span>{{ number(result.blocked.duration_s) }} 秒</span><p>{{ result.blocked.reachable ? result.blocked.path.join(' → ') : '不可达' }}</p></div><div><h3>长度变化</h3><strong>{{ result.metrics.increase_percent === null ? '—' : `${result.metrics.increase_percent >= 0 ? '+' : ''}${number(result.metrics.increase_percent)}%` }}</strong><span>按边速度累计时间</span><p>合成演示，长度使用路网显式权重。</p></div></div>
+      <ReplayControls v-if="resultNetwork && !preview" :key="result.run_id" :network="resultNetwork" :result="result" :active="active && resultVisible" @position="showReplay" />
+    </template>
+        </section>
+        <section v-show="activePane === 'history'" id="simulation-pane-history" class="simulation-history" role="tabpanel" aria-labelledby="simulation-tab-history">
+          <RunHistoryPanel v-if="historyVisited" embedded :active="active && sidebarOpen && activePane === 'history'" :scenes="scenes" :locked="historyLocked" :selected="run?.run_id ?? ''" :revision="historyRevision" :recovery="recovery" @close="closeSidebar" @select="selectHistory" @rerun="rerunHistory" @deleted="deletedHistory" />
+        </section>
+      </div>
+      <footer class="simulation-footer">
+        <div v-if="run" class="run-status"><span role="status">当前运行 · {{ statusLabel }}</span><button v-if="busy" class="text-button" :disabled="cancelling" @click="cancel()"><Square :size="12" />{{ cancelling ? '取消中…' : '取消运行' }}</button></div>
+        <div v-if="error || recoveryError || submissionPending" class="footer-messages">
+          <p v-if="submissionPending" class="hint">上次提交结果未知，重试将复用同一幂等键。配置已锁定。</p>
+          <p v-if="error" class="error" role="alert">{{ error }}<button v-if="!submissionPending && sceneId && error.includes('SCENE_VERSION_CONFLICT')" class="text-button" @click="chooseScene(sceneId)">读取最新场景</button><button v-else-if="!submissionPending" class="text-button" @click="run ? refreshRun() : initialize()"><RefreshCw :size="13" />刷新</button></p>
+          <p v-if="recoveryError" class="error" role="alert">只读恢复失败：{{ recoveryError }}</p>
+        </div>
+        <template v-if="activePane === 'config'"><div class="save-actions"><button class="secondary-button" :disabled="configurationLocked" @click="save()"><Save :size="14" />{{ saving ? '保存中…' : sceneId ? '保存场景' : '创建场景' }}</button><button v-if="sceneId" class="text-button" :disabled="configurationLocked" @click="save(true)">另存为</button><span v-if="sceneId">v{{ sceneVersion }}</span></div></template>
+        <button v-if="historical && run && !submissionPending" class="secondary-button" :disabled="historyLocked" @click="editConfiguration">从历史编辑</button>
+        <button v-else-if="activePane === 'result' && result" class="secondary-button" :disabled="historyLocked" @click="editConfiguration">编辑配置</button>
+        <template v-if="activePane !== 'history'"><button class="primary-button run-button" :disabled="backend === 'loading' || submitting || busy || saving || loading || !network" @click="historical && !submissionPending && run ? rerunHistory(run.run_id) : submit()"><LoaderCircle v-if="submitting || busy" :size="16" class="spin" /><Play v-else :size="16" />{{ submitting ? '正在提交…' : busy ? '正在运行' : submissionPending ? '重试同一次提交' : historical ? '从历史重跑' : '提交运行' }}</button></template>
+      </footer>
     </aside>
-    <div class="simulation-tools panel"><button :aria-expanded="historyOpen" @click="historyOpen = !historyOpen"><History :size="16" />运行历史</button><button @click="frameNetwork"><Crosshair :size="16" />定位路网</button><button v-if="result && !historical" :aria-pressed="preview" @click="preview ? preview = false : editConfiguration()">{{ preview ? '查看结果图层' : '编辑配置' }}</button><span>{{ preview ? '配置预览' : '固定运行结果' }}</span></div>
-    <div class="route-legend panel" aria-label="路线图例"><span class="blue">━ 基准路径</span><span class="orange">━ 阻断后路径</span><span class="red">× 阻断边</span></div>
-    <TimeAxis v-if="initializationFinished && temporal.dynamicLayers.value.length" class="simulation-time" :class="{ 'with-result': result }" label="专题数据时间" :time="time" v-model:resolution="resolution" v-model:rate="rate" :playing="playing"
+    <section class="simulation-map" aria-label="仿真地图" :inert="mobile && sidebarOpen">
+      <MapCanvas :weather-effect="active ? shownWeather.effect : 'none'" track-weather
+        @camera-move="weather.moving" @weather-resize="weather.resized" @ready="ready" @navigation="onNavigation" @notice="notice = $event" @fatal="mapError = $event" />
+      <div class="simulation-map-layout">
+        <div class="simulation-map-top">
+          <div class="simulation-tools panel">
+            <button v-if="!sidebarOpen" ref="panelTrigger" aria-label="打开仿真面板" aria-controls="simulation-sidebar" :aria-expanded="sidebarOpen" @click="openSidebar"><Settings2 :size="16" />仿真面板</button>
+            <button @click="frameNetwork"><Crosshair :size="16" />定位路网</button>
+            <button v-if="result && !historical" :aria-pressed="preview" @click="preview ? preview = false : editConfiguration()">{{ preview ? '查看结果图层' : '编辑配置' }}</button>
+            <span>{{ preview ? '配置预览' : '固定运行结果' }}</span>
+          </div>
+          <WeatherControl class="simulation-weather" compact v-model:mode="weatherMode" :weather="shownWeather" :status="weatherStatus"
+        :region="weatherRegion?.name" :reference="weatherReference" :fixed="fixedWeather" />
+        </div>
+        <div v-if="mapError || notice || mapLayers.some(layer => layer.status === 'error')" class="map-notice panel" role="status"><p>{{ mapError || notice }}</p><p v-for="layer in mapLayers.filter(layer => layer.status === 'error')" :key="layer.id">{{ layer.name }}：{{ layer.error }}</p><button class="text-button" @click="mapError = ''; notice = ''; syncLayers()">刷新场景图层</button></div>
+        <div class="simulation-map-bottom">
+          <div class="simulation-map-bottom-row">
+            <div class="route-legend panel" aria-label="路线图例"><span class="blue">━ 基准路径</span><span class="orange">━ 阻断后路径</span><span class="red">× 阻断边</span></div>
+            <BasemapSwitcher class="simulation-basemap" :controller="basemapController" :vector-available="vectorAvailable" />
+          </div>
+          <TimeAxis v-if="initializationFinished && temporal.dynamicLayers.value.length" class="simulation-time" label="专题数据时间" :time="time" v-model:resolution="resolution" v-model:rate="rate" :playing="playing"
       :maximum="maximum" :position="position" :times="times" :loading="timeLoading" :metadata-loading="metadataLoading" :counts="counts" :errors="timeErrors" :all-missing="allMissing"
       @select="temporal.setTime" @seek="temporal.seek" @step="temporal.step" @play="temporal.play" @pause="temporal.pause" @refresh="temporal.refreshAvailability(); temporal.refresh()" />
-    <section v-if="result" class="simulation-result panel" aria-label="运行结果对比">
-      <header><h2>路径对比</h2><span>{{ snapshot?.request.network.asset_id }}@{{ snapshot?.request.network.version }} · {{ snapshot?.request.origin }} → {{ snapshot?.request.destination }}</span><strong>{{ result.blocked.reachable ? result.metrics.rerouted ? '已绕行' : result.blocked.path.length === 1 ? '起终点相同' : '路径保持' : '阻断后不可达' }}</strong><RunExports :key="result.run_id" :identity="result.run_id" /></header>
-      <div class="result-columns"><div class="blue"><h3>基准</h3><strong>{{ number(result.baseline.length_m) }} <small>m</small></strong><span>{{ number(result.baseline.duration_s) }} 秒</span><p>{{ result.baseline.reachable ? result.baseline.path.join(' → ') : '不可达' }}</p></div><div class="orange"><h3>阻断后</h3><strong>{{ number(result.blocked.length_m) }} <small>m</small></strong><span>{{ number(result.blocked.duration_s) }} 秒</span><p>{{ result.blocked.reachable ? result.blocked.path.join(' → ') : '不可达' }}</p></div><div><h3>长度变化</h3><strong>{{ result.metrics.increase_percent === null ? '—' : `${result.metrics.increase_percent >= 0 ? '+' : ''}${number(result.metrics.increase_percent)}%` }}</strong><span>按边速度累计时间</span><p>合成演示，长度使用路网显式权重。</p></div></div>
-      <ReplayControls v-if="resultNetwork && !preview" :key="result.run_id" :network="resultNetwork" :result="result" :active="active" @position="showReplay" />
+        </div>
+      </div>
     </section>
-    <RunHistoryPanel v-if="historyOpen" :scenes="scenes" :locked="historyLocked" :selected="run?.run_id ?? ''" :revision="historyRevision" :recovery="recovery" @close="historyOpen = false" @select="selectHistory" @rerun="rerunHistory" @deleted="deletedHistory" />
-    <div v-if="mapError || notice || mapLayers.some(layer => layer.status === 'error')" class="map-notice panel" role="status"><p>{{ mapError || notice }}</p><p v-for="layer in mapLayers.filter(layer => layer.status === 'error')" :key="layer.id">{{ layer.name }}：{{ layer.error }}</p><button class="text-button" @click="mapError = ''; notice = ''; syncLayers()">刷新场景图层</button></div>
   </section>
 </template>
 
 <style scoped>
-.simulation-workspace { position: absolute; inset: 0; }
-.simulation-config { position: absolute; z-index: 3; left: 24px; top: 84px; bottom: 28px; width: 330px; padding: 22px; overflow-y: auto; }
-.simulation-weather { margin: 0 0 12px; }
-header, .section-heading, .save-actions, .simulation-tools { display: flex; align-items: center; gap: 12px; }
-header, .section-heading { justify-content: space-between; }
-h1 { font-size: 23px; margin: 5px 0 0; }
-h2, h3 { font-size: 13px; margin: 0; font-weight: 600; }
-.synthetic, .hint, small, .save-actions > span, .run-status p { font-size: 11px; color: #73859a; line-height: 1.7; }
-.synthetic { margin: 9px 0 22px; }
-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-fieldset > label, .field-pair label { display: grid; gap: 7px; margin-bottom: 14px; font-size: 12px; color: #435870; }
-select, input:not([type=checkbox]) { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 5px; background: white; color: #29405a; }
-fieldset:disabled { opacity: .6; }
-.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.section-heading { margin-top: 17px; font-size: 11px; color: #73859a; }
+.simulation-workspace { position: absolute; inset: 80px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; color: var(--text); font-size: 14px; }
+.simulation-workspace.sidebar-open { grid-template-columns: 360px minmax(0, 1fr); }
+.simulation-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: white; }
+.sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; }
+.sidebar-heading h1 { font-size: 18px; margin: 0; }
+.sidebar-actions { display: flex; gap: 8px; }
+.simulation-tabs { display: flex; padding: 0 16px; gap: 8px; border-bottom: 1px solid var(--line); }
+.simulation-tabs button { flex: 1; min-height: 44px; gap: 8px; padding: 0 4px; border-bottom: 3px solid transparent; color: #475569; }
+.simulation-tabs button[aria-selected=true] { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+.sidebar-heading, .simulation-tabs, .simulation-footer { flex-shrink: 0; }
+.simulation-pane-body { flex: 1; min-height: 0; overflow: hidden; }
+.simulation-pane-body > section { height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.simulation-pane-body > section:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.simulation-config, .simulation-result { padding: 16px; }
+.simulation-history { min-height: 0; }
+.synthetic, .hint, .run-summary span, .run-status, .save-actions > span { font-size: 12px; color: #475569; line-height: 1.7; }
+.synthetic { margin-bottom: 16px; }
 .hint { margin: 8px 0; }
-.edge-list { list-style: none; padding: 0; margin: 0; max-height: 205px; overflow-y: auto; }
-.edge-list label { display: flex; gap: 9px; align-items: center; padding: 8px 0; font-size: 12px; border-bottom: 1px solid #edf1f6; cursor: pointer; }
-.edge-list small { margin-left: auto; }
+h2, h3 { font-size: 16px; margin: 0; font-weight: 600; }
+fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
+fieldset:disabled { opacity: .6; }
+.config-group + .config-group { margin-top: 24px; }
+.config-group > h2, .config-group > .section-heading { margin-bottom: 12px; }
+.config-group > label, .field-pair label { display: grid; gap: 8px; margin-bottom: 12px; min-width: 0; color: #334155; }
+.field-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+select, input:not([type=checkbox]) { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--text); font: inherit; }
 input[type=checkbox] { accent-color: var(--blue); }
-.scene-layers { font-size: 11px; margin-top: 18px; color: #65788e; }
-.scene-layers summary { cursor: pointer; margin-bottom: 8px; }
-.scene-layers label { display: flex; align-items: center; gap: 7px; padding: 6px 0; }
-.scene-layers small { margin-left: auto; }
-.scene-layer-controls { display: flex; gap: 8px; align-items: center; }
-.scene-layer-controls label { flex-shrink: 0; }
-.scene-layer-controls input[type=range] { width: 100%; min-width: 0; padding: 0; }
-.scene-layer-controls span { flex-shrink: 0; }
-.save-actions { margin-top: 20px; }
-.save-actions button { display: inline-flex; align-items: center; gap: 7px; }
-.run-button { display: flex; justify-content: center; gap: 8px; width: 100%; margin-top: 13px; padding: 12px; }
-.error { color: #b94e46; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.error button { margin-left: 10px; }
-.identity { overflow-wrap: anywhere; font-size: 10px !important; }
-.run-status { border-top: 1px solid var(--line); margin-top: 18px; }
-.simulation-basemap { top: 84px; right: 24px; bottom: auto; }
-.simulation-tools { position: absolute; right: 140px; top: 84px; z-index: 3; padding: 12px; font-size: 11px; }
-.simulation-tools button { display: flex; gap: 7px; align-items: center; color: var(--blue); }
-.simulation-tools > span { color: #73859a; }
-.route-legend { position: absolute; right: 140px; top: 143px; padding: 10px 14px; display: flex; gap: 18px; font-size: 12px; }
-.blue { color: #2563eb; } .orange { color: #c77c00; } .red { color: #dc2626; }
-.simulation-result { position: absolute; left: 380px; right: 24px; bottom: 28px; padding: 20px 24px; max-height: min(48%, max(120px, calc(100svh - 370px))); overflow-y: auto; }
-.simulation-time { left: 380px; right: 24px; bottom: 28px; }
-.simulation-time.with-result { bottom: auto; top: 192px; max-height: max(140px, calc(52svh - 232px)); }
-.simulation-result header { flex-wrap: wrap; font-size: 11px; color: #73859a; }
-.simulation-result header strong { color: #29405a; font-weight: 500; }
-.result-columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 18px; }
-.result-columns > div { display: grid; gap: 6px; }
-.result-columns strong { font-size: 23px; font-weight: 550; }
-.result-columns span, .result-columns p { font-size: 11px; line-height: 1.6; margin: 0; }
-.result-columns > div:last-child { color: #52657d; }
-.map-notice { position: absolute; left: 380px; top: 192px; right: 24px; padding: 10px 16px; font-size: 12px; color: #a55145; }
-button:disabled { opacity: .5; cursor: default; }
-@media (max-width: 900px) {
-  .simulation-config { width: 280px; left: 12px; padding: 16px; }
-  .simulation-result, .map-notice { left: 308px; right: 12px; }
-  .simulation-time { left: 308px; right: 12px; }
-  .simulation-result { padding: 16px; }
-  .result-columns { gap: 12px; }
-  .result-columns strong { font-size: 19px; }
-  .simulation-result header > span { display: none; }
-  .simulation-tools, .route-legend { right: 128px; }
-  .simulation-basemap { right: 12px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-heading > span { font-size: 12px; color: #475569; }
+.edge-list { list-style: none; margin: 0; padding: 0; }
+.edge-list label { display: flex; align-items: center; gap: 8px; min-height: 40px; border-bottom: 1px solid #edf1f6; cursor: pointer; }
+.edge-list small { margin-left: auto; color: #475569; font-size: 12px; }
+.scene-layers summary { cursor: pointer; padding-block: 8px; color: #475569; }
+.scene-layer { padding-block: 8px; border-bottom: 1px solid var(--line); }
+.scene-layer label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.scene-layer small { margin-left: auto; font-size: 12px; color: #475569; }
+.scene-layer-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 8px; }
+.scene-layer-controls input[type=range] { flex: 1; width: 70px; padding: 0; }
+.scene-layer-controls span { font-size: 12px; }
+.simulation-footer { display: grid; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: white; }
+.simulation-footer > button { width: 100%; min-height: 40px; }
+.save-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.save-actions button { gap: 8px; min-height: 36px; }
+.run-button { gap: 8px; }
+.run-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.run-status button { gap: 8px; }
+.footer-messages { max-height: 84px; overflow-y: auto; }
+.footer-messages .hint { margin: 0; }
+.error { color: #b42318; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.error button { margin-left: 8px; }
+.empty-result { margin: 0; color: #475569; line-height: 1.7; }
+.run-summary { margin-bottom: 24px; }
+.run-identifiers { margin-top: 12px; font-size: 12px; color: #475569; }
+.run-identifiers summary { cursor: pointer; }
+.run-identifiers p { margin: 8px 0 0; overflow-wrap: anywhere; }
+.simulation-result > header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.simulation-result > header > span { width: 100%; font-size: 12px; color: #475569; overflow-wrap: anywhere; }
+.simulation-result > header > strong { font-size: 14px; }
+.result-columns { display: grid; gap: 16px; margin-top: 16px; }
+.result-columns > div { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.result-columns strong { font-size: 26px; font-weight: 600; }
+.result-columns small, .result-columns span, .result-columns p { font-size: 12px; line-height: 1.7; margin: 0; overflow-wrap: anywhere; }
+.result-columns > div:last-child { color: #475569; }
+.simulation-result :deep(.replay-actions) { flex-wrap: wrap; gap: 8px; }
+.simulation-result :deep(.replay-actions > span) { flex-basis: 100%; margin-left: 0; }
+.simulation-result :deep(.replay button) { min-width: 36px; min-height: 36px; }
+.simulation-result :deep(.replay :is(h3, output, label, .replay-actions > span)), .simulation-result :deep(.run-exports button) { font-size: 12px; }
+.simulation-result :deep(.run-exports button) { min-height: 36px; }
+.simulation-map { position: relative; min-width: 0; min-height: 0; overflow: hidden; border-radius: 9px; }
+.simulation-map > :deep(.map-canvas) { inset: 0; }
+.simulation-map :deep(.cesium-viewer-bottom) { max-width: calc(100% - 12px); }
+.simulation-map-layout { position: absolute; inset: 16px 16px 32px; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; pointer-events: none; }
+.simulation-map-top { position: relative; z-index: 5; display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 16px; }
+.simulation-map-top > *, .simulation-map-bottom-row > *, .simulation-time, .map-notice { pointer-events: auto; }
+.simulation-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 8px; max-width: 100%; }
+.simulation-tools button { min-height: 36px; gap: 8px; padding-inline: 4px; color: var(--blue); }
+.simulation-tools > span { color: #475569; font-size: 12px; padding-inline: 4px; }
+.simulation-map-top .simulation-weather { position: static; min-width: 0; max-width: 100%; }
+.simulation-map-top .simulation-weather :deep(.weather-content) { right: 0; left: auto; width: min(320px, calc(100vw - 64px)); }
+.simulation-map-bottom { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.simulation-map-bottom-row { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px; flex-shrink: 0; }
+.route-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; max-width: 100%; padding: 12px; font-size: 12px; }
+.blue { color: #2563eb; } .orange { color: #a65f00; } .red { color: #dc2626; }
+.simulation-basemap { position: relative; inset: auto; flex: 0 0 auto; margin-left: auto; }
+.simulation-time { position: relative; inset: auto; min-height: 64px; max-height: min(28svh, 240px); overflow-y: auto; flex: 0 1 auto; }
+.map-notice { align-self: start; max-width: 100%; max-height: 96px; overflow: auto; padding: 12px; font-size: 12px; color: #a55145; }
+@media (min-width: 768px) and (max-width: 1199px) { .simulation-workspace.sidebar-open { grid-template-columns: 320px minmax(0, 1fr); } }
+@media (max-width: 767px) {
+  .simulation-workspace, .simulation-workspace.sidebar-open { inset: 80px 16px 16px; grid-template-columns: minmax(0, 1fr); }
+  .simulation-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 8; width: min(360px, calc(100vw - 56px)); }
+  .simulation-scrim { position: fixed; inset: 64px 0 0; z-index: 7; background: #14263b66; }
+  .simulation-map-layout { inset: 12px 12px 32px; gap: 12px; }
+  .simulation-tools > span { display: none; }
+  .simulation-tools button { min-height: 44px; }
+  .simulation-map-top { gap: 12px; }
+  .simulation-map-bottom-row { gap: 12px; }
+  .route-legend { gap: 8px; padding: 8px; }
+  .simulation-time { max-height: 24svh; }
 }
 @media (max-width: 600px) {
-  .simulation-workspace { overflow-y: auto; padding-top: 58px; }
-  .simulation-config { position: relative; top: auto; left: auto; width: auto; margin: 300px 12px 12px; overflow: visible; }
-  .simulation-result { position: relative; inset: auto; margin: 12px; }
-  .simulation-time, .simulation-time.with-result { position: relative; inset: auto; margin: 12px; }
-  .simulation-tools { top: 75px; }
-  .simulation-basemap { top: 75px; }
-  .route-legend { top: 128px; }
-  .map-notice { position: relative; inset: auto; margin: 12px; }
+  .simulation-workspace, .simulation-workspace.sidebar-open { top: 74px; }
+  .simulation-scrim { top: 58px; }
+}
+@media (max-height: 560px) {
+  .sidebar-heading { padding-block: 4px; }
+  .simulation-footer { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-block: 8px; }
+  .simulation-footer > :is(.run-status, .footer-messages) { grid-column: 1 / -1; }
+  .simulation-footer > button { min-height: 36px; padding: 8px; }
+  .simulation-footer > .run-button:only-child { grid-column: 1 / -1; }
+  .simulation-map-top { gap: 8px; }
+  .simulation-map-layout { gap: 8px; }
+  .simulation-map-bottom { gap: 8px; }
+  .simulation-map-bottom-row { align-items: end; }
+  .simulation-map-bottom-row .route-legend { padding: 6px 8px; }
+  .simulation-basemap { height: 60px; }
+  .simulation-basemap :deep(.basemap-card) { height: 54px; }
 }
 </style>

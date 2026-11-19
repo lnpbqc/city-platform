@@ -2,11 +2,11 @@ import { beforeEach, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const event = () => {
-  const listeners = []
-  return { addEventListener(fn) { listeners.push(fn) }, fire() { listeners.forEach(fn => fn()) } }
+  const listeners = new Set()
+  return { addEventListener(fn) { listeners.add(fn); return () => listeners.delete(fn) }, fire() { listeners.forEach(fn => fn()) }, get size() { return listeners.size } }
 }
 const provider = () => ({ errorEvent: event() })
-let ionImageryCalls, ionTerrainCalls, localUrls, localGate, wmtsError, ionTerrainError
+let ionImageryCalls, ionTerrainCalls, localUrls, localGate, wmtsError, ionTerrainError, tileCalls, tileResponse
 const Ion = {}
 class WebMercatorTilingScheme {}
 class Credit {
@@ -21,6 +21,10 @@ mock.module('cesium', {
       constructor(options) {
         if (wmtsError) throw wmtsError
         Object.assign(this, options, provider())
+      }
+      requestImage(x, y, level) {
+        tileCalls.push([this.layer, x, y, level])
+        return tileResponse()
       }
     },
     createWorldImageryAsync: async () => { ionImageryCalls++; return provider() },
@@ -37,12 +41,16 @@ beforeEach(() => {
   ionImageryCalls = ionTerrainCalls = 0
   localUrls = []
   localGate = wmtsError = ionTerrainError = undefined
+  tileCalls = []
+  tileResponse = () => Promise.resolve({ width: 256, height: 256 })
   delete Ion.defaultAccessToken
 })
 function setup() {
   const imagery = [], notices = []
   let alive = true
   const viewer = {
+    canvas: { clientWidth: 800, clientHeight: 600 },
+    camera: { moveStart: event(), moveEnd: event() },
     imageryLayers: {
       addImageryProvider(value, index = imagery.length) { value.show = true; imagery.splice(index, 0, value); return value },
       remove(value) { imagery.splice(imagery.indexOf(value), 1) },
@@ -283,4 +291,112 @@ test('Cesium imagery supports optional Tianditu annotation and missing key prese
   const previous = [...unkeyed.imagery]
   assert.equal(await switching.setBasemap('imagery', { annotations: true }), false)
   assert.deepEqual(unkeyed.imagery, previous)
+})
+
+test('Tianditu reuses pending and completed tiles when revisiting a view or switching styles', async t => {
+  const app = setup(), switching = app.switcher({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: 'key' })
+  t.after(() => switching.destroy())
+  await switching.setBasemap('imagery')
+  const img = app.imagery[0]
+  let resolve
+  tileResponse = () => new Promise(done => { resolve = done })
+  const first = img.requestImage(1, 2, 4)
+  const duplicate = img.requestImage(1, 2, 4)
+  assert.equal(tileCalls.length, 1, 'a pending tile must issue only one network request')
+  const image = { width: 256, height: 256 }
+  resolve(image)
+  assert.equal(await first, image)
+  assert.equal(await duplicate, image)
+  await switching.setBasemap('vector', { annotations: false })
+  await switching.setBasemap('imagery')
+  assert.equal(await img.requestImage(1, 2, 4), image)
+  assert.equal(tileCalls.length, 1, 'switching back reuses decoded tiles')
+})
+
+test('Tianditu defers intermediate camera views, coalesces settling and skips hidden canvases', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
+  const app = setup(), switching = app.switcher({ VITE_TIANDITU_KEY: 'key' })
+  t.after(() => switching.destroy())
+  await switching.setBasemap('vector')
+  const vec = app.imagery[0]
+  app.viewer.camera.moveStart.fire()
+  for (let x = 0; x < 20; x++) assert.equal(vec.requestImage(x, 0, 8), undefined)
+  assert.equal(tileCalls.length, 0)
+  app.viewer.camera.moveEnd.fire()
+  t.mock.timers.tick(100)
+  assert.equal(vec.requestImage(1, 0, 8), undefined)
+  app.viewer.camera.moveStart.fire()
+  t.mock.timers.tick(200)
+  assert.equal(vec.requestImage(2, 0, 8), undefined)
+  app.viewer.camera.moveEnd.fire()
+  t.mock.timers.tick(180)
+  await vec.requestImage(3, 0, 8)
+  assert.equal(tileCalls.length, 1)
+  app.viewer.canvas.clientWidth = 0
+  assert.equal(vec.requestImage(4, 0, 8), undefined)
+  assert.equal(tileCalls.length, 1)
+  app.viewer.canvas.clientWidth = 800
+  await vec.requestImage(4, 0, 8)
+  assert.equal(tileCalls.length, 2)
+  switching.destroy()
+  assert.equal(app.viewer.camera.moveStart.size, 0)
+  assert.equal(app.viewer.camera.moveEnd.size, 0)
+})
+
+test('Tianditu base and labels share a bounded request burst and concurrent limit', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
+  const app = setup(), switching = app.switcher({ VITE_TIANDITU_KEY: 'key' })
+  t.after(() => switching.destroy())
+  await switching.setBasemap('vector')
+  const [vec, cva] = app.imagery
+  const done = []
+  tileResponse = () => new Promise(resolve => done.push(resolve))
+  const pending = [vec.requestImage(0, 0, 8), cva.requestImage(0, 0, 8), vec.requestImage(1, 0, 8), cva.requestImage(1, 0, 8)]
+  assert.equal(vec.requestImage(2, 0, 8), undefined)
+  assert.equal(tileCalls.length, 4)
+  t.mock.timers.tick(200)
+  assert.equal(cva.requestImage(2, 0, 8), undefined, 'four active requests keep later tiles deferred')
+  done.forEach(resolve => resolve({ width: 256, height: 256 }))
+  await Promise.all(pending)
+  tileResponse = () => Promise.resolve({ width: 256, height: 256 })
+  await vec.requestImage(2, 0, 8)
+  assert.equal(tileCalls.length, 5)
+  await cva.requestImage(2, 0, 8)
+  await vec.requestImage(3, 0, 8)
+  await cva.requestImage(3, 0, 8)
+  assert.equal(vec.requestImage(4, 0, 8), undefined, 'completed requests still count toward the current burst')
+  t.mock.timers.tick(200)
+  await vec.requestImage(4, 0, 8)
+  assert.equal(tileCalls.length, 9)
+})
+
+test('Tianditu keeps a bounded recent-tile cache without caching failed or deferred requests', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
+  const app = setup(), switching = app.switcher({ VITE_TIANDITU_KEY: 'key' })
+  t.after(() => switching.destroy())
+  await switching.setBasemap('vector', { annotations: false })
+  const vec = app.imagery[0]
+  for (let x = 0; x < 128; x++) {
+    t.mock.timers.tick(200)
+    await vec.requestImage(x, 0, 8)
+  }
+  await vec.requestImage(0, 0, 8)
+  await vec.requestImage(128, 0, 8)
+  const count = tileCalls.length
+  await vec.requestImage(0, 0, 8)
+  assert.equal(tileCalls.length, count, 'a recently used tile remains cached')
+  await vec.requestImage(1, 0, 8)
+  assert.equal(tileCalls.length, count + 1, 'the least recently used tile is evicted')
+  t.mock.timers.tick(200)
+  tileResponse = () => Promise.reject(new Error('offline'))
+  await assert.rejects(vec.requestImage(200, 0, 8), /offline/)
+  tileResponse = () => undefined
+  assert.equal(vec.requestImage(200, 0, 8), undefined)
+  tileResponse = () => Promise.resolve({ width: 256, height: 256 })
+  assert.ok(await vec.requestImage(200, 0, 8), 'failed and scheduler-deferred requests may be retried')
+  const calls = tileCalls.length
+  switching.destroy()
+  assert.equal(vec.requestImage(201, 0, 8), undefined)
+  t.mock.timers.tick(1000)
+  assert.equal(tileCalls.length, calls)
 })

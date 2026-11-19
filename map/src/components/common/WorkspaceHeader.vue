@@ -11,9 +11,9 @@ const emit = defineEmits<{
 
 <template>
   <header class="topbar">
-    <a class="brand" href="#" @click.prevent="emit('home')">
+    <a class="brand" href="#" aria-label="城市韧性" @click.prevent="emit('home')">
       <span class="brand-mark"><Layers :size="23" :stroke-width="1.8" /></span>
-      <span>城市韧性<span class="brand-en">CITY RESILIENCE</span></span>
+      <span class="brand-name">城市韧性<span class="brand-en">CITY RESILIENCE</span></span>
       <span class="prototype-label">地图原型</span>
     </a>
     <nav class="top-nav" aria-label="工作台导航">
@@ -59,6 +59,7 @@ const emit = defineEmits<{
   inset: 0 0 auto;
   z-index: 5;
   background: #fff;
+  color: #334155;
   display: flex;
   align-items: center;
   padding: 0 24px;
@@ -70,7 +71,8 @@ const emit = defineEmits<{
   align-items: center;
   gap: 11px;
   color: #1c2e43;
-  font-size: 16px;
+  min-height: 44px;
+  font-size: 18px;
   font-weight: 650;
   letter-spacing: 1px;
   white-space: nowrap;
@@ -86,17 +88,17 @@ const emit = defineEmits<{
 }
 .brand-en {
   display: block;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 550;
   letter-spacing: 1.8px;
   margin-top: 2px;
-  color: #7d8c9e;
+  color: #475569;
 }
 .prototype-label {
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0;
   font-weight: 400;
-  color: #7d8c9e;
+  color: #475569;
   border-left: 1px solid #dce2eb;
   padding-left: 12px;
   margin-left: 3px;
@@ -112,13 +114,16 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 16px;
+  font-weight: 500;
   white-space: nowrap;
 }
 .nav-current {
   color: var(--blue);
   position: relative;
-  font-weight: 550;
+  font-weight: 600;
 }
 .nav-current:after {
   content: '';
@@ -131,9 +136,9 @@ const emit = defineEmits<{
   border-radius: 2px 2px 0 0;
 }
 .nav-count {
-  font-size: 10px;
+  font-size: 12px;
   background: #f1f4f8;
-  color: #7d8c9e;
+  color: #475569;
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -145,8 +150,8 @@ const emit = defineEmits<{
 }
 .local-label {
   white-space: nowrap;
-  font-size: 11px;
-  color: #778498;
+  font-size: 14px;
+  color: #475569;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -167,8 +172,9 @@ const emit = defineEmits<{
   background: #f2f6fc;
   color: #5f7caa;
   border-radius: 50%;
-  font-size: 11px;
+  font-size: 12px;
 }
+.topbar-right > .icon-button { width: 44px; height: 44px; }
 @media (max-width: 900px) {
   .topbar {
     gap: 25px;
@@ -187,14 +193,13 @@ const emit = defineEmits<{
     gap: 20px;
   }
 }
-@media (max-width: 600px) {
+@media (max-width: 767px) {
   .topbar {
-    height: 58px;
     padding: 0 12px;
-    gap: 12px;
+    gap: 8px;
   }
   .brand {
-    font-size: 14px;
+    font-size: 16px;
     gap: 7px;
   }
   .brand-mark {
@@ -202,14 +207,13 @@ const emit = defineEmits<{
     height: 31px;
   }
   .brand-en {
-    font-size: 6px;
-    letter-spacing: 1.5px;
+    display: none;
   }
   .top-nav {
-    gap: 12px;
+    gap: 8px;
   }
   .top-nav > button {
-    font-size: 10px;
+    font-size: 14px;
     gap: 4px;
   }
   .topbar-right {
@@ -224,5 +228,13 @@ const emit = defineEmits<{
   .avatar {
     display: none;
   }
+}
+@media (max-width: 600px) {
+  .topbar { height: 58px; }
+}
+@media (max-width: 480px) {
+  .topbar { padding: 0 8px; }
+  .brand { min-width: 44px; justify-content: center; }
+  .brand-name { display: none; }
 }
 </style>

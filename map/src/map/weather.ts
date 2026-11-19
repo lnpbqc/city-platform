@@ -1,4 +1,4 @@
-export type WeatherEffect = 'none' | 'clear' | 'rain' | 'snow'
+export type WeatherEffect = 'none' | 'clear' | 'cloudy' | 'overcast' | 'fog' | 'rain' | 'snow' | 'thunderstorm'
 export type WeatherMode = 'auto' | Exclude<WeatherEffect, 'none'>
 export type WeatherStatus = 'hidden' | 'outside' | 'loading' | 'ready' | 'limited' | 'unavailable'
 
@@ -14,11 +14,11 @@ export type WeatherSnapshot =
   | { source: 'none'; effect: 'none' }
 
 export const noWeather: WeatherSnapshot = { source: 'none', effect: 'none' }
-export const manualWeatherLabels = { clear: '晴', rain: '雨', snow: '雪' }
+export const manualWeatherLabels = { clear: '晴', cloudy: '多云', overcast: '阴', fog: '雾', rain: '雨', snow: '雪', thunderstorm: '雷雨' }
 
 const conditions: Record<number, [string, WeatherEffect]> = {
-  0: ['晴朗', 'clear'], 1: ['大致晴朗', 'clear'], 2: ['局部多云', 'none'], 3: ['阴', 'none'],
-  45: ['雾', 'none'], 48: ['冻雾', 'none'],
+  0: ['晴朗', 'clear'], 1: ['大致晴朗', 'clear'], 2: ['局部多云', 'cloudy'], 3: ['阴', 'overcast'],
+  45: ['雾', 'fog'], 48: ['冻雾', 'fog'],
   51: ['毛毛雨', 'rain'], 53: ['毛毛雨', 'rain'], 55: ['毛毛雨', 'rain'],
   56: ['冻毛毛雨', 'rain'], 57: ['冻毛毛雨', 'rain'],
   61: ['小雨', 'rain'], 63: ['中雨', 'rain'], 65: ['大雨', 'rain'],
@@ -26,7 +26,7 @@ const conditions: Record<number, [string, WeatherEffect]> = {
   71: ['小雪', 'snow'], 73: ['中雪', 'snow'], 75: ['大雪', 'snow'], 77: ['霰', 'snow'],
   80: ['阵雨', 'rain'], 81: ['阵雨', 'rain'], 82: ['强阵雨', 'rain'],
   85: ['阵雪', 'snow'], 86: ['强阵雪', 'snow'],
-  95: ['雷雨', 'rain'], 96: ['雷雨伴冰雹', 'rain'], 97: ['强雷雨', 'rain'], 99: ['雷雨伴冰雹', 'rain'],
+  95: ['雷雨', 'thunderstorm'], 96: ['雷雨伴冰雹', 'thunderstorm'], 97: ['强雷雨', 'thunderstorm'], 99: ['雷雨伴冰雹', 'thunderstorm'],
 }
 
 export function weatherLabel(code: number) {

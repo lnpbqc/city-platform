@@ -59,7 +59,7 @@ async function setup(t, props = {}) {
   const root = { children: [] }
   const app = renderer.createApp(component, { active: true, recovery: 0, revision: 0, layers: [], backend: 'online', catalogError: '', deleting: '', ...props })
   app.mount(root); t.after(() => app.unmount()); await flush()
-  return { state: app._instance.setupState, props: app._instance.props, text: () => text(root) }
+  return { root, state: app._instance.setupState, props: app._instance.props, text: () => text(root) }
 }
 
 test('scene references open the scene tab with the exact ID and show the scene count', async t => {
@@ -103,8 +103,8 @@ test('entering and recovery refresh current filters, page and open detail withou
 
 test('overview shows real object and run totals and failed statistics leave asset rows visible', async t => {
   const ctx = await setup(t)
-  assert.match(ctx.text(), /对象\s*8\s*个/)
-  assert.match(ctx.text(), /运行\s*3\s*次/)
+  assert.match(ctx.text(), /对象数量\s*8\s*个/)
+  assert.match(ctx.text(), /运行次数\s*3\s*次/)
   statistics = async () => { throw new Error('无权限：统计读取受限 · trace_id: stats') }
   ctx.state.changeTab('assets'); await flush()
   assert.match(ctx.text(), /无权限查看综合统计/)
@@ -114,7 +114,7 @@ test('overview shows real object and run totals and failed statistics leave asse
   statistics = async () => ({ ...overview, run_count: 9 })
   await ctx.state.refreshStats(); await flush()
   assert.equal(calls.pages.length, pages)
-  assert.match(ctx.text(), /运行\s*9\s*次/)
+  assert.match(ctx.text(), /运行次数\s*9\s*次/)
 })
 
 test('asset and registration empty states distinguish forbidden, failed, empty and filtered results', async t => {
@@ -147,5 +147,80 @@ test('asset and registration empty states distinguish forbidden, failed, empty a
   await ctx.state.refresh(); await flush()
   assert.match(ctx.text(), /没有匹配的资产/)
   assert.doesNotMatch(ctx.text(), /还没有资产/)
+  assert.equal(calls.writes, 0)
+})
+
+
+const elements = (node, matches) => [node, ...(node.children ?? []).flatMap(child => elements(child, matches))].filter(matches)
+
+test('overview keeps four metrics with storage breakdown in collapsed details and labeled filters', async t => {
+  statistics = async () => ({ ...overview, storage: { render_bytes: 2048, database_bytes: 3072, temporary_bytes: 1024 } })
+  const ctx = await setup(t)
+  const cards = elements(ctx.root, node => node.class?.split(' ').includes('stat-card'))
+  assert.equal(cards.length, 4)
+  assert.match(text(cards[0]), /资产数量61份近 7 天新增 2 份/)
+  assert.match(text(cards[3]), /源资产容量100B/)
+  const details = elements(ctx.root, node => node.class === 'stats-details')[0]
+  assert.equal(details.open, undefined)
+  const storage = elements(details, node => node.class === 'storage-card')[0]
+  assert.match(text(storage), /源资产容量100 B/)
+  assert.match(text(storage), /显示产物2.0 KB/)
+  assert.match(text(storage), /数据库（含索引）3.0 KB/)
+  assert.match(text(storage), /临时空间1.0 KB/)
+  ctx.state.changeTab('assets'); await flush()
+  const controls = elements(ctx.root, node => node.tagName === 'SELECT' || node.tagName === 'INPUT')
+  for (const control of controls) {
+    assert.equal(control.parent.tagName, 'LABEL')
+    assert.ok(text(control.parent).replace(text(control), '').trim(), control['aria-label'])
+  }
+  const scroll = elements(ctx.root, node => node.class === 'table-scroll')[0]
+  assert.equal(scroll.tabindex, '0')
+  assert.match(scroll['aria-label'], /资产目录.*横向滚动/)
+  assert.equal(calls.writes, 0)
+})
+
+test('overview shows zero values, grouped large counts and missing storage without inventing totals', async t => {
+  statistics = async () => ({ ...overview, asset_count: 0, object_count: 1234567, run_count: 0, total_byte_size: 1024 ** 4, assets_by_type: {}, assets_added_last_7_days: 0, storage: null })
+  const ctx = await setup(t)
+  const cards = elements(ctx.root, node => node.class?.split(' ').includes('stat-card'))
+  assert.match(text(cards[0]), /资产数量0份近 7 天新增 0 份/)
+  assert.match(text(cards[1]), /1,234,567/)
+  assert.match(text(cards[2]), /运行次数0次/)
+  assert.match(text(cards[3]), /源资产容量1.0TB/)
+  assert.match(ctx.text(), /显示产物暂不可用/)
+  assert.equal(ctx.state.bytes(1024 ** 3), '1.0 GB')
+  assert.equal(ctx.state.bytes(1024), '1.0 KB')
+  assert.equal(ctx.state.bytes(0), '0 B')
+  assert.equal(calls.writes, 0)
+})
+
+test('overview preserves metric placeholders while loading and offers retry after statistics fail', async t => {
+  let resolveStats
+  statistics = () => new Promise(resolve => { resolveStats = resolve })
+  const ctx = await setup(t)
+  assert.equal(elements(ctx.root, node => node.class?.split(' ').includes('stat-card')).length, 4)
+  assert.match(ctx.text(), /正在读取综合统计/)
+  resolveStats(overview); await flush()
+  statistics = async () => { throw new Error('统计服务不可用') }
+  await ctx.state.refreshStats(); await flush()
+  assert.match(ctx.text(), /综合统计加载失败/)
+  const retry = elements(ctx.root, node => node.tagName === 'BUTTON' && text(node) === '重试统计')[0]
+  statistics = async () => overview
+  await retry.onClick(); await flush()
+  assert.equal(ctx.state.stats.asset_count, 61)
+  assert.doesNotMatch(ctx.text(), /综合统计加载失败/)
+})
+
+test('visible upload edit and delete actions preserve their original events and records', async t => {
+  const events = []
+  const layer = { id: 'layer-one', name: '测试图层', category: 'POI', type: 'geojson', url: '/data/points.geojson', builtin: false }
+  const ctx = await setup(t, { layers: [layer], onAdd: () => events.push(['add']), onEdit: value => events.push(['edit', value]), onDeleteRecord: value => events.push(['delete', value]) })
+  const buttons = elements(ctx.root, node => node.tagName === 'BUTTON')
+  for (const label of ['上传 / 登记数据', '编辑', '删除登记']) {
+    const button = buttons.find(node => text(node).trim() === label)
+    assert.ok(button, label)
+    button.onClick()
+  }
+  assert.deepEqual(events, [['add'], ['edit', layer], ['delete', layer]])
   assert.equal(calls.writes, 0)
 })

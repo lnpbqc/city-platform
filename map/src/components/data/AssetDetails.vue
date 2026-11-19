@@ -231,7 +231,7 @@ onBeforeUnmount(() => {
 .checksum {
   overflow-wrap: anywhere;
   font-family: Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 .detail-backdrop {
   position: fixed;
@@ -245,6 +245,8 @@ onBeforeUnmount(() => {
   backdrop-filter: blur(3px);
 }
 .asset-dialog {
+  font-size: 14px;
+  color: #1e293b;
   width: min(820px, 100%);
   min-width: 0;
   max-width: 100%;
@@ -283,19 +285,19 @@ h2 {
   margin-top: 6px;
 }
 h3 {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 550;
   overflow-wrap: anywhere;
   margin: 0;
 }
 h3 span {
-  color: #8a9aae;
-  font-size: 11px;
+  color: #475569;
+  font-size: 12px;
   margin-left: 5px;
 }
 .asset-id {
-  color: #8c9aab;
-  font-size: 11px;
+  color: #475569;
+  font-size: 12px;
   margin-top: 7px;
   overflow-wrap: anywhere;
 }
@@ -308,15 +310,15 @@ dl > div {
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);
   gap: 10px;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.7;
 }
 dt {
-  color: #8a97a9;
+  color: #475569;
 }
 dd {
   margin: 0;
-  color: #52657d;
+  color: #475569;
   overflow-wrap: anywhere;
 }
 .detail-section {
@@ -335,11 +337,11 @@ table {
   border-collapse: collapse;
   table-layout: fixed;
   width: 100%;
-  font-size: 12px;
+  font-size: 14px;
 }
 th {
   text-align: left;
-  color: #7d8da1;
+  color: #475569;
   font-weight: 500;
   background: #f7f9fc;
   position: sticky;
@@ -368,9 +370,9 @@ th:nth-child(2) {
 }
 .hint,
 .empty {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.8;
-  color: #8d9aac;
+  color: #475569;
   margin-top: 13px;
 }
 .loading {
@@ -378,7 +380,7 @@ th:nth-child(2) {
   display: flex;
   justify-content: center;
   gap: 9px;
-  color: #8191a6;
+  color: #475569;
 }
 .detail-error {
   font-size: 12px;
@@ -398,6 +400,8 @@ th:nth-child(2) {
     padding: 12px;
   }
   .asset-dialog {
+  font-size: 14px;
+  color: #1e293b;
     max-height: calc(100svh - 24px);
   }
   header,
@@ -415,4 +419,6 @@ th:nth-child(2) {
     width: 72px;
   }
 }
+.asset-dialog :deep(.render-state) { font-size: 12px; color: #475569; }
+.asset-dialog :deep(.render-state button), .asset-content a { color: #1d4ed8; }
 </style>
