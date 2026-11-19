@@ -27,21 +27,22 @@ const renderer = createRenderer({
 const find = (root, predicate) => predicate(root) ? root : root.children.map(child => find(child, predicate)).find(Boolean)
 const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 function setup(t, options = {}) {
-  const values = new Map(options.saved ? [[settings.basemapStorageKey, options.saved]] : [])
-  const listeners = new Map(), calls = []
+  const values = new Map(options.values ?? (options.saved ? [[settings.basemapStorageKey, options.saved]] : []))
+  const listeners = new Map(), calls = [], annotationCalls = []
   t.mock.property(globalThis, 'window', { localStorage: { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) } })
   t.mock.property(globalThis, 'document', {
     addEventListener: (name, listener) => listeners.set(name, listener),
     removeEventListener: name => listeners.delete(name),
   })
-  const controller = { async setBasemap(kind) { calls.push(kind); return options.switch ? options.switch(kind) : true } }
+  const controller = { async setBasemap(kind, settings) { calls.push(kind); annotationCalls.push(settings?.annotations); return options.switch ? options.switch(kind) : true } }
   const root = { children: [] }
   const app = renderer.createApp(component, { controller, vectorAvailable: options.available ?? true })
   app.mount(root)
   t.after(() => app.unmount())
   const trigger = () => find(root, node => node.props?.class === 'stack-trigger')
   const card = kind => find(root, node => node.props?.['data-basemap'] === kind)
-  return { app, root, values, listeners, calls, trigger, card }
+  const checkbox = kind => find(root, node => node.tag === 'input' && node.props?.['aria-label'] === `${kind === 'imagery' ? '影像' : '矢量'}显示注记`)
+  return { app, root, values, listeners, calls, annotationCalls, trigger, card, checkbox }
 }
 
 test('cards expand by hover or click, select by button activation, close by Escape or outside press', async t => {
@@ -112,4 +113,58 @@ test('the default imagery card can retry a failed initial imagery load', async t
   await nextTick()
   assert.deepEqual(ctx.calls, ['imagery'])
   assert.equal(ctx.values.get(settings.basemapStorageKey), 'imagery')
+})
+
+test('annotation checkboxes default by kind and editing an inactive card does not switch basemaps', async t => {
+  const ctx = setup(t)
+  assert.equal(ctx.checkbox('imagery').props.checked, false)
+  assert.equal(ctx.checkbox('vector').props.checked, true)
+  await ctx.checkbox('vector').props.onChange({ target: { checked: false } })
+  assert.deepEqual(ctx.calls, [])
+  await ctx.card('vector').props.onClick()
+  assert.deepEqual(ctx.annotationCalls, [false])
+  assert.equal(ctx.checkbox('imagery').props.checked, false)
+  await ctx.checkbox('vector').props.onChange({ target: { checked: true } })
+  assert.deepEqual(ctx.annotationCalls, [false, true])
+  assert.equal(ctx.checkbox('vector').props.checked, true)
+  assert.equal(find(ctx.card('vector'), node => node.tag === 'input'), undefined)
+})
+
+test('saved annotation choices restore with the saved basemap', async t => {
+  const values = new Map([[settings.basemapStorageKey, 'vector']])
+  settings.saveAnnotations({ setItem: (key, value) => values.set(key, value) }, 'vector', false)
+  const restored = setup(t, { values })
+  await flush()
+  assert.deepEqual(restored.annotationCalls, [false])
+  assert.equal(restored.checkbox('vector').props.checked, false)
+})
+
+test('missing key disables annotations', async t => {
+  const unkeyed = setup(t, { available: false })
+  assert.equal(unkeyed.checkbox('imagery').props.disabled, true)
+})
+
+test('a failed toggle restores the checkbox', async t => {
+  const ctx = setup(t, { switch: () => false })
+  const target = { checked: true }
+  await ctx.checkbox('imagery').props.onChange({ target })
+  await nextTick()
+  assert.equal(target.checked, false)
+  assert.equal(ctx.checkbox('imagery').props.checked, false)
+})
+
+test('annotation changes while imagery is loading survive the pending switch', async t => {
+  const gates = []
+  const ctx = setup(t, { saved: 'vector', switch: kind => kind === 'imagery' ? new Promise(resolve => gates.push(resolve)) : true })
+  await flush()
+  const switching = ctx.card('imagery').props.onClick()
+  await nextTick()
+  const toggling = ctx.checkbox('imagery').props.onChange({ target: { checked: true } })
+  await nextTick()
+  gates.forEach(resolve => resolve(true))
+  await Promise.all([switching, toggling])
+  await nextTick()
+  assert.equal(ctx.checkbox('imagery').props.checked, true)
+  assert.equal(ctx.annotationCalls.at(-1), true)
+  assert.equal(settings.readAnnotations({ getItem: key => ctx.values.get(key) }, 'imagery'), true)
 })

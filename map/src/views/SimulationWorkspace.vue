@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { LoaderCircle, Save, Play, Square, Plus, RefreshCw, Crosshair, History } from '@lucide/vue'
 import MapCanvas from '../components/map/MapCanvas.vue'
+import BasemapSwitcher from '../components/map/BasemapSwitcher.vue'
+import { vectorBasemapConfigured } from '../map/basemapSetting'
 import WeatherControl from '../components/map/WeatherControl.vue'
 import { useWeatherView } from '../composables/useWeatherView'
 import { useDisplayRegions } from '../composables/useDisplayRegions'
@@ -33,6 +35,8 @@ function storedCamera(): CameraState | null {
 const localCamera = storedCamera()
 const initialCamera: CameraState = localCamera ?? { longitude: 113.364, latitude: 23.043, height: 1400, heading: 0, pitch: -Math.PI / 2, roll: 0, scene_mode: '3d' }
 let controller: MapController | undefined
+const basemapController = shallowRef<MapController>()
+const vectorAvailable = vectorBasemapConfigured({ VITE_TIANDITU_KEY: import.meta.env?.VITE_TIANDITU_KEY })
 const currentLayers = (): SceneLayerState[] => props.layers.filter(layer => layer.id === 'basemap' || layer.asset_id && layer.asset_version).map((layer, index) => ({
   layer_id: layer.id, asset: layer.asset_id && layer.asset_version ? { asset_id: layer.asset_id, version: layer.asset_version } : null,
   name: layer.name, category: layer.category,
@@ -158,6 +162,7 @@ async function syncLayers(prepared: MapLayer[] = []) {
 watch(() => JSON.stringify(draft.value.layers), () => { if (!restoringWorkspace) void syncLayers() })
 function ready(value: MapController) {
   controller = value
+  basemapController.value = value
   controller.initialize(demoRegion, localCamera ?? draft.value.camera)
   weather.resized()
   void syncLayers()
@@ -274,6 +279,7 @@ defineExpose({ captureWorkspace, restoreWorkspace, cancelRestore, isReady, canCa
 
 <template>
   <section class="simulation-workspace" aria-label="仿真推演工作区">
+    <BasemapSwitcher class="simulation-basemap" :controller="basemapController" :vector-available="vectorAvailable" />
     <MapCanvas :weather-effect="active ? shownWeather.effect : 'none'" track-weather
       @camera-move="weather.moving" @weather-resize="weather.resized" @ready="ready" @navigation="onNavigation" @notice="notice = $event" @fatal="mapError = $event" />
     <aside class="simulation-config panel" aria-label="仿真配置">
@@ -358,10 +364,11 @@ input[type=checkbox] { accent-color: var(--blue); }
 .error button { margin-left: 10px; }
 .identity { overflow-wrap: anywhere; font-size: 10px !important; }
 .run-status { border-top: 1px solid var(--line); margin-top: 18px; }
-.simulation-tools { position: absolute; right: 24px; top: 84px; z-index: 3; padding: 12px; font-size: 11px; }
+.simulation-basemap { top: 84px; right: 24px; bottom: auto; }
+.simulation-tools { position: absolute; right: 140px; top: 84px; z-index: 3; padding: 12px; font-size: 11px; }
 .simulation-tools button { display: flex; gap: 7px; align-items: center; color: var(--blue); }
 .simulation-tools > span { color: #73859a; }
-.route-legend { position: absolute; right: 24px; top: 143px; padding: 10px 14px; display: flex; gap: 18px; font-size: 12px; }
+.route-legend { position: absolute; right: 140px; top: 143px; padding: 10px 14px; display: flex; gap: 18px; font-size: 12px; }
 .blue { color: #2563eb; } .orange { color: #c77c00; } .red { color: #dc2626; }
 .simulation-result { position: absolute; left: 380px; right: 24px; bottom: 28px; padding: 20px 24px; max-height: min(48%, max(120px, calc(100svh - 370px))); overflow-y: auto; }
 .simulation-time { left: 380px; right: 24px; bottom: 28px; }
@@ -383,7 +390,8 @@ button:disabled { opacity: .5; cursor: default; }
   .result-columns { gap: 12px; }
   .result-columns strong { font-size: 19px; }
   .simulation-result header > span { display: none; }
-  .simulation-tools, .route-legend { right: 12px; }
+  .simulation-tools, .route-legend { right: 128px; }
+  .simulation-basemap { right: 12px; }
 }
 @media (max-width: 600px) {
   .simulation-workspace { overflow-y: auto; padding-top: 58px; }
@@ -391,6 +399,7 @@ button:disabled { opacity: .5; cursor: default; }
   .simulation-result { position: relative; inset: auto; margin: 12px; }
   .simulation-time, .simulation-time.with-result { position: relative; inset: auto; margin: 12px; }
   .simulation-tools { top: 75px; }
+  .simulation-basemap { top: 75px; }
   .route-legend { top: 128px; }
   .map-notice { position: relative; inset: auto; margin: 12px; }
 }

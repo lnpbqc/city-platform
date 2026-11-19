@@ -1023,6 +1023,7 @@ export function createMapController(
   const basemapEnv = {
     VITE_BASEMAP_PROVIDER: import.meta.env?.VITE_BASEMAP_PROVIDER,
     VITE_TIANDITU_KEY: import.meta.env?.VITE_TIANDITU_KEY,
+    VITE_TIANDITU_MAX_LEVEL: import.meta.env?.VITE_TIANDITU_MAX_LEVEL,
     VITE_CESIUM_ION_TOKEN: import.meta.env?.VITE_CESIUM_ION_TOKEN,
   }
   const basemapSwitcher = createBasemapSwitcher(viewer, basemapEnv, () => alive, onNotice)
@@ -2148,6 +2149,7 @@ export function createMapController(
     viewer.scene.canvas.removeEventListener?.('mouseleave', clearPointer)
     viewer.scene.canvas.removeEventListener?.('pointercancel', stopCalibrationDrag)
     entries.clear()
+    basemapSwitcher.destroy()
     handler.destroy()
     viewer.destroy()
   }

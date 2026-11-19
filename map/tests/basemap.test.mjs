@@ -44,7 +44,7 @@ function setup() {
   let alive = true
   const viewer = {
     imageryLayers: {
-      addImageryProvider(value, index = imagery.length) { imagery.splice(index, 0, value); return value },
+      addImageryProvider(value, index = imagery.length) { value.show = true; imagery.splice(index, 0, value); return value },
       remove(value) { imagery.splice(imagery.indexOf(value), 1) },
     },
     scene: { requestRender() {} },
@@ -168,12 +168,12 @@ test('switching replaces only owned base layers, pairs vector labels and leaves 
   const overlay = { name: 'business overlay' }
   app.imagery.push(overlay)
   assert.equal(await switching.setBasemap('vector'), true)
-  assert.deepEqual(app.imagery.map(layer => layer.layer ?? layer.name), ['vec', 'cva', 'business overlay'])
+  assert.deepEqual(app.imagery.filter(layer => layer.show !== false).map(layer => layer.layer ?? layer.name), ['vec', 'cva', 'business overlay'])
   assert.equal(app.viewer.terrainProvider, 'ellipsoid')
   assert.equal(ionTerrainCalls, 0)
   assert.equal(await switching.setBasemap('imagery'), true)
-  assert.equal(app.imagery.length, 2)
-  assert.equal(app.imagery[1], overlay)
+  assert.equal(app.imagery.length, 4)
+  assert.equal(app.imagery.at(-1), overlay)
 })
 
 test('missing key and failed initialization preserve the displayed base layers', async () => {
@@ -200,12 +200,12 @@ test('only the most recent request commits and stale providers do not report til
   const oldVector = app.imagery[0]
   release()
   assert.equal(await pending, false)
-  assert.deepEqual(app.imagery.map(layer => layer.layer), ['vec', 'cva'])
+  assert.deepEqual(app.imagery.filter(layer => layer.show).map(layer => layer.layer), ['vec', 'cva'])
   await switching.setBasemap('imagery')
   const notices = app.notices.length
   oldVector.errorEvent.fire()
   assert.equal(app.notices.length, notices)
-  app.imagery[0].errorEvent.fire()
+  app.imagery.find(layer => layer.show).errorEvent.fire()
   assert.match(app.notices.at(-1), /影像/)
 })
 
@@ -235,4 +235,52 @@ test('a partially added vector pair rolls back without removing the previous ima
   assert.equal(await switching.setBasemap('vector'), false)
   assert.deepEqual(app.imagery, previous)
   assert.match(app.notices.at(-1), /保留原底图/)
+})
+
+test('base layers and optional annotations are reused, hidden independently and released on destroy', async () => {
+  const app = setup()
+  const switching = app.switcher({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: 'key' })
+  await switching.setBasemap('imagery')
+  const img = app.imagery[0]
+  await switching.setBasemap('imagery', { annotations: true })
+  const cia = app.imagery.find(layer => layer.layer === 'cia')
+  assert.ok(cia?.show)
+  assert.deepEqual(app.imagery.filter(layer => layer.show).map(layer => layer.layer), ['img', 'cia'])
+  await switching.setBasemap('vector', { annotations: false })
+  assert.equal(img.show, false)
+  assert.equal(cia.show, false)
+  assert.deepEqual(app.imagery.filter(layer => layer.show).map(layer => layer.layer), ['vec'])
+  await switching.setBasemap('imagery', { annotations: true })
+  assert.equal(app.imagery[0], img)
+  assert.equal(app.imagery[1], cia)
+  assert.equal(app.imagery.length, 3)
+  await switching.setBasemap('imagery', { annotations: false })
+  assert.equal(cia.show, false)
+  const notices = app.notices.length
+  cia.errorEvent.fire()
+  assert.equal(app.notices.length, notices)
+  switching.destroy()
+  assert.deepEqual(app.imagery, [])
+  assert.equal(await switching.setBasemap('vector'), false)
+})
+
+test('Tianditu level setting accepts only integers 1 through 18 for base and labels', async () => {
+  for (const [value, expected] of [['16', 16], ['1', 1], ['18', 18], ['', 18], ['0', 18], ['19', 18], ['1.5', 18], ['bad', 18]]) {
+    const app = setup()
+    await app.switcher({ VITE_TIANDITU_KEY: 'key', VITE_TIANDITU_MAX_LEVEL: value }).setBasemap('vector')
+    assert.deepEqual(app.imagery.map(layer => layer.maximumLevel), [expected, expected])
+  }
+})
+
+test('Cesium imagery supports optional Tianditu annotation and missing key preserves imagery', async () => {
+  const app = setup()
+  await app.switcher({ VITE_CESIUM_ION_TOKEN: 'token', VITE_TIANDITU_KEY: 'key' }).setBasemap('imagery', { annotations: true })
+  assert.equal(ionImageryCalls, 1)
+  assert.equal(app.imagery[1].layer, 'cia')
+  const unkeyed = setup()
+  const switching = unkeyed.switcher({})
+  await switching.setBasemap('imagery')
+  const previous = [...unkeyed.imagery]
+  assert.equal(await switching.setBasemap('imagery', { annotations: true }), false)
+  assert.deepEqual(unkeyed.imagery, previous)
 })

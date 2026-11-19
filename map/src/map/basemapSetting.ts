@@ -15,3 +15,14 @@ export function readBasemap(storage: BasemapStorage | undefined, vectorAvailable
 export function saveBasemap(storage: BasemapStorage | undefined, kind: BasemapKind) {
   try { storage?.setItem(basemapStorageKey, kind) } catch { /* Browser storage may be disabled. */ }
 }
+
+export function readAnnotations(storage: BasemapStorage | undefined, kind: BasemapKind): boolean {
+  try {
+    const value = storage?.getItem(`city.map.annotations.${kind}.v1`)
+    return value === '1' ? true : value === '0' ? false : kind === 'vector'
+  } catch { return kind === 'vector' }
+}
+
+export function saveAnnotations(storage: BasemapStorage | undefined, kind: BasemapKind, enabled: boolean) {
+  try { storage?.setItem(`city.map.annotations.${kind}.v1`, enabled ? '1' : '0') } catch { /* Browser storage may be disabled. */ }
+}

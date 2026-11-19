@@ -83,6 +83,11 @@ async function setup(t, options = {}) {
   if (options.ready !== false) { ready(); await flush() }
   return { state, calls, ready, props: app._instance.props, events }
 }
+test('simulation exposes the ready controller to its basemap cards', async t => {
+  const { state } = await setup(t)
+  assert.equal(typeof state.basemapController?.getCamera, 'function')
+  assert.match(source, /<BasemapSwitcher[^>]*:controller="basemapController"/)
+})
 test('a historical result arriving before map readiness restores replay positions when ready', async t => {
   const { state, calls, ready } = await setup(t, { ready: false })
   await state.openRun('run-one')

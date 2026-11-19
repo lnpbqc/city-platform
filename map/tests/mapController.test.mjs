@@ -55,7 +55,7 @@ const basemapChoices = []
 let tilesSamples, sampleTilesHeight, wgs84TilesNormals
 mock.module('../src/map/basemap.ts', {
   exports: { initializeBasemap: async () => basemapTerrain,
-    createBasemapSwitcher: () => ({ setBasemap: async kind => { basemapChoices.push(kind); return true } }) },
+    createBasemapSwitcher: () => ({ setBasemap: async kind => { basemapChoices.push(kind); return true }, destroy() {} }) },
 })
 class GeoJsonDataSource {
   static load(source) {

@@ -797,7 +797,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 .scene-banner button { color: var(--blue); }
 .primary-map { position: absolute; inset: 0; }
 .map-weather { position: absolute; z-index: 2; right: 185px; top: 84px; }
-.basemap-legend { bottom: calc(var(--basemap-bottom) + 92px); }
+.basemap-legend { bottom: calc(var(--basemap-bottom) + 118px); }
 .temporal-objects { max-height: max(100px, calc(100svh - var(--time-axis-height) - 192px)); }
 .map-workspace {
   --basemap-bottom: 60px;
