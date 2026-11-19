@@ -44,6 +44,7 @@ const folded = ref(new Set<string>())
 const visibleLayers = computed(() =>
   props.layers.filter(
     (layer) =>
+      layer.id !== 'basemap' &&
       layer.attached &&
       (props.filter !== 'mine' || !layer.builtin) &&
       `${layer.name} ${layer.category}`
@@ -51,7 +52,7 @@ const visibleLayers = computed(() =>
         .includes(search.value.toLowerCase()),
   ),
 )
-const groups = computed(() => layerGroups(visibleLayers.value))
+const groups = computed(() => layerGroups(visibleLayers.value).filter(group => group.category !== '底图' || group.layers.length))
 function toggleGroup(category: string) {
   if (folded.value.has(category)) folded.value.delete(category)
   else folded.value.add(category)

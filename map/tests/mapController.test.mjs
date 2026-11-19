@@ -51,9 +51,11 @@ mock.module('../src/map/buildingTerrain.ts', {
 const flatTerrain = { name: 'ellipsoid' }
 const worldTerrain = { name: 'world', bounds: { minimum: 2, maximum: 30 } }
 let basemapTerrain
+const basemapChoices = []
 let tilesSamples, sampleTilesHeight, wgs84TilesNormals
 mock.module('../src/map/basemap.ts', {
-  exports: { initializeBasemap: async () => basemapTerrain },
+  exports: { initializeBasemap: async () => basemapTerrain,
+    createBasemapSwitcher: () => ({ setBasemap: async kind => { basemapChoices.push(kind); return true } }) },
 })
 class GeoJsonDataSource {
   static load(source) {
@@ -315,7 +317,7 @@ mock.module('cesium', {
 })
 const { createMapController } = await import('../src/map/mapController.ts')
 
-test('basemap imagery and labels share visibility, opacity, removal and reattachment', async () => {
+test('legacy basemap visibility, opacity and removal do not override the selected base imagery', async () => {
   const { controller } = setup()
   const layer = { id: 'basemap', attached: true, visible: true, opacity: 1 }
   await controller.load(layer)
@@ -324,14 +326,20 @@ test('basemap imagery and labels share visibility, opacity, removal and reattach
   layer.opacity = 0.35
   layer.visible = false
   controller.appearance(layer)
-  assert.ok(imagery.every(value => !value.show && value.alpha === 0.35))
+  assert.ok(imagery.every(value => value.show && value.alpha === 1))
   layer.visible = true
   controller.appearance(layer)
   assert.ok(imagery.every(value => value.show))
   controller.remove(layer)
-  assert.ok(imagery.every(value => !value.show))
+  assert.ok(imagery.every(value => value.show && value.alpha === 1))
   await controller.load(layer)
-  assert.ok(imagery.every(value => value.show && value.alpha === 0.35))
+  assert.ok(imagery.every(value => value.show && value.alpha === 1))
+  const terrain = viewer.terrainProvider
+  const camera = { ...viewer.camera.positionCartographic }
+  assert.equal(await controller.setBasemap('vector'), true)
+  assert.equal(basemapChoices.at(-1), 'vector')
+  assert.equal(viewer.terrainProvider, terrain)
+  assert.deepEqual(viewer.camera.positionCartographic, camera)
   controller.destroy()
 })
 

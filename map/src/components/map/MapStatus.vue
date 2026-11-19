@@ -6,7 +6,7 @@ import type { NavigationReading } from '../../map/mapNavigation'
 const props = defineProps<{ layers: MapLayer[]; navigation: NavigationReading | null }>()
 const loadedCount = computed(
   () =>
-    props.layers.filter((layer) => layer.attached && layer.status === 'ready')
+    props.layers.filter((layer) => layer.id !== 'basemap' && layer.attached && layer.status === 'ready')
       .length,
 )
 </script>

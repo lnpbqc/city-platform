@@ -9,7 +9,7 @@ import { useWeatherView } from '../src/composables/useWeatherView.ts'
 
 const source = await readFile(new URL('../src/views/MapWorkspace.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
-const javascript = ts.transpileModule(descriptor.scriptSetup.content, {
+const javascript = ts.transpileModule(descriptor.scriptSetup.content.replaceAll('import.meta.env', '({})'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const create = new Function('require', 'defineProps', 'defineEmits', 'defineExpose', 'exports', 'window', 'document', `${javascript}
@@ -63,6 +63,7 @@ function setup(options = {}) {
     if (name === '../composables/useDisplayRegions') return { useDisplayRegions: () => ({ regions: vue.ref(options.displayRegions ?? []) }) }
     if (name === '../composables/useTemporalLayers') return { useTemporalLayers: () => { const time = vue.ref(''); return { time, resolution: vue.ref('hour'), times: vue.ref(['2026-10-25T00:00:00Z']), pause() {}, paint() {}, setTime(value) { time.value = value } } } }
     if (name === '../map/poi') return poi
+    if (name === '../map/basemapSetting') return { vectorBasemapConfigured: () => false }
     if (name === '../simulation/sceneLayers') return {
       captureLayers: layers => layers.map(layer => ({ layer_id: layer.id, asset: { asset_id: layer.asset_id, version: layer.asset_version }, map_attached: layer.attached, map_visible: layer.visible, map_opacity: layer.opacity })),
       prepareSceneLayers: options.prepare ?? (async states => states.map(state => ({ id: state.layer_id, asset_id: state.asset.asset_id, asset_version: state.asset.version, map_attached: state.map_attached, visible: state.map_visible, opacity: state.map_opacity, order: state.order, attached: false }))),

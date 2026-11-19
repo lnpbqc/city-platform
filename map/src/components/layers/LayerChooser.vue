@@ -10,6 +10,7 @@ const dialog = ref<HTMLElement>()
 const filtered = computed(() =>
   props.layers.filter(
     (layer) =>
+      layer.id !== 'basemap' &&
       (tab.value === 'samples' ? layer.builtin : !layer.builtin) &&
       `${layer.name} ${layer.category}`
         .toLowerCase()

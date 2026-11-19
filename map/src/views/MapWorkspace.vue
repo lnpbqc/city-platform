@@ -6,6 +6,8 @@ import RegionPicker from '../components/map/RegionPicker.vue'
 import DisplayRegionPanel from '../components/map/DisplayRegionPanel.vue'
 import BookmarkPanel from '../components/map/BookmarkPanel.vue'
 import MapToolbar from '../components/map/MapToolbar.vue'
+import BasemapSwitcher from '../components/map/BasemapSwitcher.vue'
+import { vectorBasemapConfigured } from '../map/basemapSetting'
 import WeatherControl from '../components/map/WeatherControl.vue'
 import { useWeatherView } from '../composables/useWeatherView'
 import { useDisplayRegions } from '../composables/useDisplayRegions'
@@ -89,6 +91,8 @@ let nearbyVersion = 0
 let nearbyAbort: AbortController | undefined
 const drawing = ref<'box' | 'polygon' | null>(null)
 let controller: MapController | undefined
+const basemapController = shallowRef<MapController>()
+const vectorAvailable = vectorBasemapConfigured({ VITE_TIANDITU_KEY: import.meta.env?.VITE_TIANDITU_KEY })
 const sceneLayers = ref<MapLayer[] | null>(null)
 const sceneRecord = ref<SceneRecord | null>(null)
 let plainView: { camera: CameraState; time: string; resolution: TemporalContext['resolution'] } | undefined
@@ -431,6 +435,7 @@ function getController() {
 
 function onMapReady(value: MapController) {
   controller = value
+  basemapController.value = value
   controller.initialize(selectedRegion.value, storedView?.camera)
   weather.resized()
   if (selectedRegion.value.sampleKey) emit('campus', selectedRegion.value.sampleKey)
@@ -655,7 +660,7 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 </script>
 
 <template>
-  <div class="map-workspace" :style="{ '--time-axis-height': `${timeAxisHeight}px` }" aria-label="地图工作台视图">
+  <div class="map-workspace" :class="{ 'has-time-axis': timeAxisHeight > 0 }" :style="{ '--time-axis-height': `${timeAxisHeight}px` }" aria-label="地图工作台视图">
     <div class="primary-map"><MapCanvas
       :weather-effect="shownWeather.effect" track-weather
       @camera-move="cameraMoving" @weather-resize="weather.resized"
@@ -757,7 +762,8 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
       :busy="calibrationBusy" :ready="!!calibrationMatrix" :save-ready="calibrationSaveReady" :can-pick="canPickCalibrationPivot"
       :message="calibrationNotice" :error="calibrationError"
       @change="changeCalibration" @pick="pickCalibrationPivot" @cancel="cancelCalibration" @save="publishCalibration" />
-    <MapLegend v-if="!objectsOpen && !calibration" :layers="viewLayers" :class="{ 'temporal-legend': dynamicLayers.length }" />
+    <MapLegend v-if="!objectsOpen && !calibration" :layers="viewLayers" class="basemap-legend" />
+    <BasemapSwitcher :controller="basemapController" :vector-available="vectorAvailable" />
     <TimeAxis v-if="dynamicLayers.length || metadataLoading" :time="time" v-model:resolution="resolution" v-model:rate="rate"
       ref="timeAxis"
       :playing="playing" :maximum="maximum" :position="position" :times="times" :loading="timeLoading" :metadata-loading="metadataLoading"
@@ -791,12 +797,14 @@ defineExpose({ captureView, home, clearScene, restoreWorkspace, captureWorkspace
 .scene-banner button { color: var(--blue); }
 .primary-map { position: absolute; inset: 0; }
 .map-weather { position: absolute; z-index: 2; right: 185px; top: 84px; }
-.temporal-legend { bottom: calc(var(--time-axis-height) + 58px); }
+.basemap-legend { bottom: calc(var(--basemap-bottom) + 92px); }
 .temporal-objects { max-height: max(100px, calc(100svh - var(--time-axis-height) - 192px)); }
 .map-workspace {
+  --basemap-bottom: 60px;
   position: absolute;
   inset: 0;
 }
+.map-workspace.has-time-axis { --basemap-bottom: calc(var(--time-axis-height) + 64px); }
 .state-errors {
   position: absolute;
   z-index: 6;

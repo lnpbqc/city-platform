@@ -31,7 +31,7 @@ mock.module('cesium', {
     buildModuleUrl: path => path,
   },
 })
-const { initializeBasemap } = await import('../src/map/basemap.ts')
+const { initializeBasemap, createBasemapSwitcher } = await import('../src/map/basemap.ts')
 
 beforeEach(() => {
   ionImageryCalls = ionTerrainCalls = 0
@@ -43,11 +43,15 @@ function setup() {
   const imagery = [], notices = []
   let alive = true
   const viewer = {
-    imageryLayers: { addImageryProvider: value => imagery.push(value) },
+    imageryLayers: {
+      addImageryProvider(value, index = imagery.length) { imagery.splice(index, 0, value); return value },
+      remove(value) { imagery.splice(imagery.indexOf(value), 1) },
+    },
     scene: { requestRender() {} },
     terrainProvider: 'ellipsoid',
   }
   return { viewer, imagery, notices, destroy() { alive = false },
+    switcher: env => createBasemapSwitcher(viewer, env, () => alive, message => notices.push(message)),
     run: env => initializeBasemap(viewer, env, () => alive, message => notices.push(message)) }
 }
 
@@ -155,4 +159,80 @@ test('already destroyed viewers do not initialize Tianditu', async () => {
   app.destroy()
   await app.run({ VITE_BASEMAP_PROVIDER: 'tianditu', VITE_TIANDITU_KEY: 'key' })
   assert.deepEqual(app.imagery, [])
+})
+
+test('switching replaces only owned base layers, pairs vector labels and leaves terrain alone', async () => {
+  const app = setup()
+  const switching = app.switcher({ VITE_TIANDITU_KEY: 'key', VITE_CESIUM_ION_TOKEN: 'token' })
+  assert.equal(await switching.setBasemap('imagery'), true)
+  const overlay = { name: 'business overlay' }
+  app.imagery.push(overlay)
+  assert.equal(await switching.setBasemap('vector'), true)
+  assert.deepEqual(app.imagery.map(layer => layer.layer ?? layer.name), ['vec', 'cva', 'business overlay'])
+  assert.equal(app.viewer.terrainProvider, 'ellipsoid')
+  assert.equal(ionTerrainCalls, 0)
+  assert.equal(await switching.setBasemap('imagery'), true)
+  assert.equal(app.imagery.length, 2)
+  assert.equal(app.imagery[1], overlay)
+})
+
+test('missing key and failed initialization preserve the displayed base layers', async () => {
+  const app = setup()
+  const switching = app.switcher({})
+  await switching.setBasemap('imagery')
+  const previous = [...app.imagery]
+  assert.equal(await switching.setBasemap('vector'), false)
+  assert.deepEqual(app.imagery, previous)
+  const keyed = app.switcher({ VITE_TIANDITU_KEY: 'key' })
+  wmtsError = new Error('denied')
+  assert.equal(await keyed.setBasemap('vector'), false)
+  assert.deepEqual(app.imagery, previous)
+  assert.match(app.notices.at(-1), /天地图/)
+})
+
+test('only the most recent request commits and stale providers do not report tile errors', async () => {
+  const app = setup()
+  const switching = app.switcher({ VITE_TIANDITU_KEY: 'key' })
+  let release
+  localGate = new Promise(resolve => { release = resolve })
+  const pending = switching.setBasemap('imagery')
+  assert.equal(await switching.setBasemap('vector'), true)
+  const oldVector = app.imagery[0]
+  release()
+  assert.equal(await pending, false)
+  assert.deepEqual(app.imagery.map(layer => layer.layer), ['vec', 'cva'])
+  await switching.setBasemap('imagery')
+  const notices = app.notices.length
+  oldVector.errorEvent.fire()
+  assert.equal(app.notices.length, notices)
+  app.imagery[0].errorEvent.fire()
+  assert.match(app.notices.at(-1), /影像/)
+})
+
+test('destroy while switching prevents later layer changes and notices', async () => {
+  const app = setup()
+  const switching = app.switcher({})
+  let release
+  localGate = new Promise(resolve => { release = resolve })
+  const pending = switching.setBasemap('imagery')
+  app.destroy()
+  release()
+  assert.equal(await pending, false)
+  assert.deepEqual(app.imagery, [])
+  assert.deepEqual(app.notices, [])
+})
+
+test('a partially added vector pair rolls back without removing the previous imagery', async () => {
+  const app = setup()
+  const switching = app.switcher({ VITE_TIANDITU_KEY: 'key' })
+  await switching.setBasemap('imagery')
+  const previous = [...app.imagery]
+  const add = app.viewer.imageryLayers.addImageryProvider
+  app.viewer.imageryLayers.addImageryProvider = function (provider, index) {
+    if (provider.layer === 'cva') throw new Error('cannot add labels')
+    return add.call(this, provider, index)
+  }
+  assert.equal(await switching.setBasemap('vector'), false)
+  assert.deepEqual(app.imagery, previous)
+  assert.match(app.notices.at(-1), /保留原底图/)
 })

@@ -41,7 +41,7 @@ import { tilesPlacement, type MapLayer, type Selection, type GeometryDocument, t
 import type { Cesium3DTile, PolygonGraphics, TerrainProvider } from 'cesium'
 import type { RegionTarget } from './regions'
 import { fetchRegionBoundary, type BoundaryState } from './regionBoundary.ts'
-import { initializeBasemap } from './basemap.ts'
+import { createBasemapSwitcher, initializeBasemap } from './basemap.ts'
 import { ionTerrainConfigured } from './terrainSetting.ts'
 import { sampleBuildingTerrain, type TerrainBounds } from './buildingTerrain.ts'
 import { ApiError, getAssetVersion, getMapViewport, pickMapRoad, getRenderStatus, getRoadGroups } from '../api/api.ts'
@@ -1025,7 +1025,8 @@ export function createMapController(
     VITE_TIANDITU_KEY: import.meta.env?.VITE_TIANDITU_KEY,
     VITE_CESIUM_ION_TOKEN: import.meta.env?.VITE_CESIUM_ION_TOKEN,
   }
-  const basemapReady = initializeBasemap(viewer, basemapEnv, () => alive, onNotice).then((terrain) => {
+  const basemapSwitcher = createBasemapSwitcher(viewer, basemapEnv, () => alive, onNotice)
+  const basemapReady = initializeBasemap(viewer, basemapEnv, () => alive, onNotice, basemapSwitcher).then((terrain) => {
     worldTerrain = terrain
     applyTerrain()
   })
@@ -1425,12 +1426,6 @@ export function createMapController(
     }
     restoreHighlights()
     if (layer.id === 'basemap') {
-      for (let index = 0; index < viewer.imageryLayers.length; index++) {
-        const imagery = viewer.imageryLayers.get(index)
-        imagery.show = layer.attached && layer.visible
-        imagery.alpha = layer.opacity
-      }
-      if (alive) viewer.scene.requestRender()
       paintHighlights()
       return
     }
@@ -2232,6 +2227,7 @@ export function createMapController(
     clearPoint: cancelPointPicking,
     setRegionBoundary,
     setTerrain,
+    setBasemap: basemapSwitcher.setBasemap,
     zoom,
     setMode,
     tilt,
