@@ -62,6 +62,7 @@ Set-Location D:\city
 | [功能说明](docs/功能说明.md) | 地图、数据管理、查询、时间轴、仿真、回放与收藏 |
 | [开发说明](docs/开发说明.md) | 结构、模块职责、测试和核心验证 |
 | [部署说明](docs/部署说明.md) | Windows 安装启动、构建预览、升级、备份恢复和排障 |
+| [Linux 部署手册](docs/Linux部署手册.md) | 前六节统一准备，之后分别进入完整的 systemd 或 Docker 部署路线 |
 | [切片服务使用说明](tile_service/README.md) | WSL 切片服务启停、地址、令牌及存储位置 |
 | [接口说明](docs/api_contract.md) | API 速查、版本、并发、幂等和错误规则 |
 | [数据与模型说明](docs/数据与模型说明.md) | 数据来源、坐标、上传规范、白模生成及 Max→3D Tiles 流程 |
