@@ -42,6 +42,16 @@ test('network failures have a distinct code and client diagnostic id', async (t)
   await assert.rejects(getLayers(), (error) => error.status === 0 && error.code === 'NETWORK_ERROR' && error.traceId.startsWith('client-'))
 })
 
+test('HTTP contexts preserve network diagnostics without randomUUID', async (t) => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } })
+  t.after(() => Object.defineProperty(globalThis, 'crypto', original))
+  t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('Failed to fetch') })
+  await assert.rejects(getLayers(),
+    cause => cause.code === 'NETWORK_ERROR' && /^client-[0-9a-f-]{36}$/.test(cause.traceId))
+})
+
 test('successful responses are unchanged', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify([{ id: 'one' }]), { status: 200 }))
   assert.deepEqual(await getLayers(), [{ id: 'one' }])

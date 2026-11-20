@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { ApiError, cancelRun, getNetwork, getNetworks, getRun, getRunInput, getRunResult, getScene, getScenes, saveScene, submitRun, rerunRun } from '../api/api.ts'
 import type { CameraState } from '../map/mapNavigation'
@@ -412,7 +413,7 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
         const saved = await persist(false, operation)
         if (!saved || !currentView(operation.version, operation.scope)) return
         clearRun()
-        pending.value = { kind: 'submit', key: crypto.randomUUID(), body: { scene_id: saved.id, network: copy(saved.network!),
+        pending.value = { kind: 'submit', key: randomUUID(), body: { scene_id: saved.id, network: copy(saved.network!),
           origin: saved.origin!, destination: saved.destination!, blocked_edges: [...new Set(saved.blocked_edges)].sort(), params: copy(saved.params), seed: saved.seed,
           ...(fixedWeather ? { weather: fixedWeather } : {}) } }
       }
@@ -440,7 +441,7 @@ export function useSimulation(getCamera: () => CameraState, getLayers: () => Sce
     if (!alive || busy.value || submitting.value || saving.value) return
     if (pending.value) { error.value = '提交结果尚未确认，请先重试原提交。'; return }
     if (loading.value) { error.value = '场景正在读取，请稍后重跑。'; return }
-    pending.value = { kind: 'rerun', source_id: identity, key: crypto.randomUUID() }
+    pending.value = { kind: 'rerun', source_id: identity, key: randomUUID() }
     return submit()
   }
   async function cancel() {

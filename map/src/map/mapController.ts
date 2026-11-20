@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import {
   Viewer,
   Math as CesiumMath,
@@ -1730,7 +1731,7 @@ export function createMapController(
         const version = await getAssetVersion(layer.asset_id, layer.asset_version, entry.abort.signal)
         if (!current()) return
         if (version.status !== 'ready' || !version.entry_url)
-          throw new ApiError('资产版本不可用', 409, { status: version.status }, 'ASSET_UNAVAILABLE', `client-${crypto.randomUUID()}`)
+          throw new ApiError('资产版本不可用', 409, { status: version.status }, 'ASSET_UNAVAILABLE', `client-${randomUUID()}`)
         url = version.entry_url
         entry.bounds = version.bounds
         if (layer.type === '3dtiles' && version.tiles_calibrated !== undefined) {

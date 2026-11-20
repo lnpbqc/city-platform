@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import { ApiError } from '../api/api.ts'
 
 export function planarGeoJSON(data: { features?: { geometry?: { type?: string; coordinates?: unknown } | null; properties?: Record<string, unknown> | null }[] }) {
@@ -18,7 +19,7 @@ export function mapLoadError(cause: unknown) {
   try { body = JSON.parse(error?.response || '{}') } catch { /* Cesium or remote servers can return plain text. */ }
   const header = Object.entries(error?.responseHeaders || {}).find(([key]) => key.toLowerCase() === 'x-trace-id')?.[1]
   return new ApiError(body.message || error?.message || '资源加载失败', error?.statusCode || 0, body.detail ?? null,
-    body.code || 'RESOURCE_LOAD_FAILED', body.trace_id || header || `client-${crypto.randomUUID()}`)
+    body.code || 'RESOURCE_LOAD_FAILED', body.trace_id || header || `client-${randomUUID()}`)
 }
 
 export async function fetchMapGeoJSON(url: string, signal: AbortSignal, onProgress?: (loaded: number, total: number) => void) {
@@ -44,7 +45,7 @@ export async function fetchMapGeoJSON(url: string, signal: AbortSignal, onProgre
       } finally { reader.releaseLock() }
     } else source = await response.text()
     try { return JSON.parse(source.replace(/^\uFEFF/, '')) } catch {
-      throw new ApiError('GeoJSON内容无法解析', 422, null, 'RESOURCE_INVALID', `client-${crypto.randomUUID()}`)
+      throw new ApiError('GeoJSON内容无法解析', 422, null, 'RESOURCE_INVALID', `client-${randomUUID()}`)
     }
   } catch (cause) {
     if (cause instanceof Error && cause.name === 'AbortError') throw cause

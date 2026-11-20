@@ -32,6 +32,9 @@ importers:
       polygon-clipping:
         specifier: ^0.15.7
         version: 0.15.7
+      uuid:
+        specifier: 13.0.0
+        version: 13.0.0
       vue:
         specifier: ^3.5.44
         version: 3.5.44(typescript@6.0.3)
@@ -611,6 +614,10 @@ packages:
   urijs@1.19.11:
     resolution: {integrity: sha512-HXgFDgDommxn5/bIv0cnQZsPhHDA90NPHD6+c/v21U5+Sx5hoP8+dP9IZXBU1gIfvdRfhG8cel9QNPeionfcCQ==}
 
+  uuid@13.0.0:
+    resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
+    hasBin: true
+
   vite-plugin-static-copy@4.1.1:
     resolution: {integrity: sha512-GrlA8YklrAfSyxJ4M3fdQLOo9oNkp56IM9FYgX/WtEgeIFkPwhu4wzpufBCIuNKCa6Fn77FkRdYxkHqV0FwjAw==}
     engines: {node: ^22.0.0 || >=24.0.0}
@@ -1172,6 +1179,8 @@ snapshots:
   undici-types@7.24.6: {}
 
   urijs@1.19.11: {}
+
+  uuid@13.0.0: {}
 
   vite-plugin-static-copy@4.1.1(vite@8.3.4(@types/node@24.19.2)):
     dependencies:

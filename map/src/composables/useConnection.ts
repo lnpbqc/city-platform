@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { ApiError } from '../api/api.ts'
 import { subscribeApiEvents } from '../api/apiEvents.ts'
@@ -37,10 +38,10 @@ export function useConnection(onRecovered: () => void) {
     const timeout = setTimeout(() => abort.abort(), 5000)
     try {
       const response = await fetch('/api/health', { signal: abort.signal, cache: 'no-store' })
-      if (!response.ok) throw new ApiError('数据服务健康检查失败', response.status, null, 'HEALTH_CHECK_FAILED', response.headers.get('X-Trace-ID') || `client-${crypto.randomUUID()}`)
+      if (!response.ok) throw new ApiError('数据服务健康检查失败', response.status, null, 'HEALTH_CHECK_FAILED', response.headers.get('X-Trace-ID') || `client-${randomUUID()}`)
       if (!disposed && current === version) connected()
     } catch (cause) {
-      if (!disposed && current === version) interrupted(cause instanceof ApiError ? cause : new ApiError('无法连接数据服务', 0, null, 'NETWORK_ERROR', `client-${crypto.randomUUID()}`))
+      if (!disposed && current === version) interrupted(cause instanceof ApiError ? cause : new ApiError('无法连接数据服务', 0, null, 'NETWORK_ERROR', `client-${randomUUID()}`))
     } finally {
       clearTimeout(timeout)
       pending = undefined

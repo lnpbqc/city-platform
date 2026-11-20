@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import type { AssetDetail, AssetRecord, AssetQuery, AssetRegisterInput, AssetVersionRecord, Page, StatsOverview, LayerInput, LayerRecord, LayerCatalogRecord, LayerMapState, Bookmark, BookmarkInput, ObjectRecord, ObjectQuery, GeometryDocument } from '../layers/types'
 import type { CampusKey } from '../map/campuses'
 import type { DisplayRegion, DisplayRegionView } from '../map/displayRegions'
@@ -51,7 +52,7 @@ function responseError(status: number, body: unknown, headerTrace = '') {
   return error
 }
 const networkError = () => {
-  const error = new ApiError('无法连接数据服务', 0, null, 'NETWORK_ERROR', `client-${crypto.randomUUID()}`)
+  const error = new ApiError('无法连接数据服务', 0, null, 'NETWORK_ERROR', `client-${randomUUID()}`)
   publishApiEvent({ reachable: false, error })
   return error
 }
@@ -80,7 +81,7 @@ async function request<T>(url: string, options?: RequestInit, format: 'json' | '
   } catch (cause) {
     if (cause instanceof Error && cause.name === 'AbortError') throw cause
     if (cause instanceof TypeError) throw networkError()
-    const error = new ApiError('服务响应内容无法解析', 502, null, 'INVALID_RESPONSE', response.headers.get('X-Trace-ID') || `client-${crypto.randomUUID()}`)
+    const error = new ApiError('服务响应内容无法解析', 502, null, 'INVALID_RESPONSE', response.headers.get('X-Trace-ID') || `client-${randomUUID()}`)
     publishApiEvent({ reachable: true, error })
     throw error
   }

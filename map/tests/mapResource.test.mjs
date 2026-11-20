@@ -36,3 +36,17 @@ test('aborted fetch is retained as cancellation', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => { throw new DOMException('取消', 'AbortError') })
   await assert.rejects(fetchMapGeoJSON('/test', new AbortController().signal), error => error.name === 'AbortError')
 })
+
+test('HTTP contexts retain resource errors and invalid JSON diagnostics without randomUUID', async (t) => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } })
+  t.after(() => Object.defineProperty(globalThis, 'crypto', original))
+  const error = mapLoadError(new Error('模型入口不可用'))
+  assert.equal(error.code, 'RESOURCE_LOAD_FAILED')
+  assert.match(error.message, /模型入口不可用/)
+  assert.match(error.traceId, /^client-[0-9a-f-]{36}$/)
+  t.mock.method(globalThis, 'fetch', async () => new Response('invalid JSON'))
+  await assert.rejects(fetchMapGeoJSON('/bad', new AbortController().signal),
+    cause => cause.code === 'RESOURCE_INVALID' && /^client-[0-9a-f-]{36}$/.test(cause.traceId))
+})

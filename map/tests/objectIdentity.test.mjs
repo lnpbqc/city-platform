@@ -8,6 +8,15 @@ test('object identity agrees with Python uuid5 including Unicode and model ordin
   assert.equal(await objectIdentity('中文资产', '1.0.0', -1), '99b589f1-d993-5cbc-8460-5f218efbd739')
 })
 
+test('object identity remains backend-compatible without secure-context crypto APIs', async (t) => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } })
+  t.after(() => Object.defineProperty(globalThis, 'crypto', original))
+  assert.equal(await objectIdentity('asset-one', '1.0.0', 0), '2f3982d2-41e0-519a-ad92-23346a334ed2')
+  assert.equal(await objectIdentity('中文资产', '1.0.0', -1), '99b589f1-d993-5cbc-8460-5f218efbd739')
+})
+
 test('feature identity preserves source ids and nested attributes, returning ids in backend rank order', async () => {
   const original = { type: 'FeatureCollection', name: '样例', features: [
     { type: 'Feature', id: 'osm-1', geometry: { type: 'Point', coordinates: [113, 23] }, properties: { id: 'business-id', nested: { value: null } } },

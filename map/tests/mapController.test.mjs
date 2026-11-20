@@ -398,6 +398,30 @@ function setup(type = 'geojson', onBoundaryState = () => {}, onNavigation = () =
   return { controller, layer, notices, picks }
 }
 
+test('HTTP model loading leaves the entry phase and exposes failures without secure crypto APIs', async (t) => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } })
+  t.after(() => Object.defineProperty(globalThis, 'crypto', original))
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'ready', entry_url: '/data-files/model/tileset.json' }))
+  const { controller, layer } = setup('3dtiles')
+  t.after(() => controller.destroy())
+  Object.assign(layer, { asset_id: 'model', asset_version: '1.0.0', object_count: 1 })
+  const tile = new Cesium3DTileset()
+  tileRequest.resolve(tile)
+  await controller.load(layer)
+  assert.equal(tileSource, '/data-files/model/tileset.json')
+  assert.equal(layer.loadPhase, '正在加载当前视野瓦片')
+  tile.initialTilesLoaded.fire()
+  assert.equal(layer.status, 'ready')
+  tileRequest = deferred()
+  tileRequest.reject(new Error('模型入口不可用'))
+  await controller.load(layer)
+  assert.equal(layer.status, 'error')
+  assert.match(layer.error, /模型入口不可用/)
+  assert.match(layer.traceId, /^client-[0-9a-f-]{36}$/)
+})
+
 function zoomCamera(height, angle = 75, aspect = 4 / 3) {
   const radians = angle * Math.PI / 180
   const { camera } = viewer

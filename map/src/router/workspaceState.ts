@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import { ApiError } from '../api/api.ts'
 import { publishApiEvent } from '../api/apiEvents.ts'
 import { validCamera, type CameraState, type MapView } from '../map/mapNavigation.ts'
@@ -29,7 +30,7 @@ const addressParams = ['scene', 'v', 'run', 't', 'resolution', 'camera', 'region
 // Clear right-side parameters when writing URLs based on a legacy workspace link.
 export const workspaceParams = [...addressParams, 'compare_t', 'compare_resolution']
 export const workspaceError = (message: string) => {
-  const error = new ApiError(message, 400, null, 'INVALID_WORKSPACE_LINK', `client-${crypto.randomUUID()}`)
+  const error = new ApiError(message, 400, null, 'INVALID_WORKSPACE_LINK', `client-${randomUUID()}`)
   publishApiEvent({ error })
   return error
 }

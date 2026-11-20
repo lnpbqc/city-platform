@@ -1,3 +1,4 @@
+import { v4 as randomUUID } from 'uuid'
 import { ApiError, getAssetVersion, getLayerTimes, getObjects } from '../api/api.ts'
 import { mapLayer, tilesPlacement, type MapLayer } from '../layers/types.ts'
 import type { SceneLayerState } from './simulationTypes'
@@ -17,9 +18,9 @@ export async function prepareSceneLayers(states: SceneLayerState[], catalog: Map
   return Promise.all(states.map(async state => {
     const asset = state.asset ? await getAssetVersion(state.asset.asset_id, state.asset.version, signal) : null
     if (asset && (asset.status !== 'ready' || !asset.entry_url || !['geojson', '3dtiles'].includes(asset.type)))
-      throw new ApiError('场景资产版本不可加载', 409, { asset: state.asset, status: asset.status }, 'ASSET_UNAVAILABLE', `client-${crypto.randomUUID()}`)
+      throw new ApiError('场景资产版本不可加载', 409, { asset: state.asset, status: asset.status }, 'ASSET_UNAVAILABLE', `client-${randomUUID()}`)
     if (!asset && state.layer_id !== 'basemap')
-      throw new ApiError('场景图层没有固定资产版本', 409, { layer_id: state.layer_id }, 'SCENE_ASSET_UNAVAILABLE', `client-${crypto.randomUUID()}`)
+      throw new ApiError('场景图层没有固定资产版本', 409, { layer_id: state.layer_id }, 'SCENE_ASSET_UNAVAILABLE', `client-${randomUUID()}`)
     const metadata = catalog.find(layer => layer.id === state.layer_id
       && (layer.asset_id === asset?.asset_id && layer.asset_version === asset?.version || asset?.source_kind === 'default' && layer.builtin))
     const layer = mapLayer({ id: state.layer_id, name: state.name ?? metadata?.name ?? asset?.name ?? '底图', category: asset ? state.category ?? metadata?.category ?? '专题' : '底图',
